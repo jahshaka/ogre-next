@@ -7,7 +7,7 @@
             "thread_groups" : [1, 1, 1],
 
             "source" : "IrradianceFieldGenFromVct_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "sRGB.any", "IrradianceFieldGenFromVct_piece_cs.any"],
+            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "sRGB.any", "JahVoxelSample_piece_all.any", "JahVoxelMarch_piece_all.any", "IrradianceFieldGenFromVct_piece_cs.any"],
             "inform_shader_of_texture_data_change" : true,
 
             "uav_units" : 2,
@@ -17,13 +17,15 @@
                 {}
             ],
 
+            "properties" :
+            {
+                "vct_anisotropic" : 0,
+                "hlms_num_vct_cascades" : 1
+            },
+
             "params_glsl" :
             [
                 ["directionsBuffer",        [0], "int"],
-                ["vctProbe",                [1], "int"],
-                ["vctProbeX",               [2], "int"],
-                ["vctProbeY",               [3], "int"],
-                ["vctProbeZ",               [4], "int"],
 
                 ["irradianceField",         [0], "int"],
                 ["irradianceFieldDepth",    [1], "int"]
@@ -43,7 +45,6 @@
 
             "properties" :
             {
-                "process_depth" : 1,
                 "full_width" : 256
             }
         },
@@ -61,7 +62,6 @@
 
             "properties" :
             {
-                "process_depth" : 0,
                 "full_width" : 256
             }
         },
@@ -85,12 +85,7 @@
             "params_glsl" :
             [
                 ["integrationTapsBuffer",   [0], "int"]
-            ],
-
-            "properties" :
-            {
-                "integrate_depth" : 1
-            }
+            ]
         },
 
         "IrradianceField/Integration/Colour" :
@@ -112,12 +107,7 @@
             "params_glsl" :
             [
                 ["integrationTapsBuffer",   [0], "int"]
-            ],
-
-            "properties" :
-            {
-                "integrate_depth" : 0
-            }
+            ]
         },
 
         "IrradianceField/CubemapToIfd" :

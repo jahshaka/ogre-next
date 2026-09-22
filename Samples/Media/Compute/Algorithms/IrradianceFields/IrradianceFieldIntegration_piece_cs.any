@@ -11,8 +11,8 @@
 
 		float coneAngleTan;
 		uint numProcessedProbes;
-		float vctStartBias;
-		float vctInvStartBias;
+		float unused1;
+		float unused2;
 
 		//float invFieldResolution;
 		uint4 numProbes_threadsPerRow;
@@ -52,11 +52,9 @@
 @piece( BodyCS )
 	ProbeIndex probeIdx = getProbeIdx( gl_WorkGroupID.xy PARAMS_ARG );
 	ushort2 uv = getUv( probeIdx, gl_LocalInvocationID.xy );
-	@property( integrate_depth )
-		float2 pixelValue = OGRE_imageLoad2D( irradianceField, uv.xy ).xy;
-	@else
-		float4 pixelValue = OGRE_imageLoad2D( irradianceField, uv.xy ).xyzw;
-	@end
+	// Jahshaka (PHOTON-READER-1): the depth atlas carries four channels (the
+	// moments and the escape fraction), so both atlases integrate all four.
+	float4 pixelValue = OGRE_imageLoad2D( irradianceField, uv.xy ).xyzw;
 
 	g_sharedValues[gl_LocalInvocationIndex] = pixelValue;
 
@@ -64,11 +62,7 @@
 
 	float2 tapsData;
 
-	@property( integrate_depth )
-		pixelValue = float2( 0, 0 );
-	@else
-		pixelValue = float4( 0, 0, 0, 0 );
-	@end
+	pixelValue = float4( 0, 0, 0, 0 );
 
 	uint tapsIdxBase = gl_LocalInvocationIndex * @value( num_taps )u;
 
@@ -77,9 +71,5 @@
 		pixelValue += g_sharedValues[int(tapsData.x)] * tapsData.y;
 	@end
 
-	@property( integrate_depth )
-		OGRE_imageWrite2D2( irradianceField, uv.xy, pixelValue.xy );
-	@else
-		OGRE_imageWrite2D4( irradianceField, uv.xy, pixelValue );
-	@end
+	OGRE_imageWrite2D4( irradianceField, uv.xy, pixelValue );
 @end

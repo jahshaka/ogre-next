@@ -11,13 +11,19 @@
 
 		float coneAngleTan;
 		uint numProcessedProbes;
-		float vctStartBias;
-		float vctInvStartBias;
+		float unused1;
+		float unused2;
 
 		//float invFieldResolution;
 		uint4 numProbes_threadsPerRow;
 
 		float4x4 irrProbeToVctTransform;
+
+		// Jahshaka (PHOTON-READER-1): the cascade chain, as VctLighting's one
+		// definition writes it (getCascadeChainParams) - sized by
+		// IrradianceField::kMaxChainCascades = 8.
+		float4 vctInvResMaxLod[8];
+		float4 vctFromPrev[14];
 	}
 	CONST_BUFFER_STRUCT_END( p );
 
@@ -29,92 +35,37 @@
 		float3 center;
 	};
 
-@property( vct_anisotropic )
-	#define OGRE_VCT_ANISO_PROBE_ARG_DECL , OGRE_Texture3D_float4 probeX, OGRE_Texture3D_float4 probeY, OGRE_Texture3D_float4 probeZ
-	#define OGRE_VCT_ANISO_PROBE_ARG , probeX, probeY, probeZ
-	#define OGRE_VCT_ANISO_ROOT_PROBE_ARG , vctProbeX, vctProbeY, vctProbeZ
-@else
-	#define OGRE_VCT_ANISO_PROBE_ARG_DECL
-	#define OGRE_VCT_ANISO_PROBE_ARG
-	#define OGRE_VCT_ANISO_ROOT_PROBE_ARG
-@end
-
-	INLINE float4 voxelConeTraceDiff
-	(
-		float3 posLS,
-		float3 dirLS, float tanHalfAngle,
-		OGRE_Texture3D_float4 probe
-		OGRE_SAMPLER_ARG_DECL( probeSampler )
-		OGRE_VCT_ANISO_PROBE_ARG_DECL
-		PARAMS_ARG_DECL
-	)
-	{
-		float dist = p.vctStartBias;
-		float alpha = 0.0;
-		float3 color = float3( 0.0, 0.0, 0.0 );
-
-		float diameter = max( p.vctStartBias, 2.0 * tanHalfAngle * dist );
-
-		float lodLevel	= 0.0;
-
-		@property( !vct_anisotropic )
-			#define VCT_ANISOTROPIC_EARLY_OUT
-		@else
-			#define VCT_ANISOTROPIC_EARLY_OUT && lodLevel <= 0.5
-		@end
-		while( dist < 1.414213562f && alpha < 0.95 VCT_ANISOTROPIC_EARLY_OUT )
-		{
-			float4 scolor = OGRE_SampleLevel( probe, probeSampler,
-											  posLS + dist * dirLS,
-											  lodLevel );
-			float a = (1.0f - alpha);
-			color += scolor.xyz * a;
-			alpha += a * scolor.w;
-			dist += diameter * 0.5f;
-			diameter = 2.0 * tanHalfAngle * dist;
-			lodLevel = log2( diameter * p.vctInvStartBias );
-		}
-
-		@property( vct_anisotropic )
-			float3 isNegative;
-			isNegative.x = dirLS.x < 0 ? 0.5f : 0.0f;
-			isNegative.y = dirLS.y < 0 ? 0.5f : 0.0f;
-			isNegative.z = dirLS.z < 0 ? 0.5f : 0.0f;
-
-			float3 dirLSSquared = dirLS.xyz * dirLS.xyz;
-
-			while( dist < 1.414213562f && alpha < 0.95 )
-			{
-				float3 sampleUVW = posLS + dist * dirLS;
-				sampleUVW.x = saturate( sampleUVW.x ) * 0.5;
-
-				float4 xColor = OGRE_SampleLevel( probeX, probeSampler,
-												  sampleUVW + float3( isNegative.x, 0, 0 ),
-												  lodLevel );
-				float4 yColor = OGRE_SampleLevel( probeY, probeSampler,
-												  sampleUVW + float3( isNegative.y, 0, 0 ),
-												  lodLevel );
-				float4 zColor = OGRE_SampleLevel( probeZ, probeSampler,
-												  sampleUVW + float3( isNegative.z, 0, 0 ),
-												  lodLevel );
-
-				float4 scolor = dirLSSquared.x * xColor +
-								dirLSSquared.y * yColor +
-								dirLSSquared.z * zColor;
-				float a = (1.0f - alpha);
-				color += scolor.xyz * a;
-				alpha += a * scolor.w;
-				dist += diameter * 0.5f;
-				diameter = 2.0 * tanHalfAngle * dist;
-				lodLevel = log2( diameter * p.vctInvStartBias );
-			}
-		@end
-
-		// Put dist in the same space it will be evaluted in during the pixel shader
-		dist *= dot( abs( dirLS ), float3( p.numProbes.xyz ) );
-
-		return float4( color, dist );
-	}
+	// THE PROBE RAY IS A CONE OF THE ONE VOXEL RADIANCE READER (Jahshaka,
+	// PHOTON-READER-1; render audit F7). This job used to carry a THIRD march:
+	// cascade 0 only (`while( dist < 1.414 && alpha < 0.95 )` in cascade 0's unit
+	// box, the outer cascades never read), no cone age (the footprint restarted
+	// from the bias), and the escape it computed thrown away - so inside a hall the
+	// field integrated cascade 0's bounce alone while the pixel's cones walked the
+	// chain, and the pixel blended two integrals of two radiance fields. Each ray
+	// is now `jahConeMarch` over the WHOLE chain with the pixel's rules
+	// (jah_voxel_sample.glsl + jah_voxel_march.glsl, wrapped by Jahshaka's build
+	// into the pieces JahVoxelSample / JahVoxelMarch, named in this job's piece
+	// list). A probe is a point in free space: no surface bias at the start or at a
+	// hop, and the hop's step back is measured along the ray.
+	#define JAH_VOX_MAX_CASCADES @value( hlms_num_vct_cascades )
+	#define JAH_VOX_COUNT @value( hlms_num_vct_cascades )
+	#define JAH_VOX_SAMPLE_ISO( c, u, l ) OGRE_SampleLevel( vctProbes[c], probeSampler, u, l )
+	@property( vct_anisotropic )
+		#define JAH_VOX_HAS_ANISO 1
+		#define JAH_VOX_ANISO true
+		#define JAH_VOX_SAMPLE_X( c, u, l ) OGRE_SampleLevel( vctProbeX[c], probeSampler, u, l )
+		#define JAH_VOX_SAMPLE_Y( c, u, l ) OGRE_SampleLevel( vctProbeY[c], probeSampler, u, l )
+		#define JAH_VOX_SAMPLE_Z( c, u, l ) OGRE_SampleLevel( vctProbeZ[c], probeSampler, u, l )
+	@else
+		#define JAH_VOX_HAS_ANISO 0
+		#define JAH_VOX_ANISO false
+	@end
+	#define JAH_VOX_INVRES( c ) p.vctInvResMaxLod[c].xyz
+	#define JAH_VOX_MAXLOD( c ) p.vctInvResMaxLod[c].w
+	#define JAH_VOX_FROM_PREV_SCALE( c ) p.vctFromPrev[( (c) - 1 ) * 2]
+	#define JAH_VOX_FROM_PREV_OFFSET( c ) p.vctFromPrev[( (c) - 1 ) * 2 + 1]
+	@insertpiece( JahVoxelSample )
+	@insertpiece( JahVoxelMarch )
 
 	#define RayIndex uint
 	#define ProbeIndex uint
@@ -209,11 +160,37 @@
 	float3 probeCenter = getProbeCenterInVctSpace( probeIdx PARAMS_ARG );
 	float3 posLS = mul( float4( probeCenter, 1.0f ), p.irrProbeToVctTransform ).xyz;
 
-	float4 diffuse = voxelConeTraceDiff( posLS, dir, p.coneAngleTan,
-										 vctProbe OGRE_SAMPLER_ARG( probeSampler )
-										 OGRE_VCT_ANISO_ROOT_PROBE_ARG
-										 PARAMS_ARG );
+	JahConeResult ray = jahConeMarch( posLS, dir, p.coneAngleTan, float3( 0, 0, 0 ),
+									  float3( 0, 0, 0 ), JAH_MARCH_GAP_ALONG_DIR );
+	// THE DEPTH STAYS CASCADE-0-LOCAL: the march's age converted back into cascade
+	// 0's normalised units (travelledC0 = the age in the last cascade's units over
+	// the product of the per-hop scales along the ray; in cascade 0 it IS the
+	// distance the old march returned), then into the units the pixel shader
+	// compares against, as before.
+	float4 diffuse = float4( ray.colour,
+							 ray.travelledC0 * dot( abs( dir ), float3( p.numProbes.xyz ) ) );
 	g_diffuseDepth[gl_LocalInvocationIndex] = diffuse;
+	// THE ESCAPE FRACTION: the share of this ray the voxels did not stop, which is
+	// the share of the sky it sees - the quantity the pixel's cones weight their
+	// ambient by (`light.w`), in the same form, 1 - min( 1, opacity / 0.95 ).
+	// Stored, integrated over the cosine lobe with the depth moments, and read by
+	// the pixel as the probe's sky visibility.
+	//
+	// THE OPACITY IS THE RAY'S OWN COMPOSITE (`alpha`), NOT THE MARCH'S OCCUPANCY
+	// ESTIMATE (`escapeAlpha`), and that is physics, not taste. The occupancy
+	// estimate exists for a cone that STARTS ON A SURFACE: in the anisotropic
+	// volumes the directional composite of the cell holding its own slab reads
+	// opaque at every coarser mip, and the cone would occlude itself. A probe ray
+	// starts in free space and CROSSES what it meets; for a ray crossing a wall
+	// the directional composite IS the transmittance, and the occupancy estimate
+	// (the min over three axis composites, about 1/N for a slab one layer thick
+	// in an N-layer cell) lets it through the wall. Measured on gi.ddgi_ambient's
+	// sealed room (PHOTON-READER-1): the occupancy estimate moved the floor by
+	// 11/255 with the sky term on (84/255 at eight times its strength); the
+	// ray's composite by 1/255 (3/255) - every interior probe stores exactly 0,
+	// and what remains is the probe cage's leak from the probes outside the walls.
+	float escape = 1.0 - min( 1.0, ray.alpha / 0.95 );
+	g_escape[gl_LocalInvocationIndex] = escape;
 
 	__sharedOnlyBarrier;
 
@@ -229,12 +206,15 @@
 			float4 otherVal = g_diffuseDepth[gl_LocalInvocationIndex + i];
 			diffuse.xyzw += otherVal.xyzw;
 			sqDepth += otherVal.w * otherVal.w;
+			escape += g_escape[gl_LocalInvocationIndex + i];
 		}
 
 		//We can already write depth
 		diffuse.w *= p.invNumRaysPerPixel;
 		sqDepth *= p.invNumRaysPerPixel;
-		OGRE_imageWrite2D2( irradianceFieldDepth, irradDepthXY.zw, float2( diffuse.w, sqDepth ) );
+		escape *= p.invNumRaysPerPixel;
+		OGRE_imageWrite2D4( irradianceFieldDepth, irradDepthXY.zw,
+							float4( diffuse.w, sqDepth, escape, 0.0 ) );
 
 		g_diffuseDepth[gl_LocalInvocationIndex].xyz = diffuse.xyz;
 	}
