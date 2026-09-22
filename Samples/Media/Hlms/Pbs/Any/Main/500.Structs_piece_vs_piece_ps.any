@@ -22,7 +22,14 @@ struct Light
 	float4 diffuse;		//.w contains numNonCasterDirectionalLights
 	float3 specular;
 @property( hlms_num_shadow_map_lights )
-	float3 attenuation;
+	// Jahshaka patch 0018: was float3. The 4th float was ALWAYS there --
+	// a vec3 occupies 16 bytes in std140, in an HLSL cbuffer and in Metal,
+	// which is why HlmsPbs::preparePassBuffer has always written a padding
+	// float after the quadratic term. It now writes 1 / range there (the
+	// same value ForwardPlusBase writes into its own light buffer), so the
+	// pass lights can apply the same range fade Forward+ applies. Naming
+	// the component changes no layout.
+	float4 attenuation;	//.w contains 1 / attenuation range
 	//Spotlights:
 	//  spotDirection.xyz is direction
 	//  spotParams.xyz contains falloff params

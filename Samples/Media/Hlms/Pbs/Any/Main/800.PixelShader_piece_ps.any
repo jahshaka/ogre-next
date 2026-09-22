@@ -450,7 +450,21 @@
 	//Everything's in Camera space
 	@property( needs_view_dir )
 		@property( !hlms_instanced_stereo )
-			pixelData.viewDir	= midf3_c( normalize( -inPs.pos ) );
+			@property( hlms_ortho_camera )
+				// JAHSHAKA patch 0024 - ORTHOGRAPHIC VIEW DIRECTION. normalize( -inPs.pos )
+				// is the direction from the surface to a PINHOLE at the view-space origin;
+				// an orthographic camera has no pinhole, every pixel looks straight down
+				// -Z, so the direction back to the eye is +Z for every fragment. With the
+				// perspective form under an ortho projection, NdotV, the Fresnel term, the
+				// half vector of every light and the reflection lookup all vary with the
+				// fragment's position on SCREEN, so a pan slides the highlights and probe
+				// reflections across a scene that is not moving. Set by HlmsPbs::
+				// preparePassHash from the rendering camera's projection type, so it is
+				// a compile-time branch: zero per-pixel cost, one more pass property.
+				pixelData.viewDir	= midf3_c( float3( 0.0, 0.0, 1.0 ) );
+			@else
+				pixelData.viewDir	= midf3_c( normalize( -inPs.pos ) );
+			@end
 		@else
 			if( gl_FragCoord.x > passBuf.rightEyePixelStartX )
 				pixelData.viewDir = midf3_c( normalize( -inPs.pos + passBuf.leftToRightView.xyz ) );
@@ -553,6 +567,9 @@
 							  midf3_c( light0Buf.lights[light_idx].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadowPoint_cur_shadow_map );
 			midf atten = midf_c( 1.0 / (0.5 + (light0Buf.lights[light_idx].attenuation.y + light0Buf.lights[light_idx].attenuation.z * fDistance) * fDistance ) );
+			@property( hlms_forward_fade_attenuation_range )	// Jahshaka patch 0018
+				atten *= midf_c( max( (light0Buf.lights[light_idx].attenuation.x - fDistance) * light0Buf.lights[light_idx].attenuation.w, 0.0f ) );
+			@end
 			finalColour += tmpColour * atten;
 		}
 		cur_shadow_map++;
@@ -568,6 +585,9 @@
 							  midf3_c( light0Buf.lights[@n].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadowPoint );
 			midf atten = midf_c( 1.0 / (0.5 + (light0Buf.lights[@n].attenuation.y + light0Buf.lights[@n].attenuation.z * fDistance) * fDistance ) );
+			@property( hlms_forward_fade_attenuation_range )	// Jahshaka patch 0018
+				atten *= midf_c( max( (light0Buf.lights[@n].attenuation.x - fDistance) * light0Buf.lights[@n].attenuation.w, 0.0f ) );
+			@end
 			finalColour += tmpColour * atten;
 		}
 	@end
@@ -603,6 +623,9 @@
 							  midf3_c( light0Buf.lights[light_idx].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow_cur_shadow_map );
 			midf atten = midf_c( 1.0 / (0.5 + (light0Buf.lights[light_idx].attenuation.y + light0Buf.lights[light_idx].attenuation.z * fDistance) * fDistance ) );
+			@property( hlms_forward_fade_attenuation_range )	// Jahshaka patch 0018
+				atten *= midf_c( max( (light0Buf.lights[light_idx].attenuation.x - fDistance) * light0Buf.lights[light_idx].attenuation.w, 0.0f ) );
+			@end
 			finalColour += tmpColour * (atten * spotAtten);
 		}
 		cur_shadow_map++;
@@ -637,6 +660,9 @@
 							  midf3_c( light0Buf.lights[@n].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow );
 			midf atten = midf_c( 1.0 / (0.5 + (light0Buf.lights[@n].attenuation.y + light0Buf.lights[@n].attenuation.z * fDistance) * fDistance ) );
+			@property( hlms_forward_fade_attenuation_range )	// Jahshaka patch 0018
+				atten *= midf_c( max( (light0Buf.lights[@n].attenuation.x - fDistance) * light0Buf.lights[@n].attenuation.w, 0.0f ) );
+			@end
 			finalColour += tmpColour * (atten * spotAtten);
 		}
 	@end
@@ -831,6 +857,35 @@
 			@property( normal_map )
 				pixelData.normal = normalize( mul( TBN, pixelData.normal ) );
 			@end
+			@property( normal_map_tex )
+				// JAHSHAKA patch 0022 - GEOMETRIC SPECULAR ANTI-ALIASING (Kaplanyan 2016,
+				// the Unity HDRP / Unreal runtime form). A normal map's detail collapses
+				// through its mip chain while the roughness does not widen to match, so a
+				// low-roughness normal-mapped surface sparkles at distance (the owner's
+				// 'white dots'). The screen-space derivatives of the FINAL shading normal
+				// measure how fast it turns across a pixel; that variance is folded into
+				// the GGX alpha. Zero on a flat surface with a flat map (bit-identical),
+				// gated on normal_map_tex so untextured normals never move. Constants are
+				// Unity's defaults: screen-space variance 0.25, threshold 0.18.
+				{
+					midf3 jahNddx = midf3_c( OGRE_ddx( pixelData.normal ) );
+					midf3 jahNddy = midf3_c( OGRE_ddy( pixelData.normal ) );
+					midf jahVariance = _h( 0.25 ) * ( dot( jahNddx, jahNddx ) + dot( jahNddy, jahNddy ) );
+					midf jahKernel = min( _h( 2.0 ) * jahVariance, _h( 0.18 ) );
+					if( jahKernel > _h( 0.0 ) )
+					{
+					@property( perceptual_roughness )
+						// pixelData.roughness is the GGX alpha here.
+						pixelData.roughness = sqrt( pixelData.roughness * pixelData.roughness + jahKernel );
+					@else
+						// pixelData.roughness is perceptual: alpha = r*r.
+						midf jahAlpha = pixelData.roughness * pixelData.roughness;
+						pixelData.roughness = sqrt( sqrt( jahAlpha * jahAlpha + jahKernel ) );
+					@end
+						pixelData.roughness = min( pixelData.roughness, _h( 1.0 ) );
+					}
+				}
+			@end
 
 			@insertpiece( DoDirectionalShadowMaps )
 
@@ -877,8 +932,43 @@
 
 			midf fShadow = shadowRoughness.x;
 
-			@property( roughness_map )
-				pixelData.roughness = shadowRoughness.y * _h( 0.98 ) + _h( 0.02 );
+			// JAHSHAKA patch 0043 - THE PREPASS MUST HAND BACK THE ROUGHNESS IT WROTE.
+			//
+			// Upstream restores the roughness from the G-buffer only for a material
+			// that carries a roughness MAP, and that was right while the roughness a
+			// pixel shades with was either a per-texel fetch or the material's own
+			// constant: with no map the constant is already in the material buffer and
+			// a 16-bit round trip could only lose precision.
+			//
+			// Jahshaka patch 0022 broke that premise. It folds the screen-space
+			// variance of the shading normal into the GGX alpha (geometric specular
+			// anti-aliasing, gated on normal_map_tex), so on any normal-mapped surface
+			// the roughness is a PER-PIXEL quantity that the material constant does
+			// not carry. The prepass computes it - it takes the same branch this pass
+			// does not - and writes it to the G-buffer; this line is what decides
+			// whether the shading pass reads it back. Gated on the map alone, a
+			// normal-mapped material with a CONSTANT roughness silently lost its
+			// anti-aliasing for as long as SSR was switched on, and got it back when
+			// SSR was switched off: the same material, two pictures, decided by a
+			// post-process switch.
+			//
+			// Measured before this patch (Jahshaka lane SSR-1 round 2, 2026-09-15, on
+			// a stripped ShadowMapFromCode fixture): dropping the gate moved 1.48 % of
+			// the picture at rest, peak 161 of 255.
+			//
+			// So the gate is now 'did anything make the roughness per-pixel', which is
+			// the map OR patch 0022's own condition. A material with neither reads its
+			// constant exactly as before, bit for bit, and pays no round trip.
+			@property( roughness_map || normal_map_tex )
+				// ...and the RANGE has to cover what the shader can produce. Upstream
+				// encodes the GGX alpha over [0.02, 1] while SampleRoughnessMap's own
+				// floor is 0.001, so a mirror-smooth material (perceptual roughness
+				// below 0.141) came back through the G-buffer WIDENED - measured, 8.6 %
+				// of the picture on the fixture in tests/ssr, which is worse than the
+				// defect this patch fixes. The two write sites below move with it, so
+				// the round trip is faithful for every alpha the shader can reach and
+				// costs the same 16 bits.
+				pixelData.roughness = shadowRoughness.y * _h( 0.999 ) + _h( 0.001 );
 			@end
 		@end
 
@@ -911,7 +1001,17 @@
 			@insertpiece( applyVoxelConeTracing )
 			@insertpiece( applyIrradianceField )
 
-			@insertpiece( forwardPlusDoCubemaps )
+			/// Jahshaka patch 0028: the probe loop is PER MATERIAL now.
+			/// `use_parallax_correct_cubemaps` is a DATABLOCK property (set in
+			/// HlmsPbs::notifyPropertiesMergedPreGenerationStep); the piece
+			/// itself is defined under the PASS property
+			/// hlms_enable_cubemaps_auto, so without this gate every material in
+			/// the scene ran the per-pixel probe loop -- including the ones whose
+			/// specular response is identically zero and whose result it is
+			/// therefore multiplied away by. See the patch header.
+			@property( use_parallax_correct_cubemaps )
+				@insertpiece( forwardPlusDoCubemaps )
+			@end
 			@insertpiece( applyIrradianceVolumes )
 
 			@insertpiece( DoEmissiveLight )
@@ -927,11 +1027,21 @@
 			@property( hlms_use_ssr )
 				//TODO: SSR pass should be able to combine global & local cubemap.
 				float4 ssrReflection = OGRE_Load2D( ssrTexture, iFragCoord, 0 ).xyzw;
-				@property( use_envprobe_map )
-					pixelData.envColourS = lerp( pixelData.envColourS.xyz, ssrReflection.xyz, ssrReflection.w );
-				@else
-					pixelData.envColourS += ssrReflection.xyz * ssrReflection.w;
-				@end
+				/// JAHSHAKA PATCH 0036: a screen-space reflection REPLACES the
+				/// environment term it supersedes, always -- it never adds to it.
+				/// The two are estimates of ONE integral (the radiance arriving
+				/// along the specular lobe) and ssrReflection.w is how much of
+				/// that integral the screen could answer for; the rest stays with
+				/// the probe. Upstream's second branch added another copy of the
+				/// lobe wherever an environment source exists that does not raise
+				/// use_envprobe_map, and there is one: applyVoxelConeTracing adds
+				/// its cone-traced SPECULAR to envColourS above this line without
+				/// raising the property (the irradiance field and the irradiance
+				/// volumes write envColourD only, so they are not in this).
+				/// Where envColourS really is zero
+				/// the two spellings are the same arithmetic, which is why this
+				/// moves no frame that has a sky or a probe. Patch header: why.
+				pixelData.envColourS = lerp( pixelData.envColourS.xyz, ssrReflection.xyz, ssrReflection.w );
 			@end
 
 			@insertpiece( DoPlanarReflectionsPS )
@@ -987,9 +1097,12 @@
 		@else
 			outPs_normals = midf4_c( pixelData.normal * _h( 0.5 ) + _h( 0.5 ), 1.0 );
 			@property( hlms_pssm_splits )
-				outPs_shadowRoughness	= midf2_c( fShadow, (pixelData.roughness - 0.02) * 1.02040816 );
+				/// Jahshaka patch 0043: the encoded range is the shader's own alpha
+				/// floor (SampleRoughnessMap clamps at 0.001), not upstream's 0.02.
+				outPs_shadowRoughness	= midf2_c( fShadow, (pixelData.roughness - 0.001) * 1.001001 );
 			@end @property( !hlms_pssm_splits )
-				outPs_shadowRoughness	= midf2_c( 1.0, (pixelData.roughness - 0.02) * 1.02040816 );
+				/// Jahshaka patch 0043: see the note on the other write site.
+				outPs_shadowRoughness	= midf2_c( 1.0, (pixelData.roughness - 0.001) * 1.001001 );
 			@end
 		@end
 	@else /// hlms_render_depth_only

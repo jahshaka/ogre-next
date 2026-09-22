@@ -19,7 +19,7 @@
 	@property( !fresnel_scalar )
 		midf refractF0 = pixelData.F0;
 	@else
-		midf refractF0 = max( pixelData.F0.x, pixelData.F0.y, pixelData.F0.z );
+		midf refractF0 = max3( pixelData.F0.x, pixelData.F0.y, pixelData.F0.z );
 	@end
 
 	// refractNormal must be in view space, and we ignore .z component
