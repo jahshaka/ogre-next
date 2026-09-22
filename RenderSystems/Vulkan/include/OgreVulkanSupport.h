@@ -86,6 +86,9 @@ namespace Ogre
 #    ifdef OGRE_VULKAN_WINDOW_ANDROID
 #        include "Windowing/Android/OgreVulkanAndroidSupport.h"
 #    endif
+#    ifdef OGRE_VULKAN_WINDOW_METAL
+#        include "Windowing/OSX/OgreVulkanMetalSupport.h"
+#    endif
 
 namespace Ogre
 {
@@ -116,6 +119,12 @@ namespace Ogre
                 return new VulkanAndroidSupport();
         }
 #    endif
+#    ifdef OGRE_VULKAN_WINDOW_METAL
+        {
+            if( i == currSupport++ )
+                return new VulkanMetalSupport();
+        }
+#    endif
         return 0;
     }
 
@@ -132,6 +141,9 @@ namespace Ogre
                + 1
 #    endif
 #    ifdef OGRE_VULKAN_WINDOW_ANDROID
+               + 1
+#    endif
+#    ifdef OGRE_VULKAN_WINDOW_METAL
                + 1
 #    endif
             ;

@@ -400,7 +400,14 @@ endif ()
 
 set (TARGET_LINK_FLAGS "")
 
-set( BROKEN_FILES_IN_UNITY_BUILD "src/OgreFreeImageCodec2.cpp" )
+# Jahshaka local patch: this list is passed to ogre_add_library as real SOURCES
+# (after SEPARATE), so an entry here is compiled into OgreNextMain even when its
+# feature option is OFF — which breaks platforms without FreeImage installed.
+if( OGRE_CONFIG_ENABLE_FREEIMAGE )
+	set( BROKEN_FILES_IN_UNITY_BUILD "src/OgreFreeImageCodec2.cpp" )
+else()
+	set( BROKEN_FILES_IN_UNITY_BUILD "" )
+endif()
 
 # setup OgreMain target
 if (WINDOWS_STORE OR WINDOWS_PHONE)

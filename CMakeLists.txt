@@ -475,6 +475,7 @@ cmake_dependent_option(OGRE_VULKAN_WINDOW_NULL "Allow headless support. If more 
 cmake_dependent_option(OGRE_VULKAN_WINDOW_WIN32 "Use Win32 (Default / Native window). If more than one OGRE_VULKAN_WINDOW is enabled, interface can be selected at runtime" TRUE "OGRE_BUILD_RENDERSYSTEM_VULKAN;WIN32" FALSE)
 cmake_dependent_option(OGRE_VULKAN_WINDOW_XCB "Use X11 / xcb (Default / Native window). If more than one OGRE_VULKAN_WINDOW is enabled, interface can be selected at runtime" TRUE "OGRE_BUILD_RENDERSYSTEM_VULKAN;UNIX;NOT ANDROID;NOT OGRE_CONFIG_UNIX_NO_X11" FALSE)
 cmake_dependent_option(OGRE_VULKAN_WINDOW_ANDROID "Use Android (Default / 'ANative' window). If more than one OGRE_VULKAN_WINDOW is enabled, interface can be selected at runtime" TRUE "OGRE_BUILD_RENDERSYSTEM_VULKAN;ANDROID" FALSE)
+cmake_dependent_option(OGRE_VULKAN_WINDOW_METAL "Use Metal / CAMetalLayer (Default / Native window on Apple, through VK_EXT_metal_surface). If more than one OGRE_VULKAN_WINDOW is enabled, interface can be selected at runtime" TRUE "OGRE_BUILD_RENDERSYSTEM_VULKAN;APPLE" FALSE)
 if( OGRE_BUILD_RENDERSYSTEM_VULKAN AND OGRE_CONFIG_UNIX_NO_X11 )
 	set(OGRE_VULKAN_WINDOW_NULL ON CACHE BOOL "Forced on due to OGRE_CONFIG_UNIX_NO_X11" FORCE)
 endif()

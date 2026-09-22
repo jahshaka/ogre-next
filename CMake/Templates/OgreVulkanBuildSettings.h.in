@@ -8,5 +8,6 @@
 #cmakedefine OGRE_VULKAN_WINDOW_WIN32
 #cmakedefine OGRE_VULKAN_WINDOW_XCB
 #cmakedefine OGRE_VULKAN_WINDOW_ANDROID
+#cmakedefine OGRE_VULKAN_WINDOW_METAL
 
 #endif

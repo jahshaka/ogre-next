@@ -70,7 +70,11 @@ namespace Ogre
                                             const size_t sizeBytes, const VkDeviceSize alignment,
                                             const size_t vboSize )
     {
-        const VkDeviceSize endOffset = std::min( alignMemory( offset + sizeBytes, alignment ), vboSize );
+        // std::min<VkDeviceSize>: vboSize is size_t, which is not uint64 on all
+        // platforms (Darwin: unsigned long vs unsigned long long) — bare std::min
+        // fails template deduction there.
+        const VkDeviceSize endOffset =
+            std::min<VkDeviceSize>( alignMemory( offset + sizeBytes, alignment ), vboSize );
         outMemRange.offset = ( offset / alignment ) * alignment;
         outMemRange.size = endOffset - outMemRange.offset;
     }

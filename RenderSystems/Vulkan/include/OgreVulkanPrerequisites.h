@@ -147,19 +147,7 @@ namespace Ogre
         };
     }
 
-    void onVulkanFailure( VulkanDevice *device, int result, const char *message, const char *func,
-                          const char *file, long line );
 }  // namespace Ogre
-
-#define checkVkResult( device, result, functionName ) \
-    do \
-    { \
-        if( result != VK_SUCCESS ) \
-        { \
-            onVulkanFailure( device, result, functionName " failed", OGRE_CURRENT_FUNCTION, __FILE__, \
-                             __LINE__ ); \
-        } \
-    } while( 0 )
 
 #if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
 #    if !defined( __MINGW32__ )
@@ -194,5 +182,29 @@ namespace Ogre
 #else
 #    define _OgreVulkanExport
 #endif
+
+// Jahshaka (ogre-patch 0040): onVulkanFailure MUST be declared after
+// _OgreVulkanExport is defined, and it must carry it. VulkanQueue is an exported
+// class whose PUBLIC INLINE getCurrentCmdBuffer() expands checkVkResult(), so
+// every caller outside the plugin emits a reference to this symbol - and without
+// the export macro the render system's -fvisibility=hidden keeps it out of
+// RenderSystem_Vulkan.so's dynamic table, making the pin's own public accessor
+// impossible to LINK against. The declaration moved down here from its old place
+// above (where the macro does not exist yet); nothing else changed.
+namespace Ogre
+{
+    _OgreVulkanExport void onVulkanFailure( VulkanDevice *device, int result, const char *message,
+                                            const char *func, const char *file, long line );
+}  // namespace Ogre
+
+#define checkVkResult( device, result, functionName ) \
+    do \
+    { \
+        if( result != VK_SUCCESS ) \
+        { \
+            onVulkanFailure( device, result, functionName " failed", OGRE_CURRENT_FUNCTION, __FILE__, \
+                             __LINE__ ); \
+        } \
+    } while( 0 )
 
 #endif  // #ifndef _OgreVulkanPrerequisites_H_

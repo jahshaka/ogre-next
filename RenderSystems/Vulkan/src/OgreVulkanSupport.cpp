@@ -62,6 +62,12 @@ namespace Ogre
 #ifdef OGRE_VULKAN_WINDOW_ANDROID
         optInterfaces.possibleValues.push_back( "android" );
 #endif
+#ifdef OGRE_VULKAN_WINDOW_METAL
+        // Must come before "null": the default interface is possibleValues.front()
+        // (VulkanRenderSystem::initConfigOptions), and a "null" default would send
+        // every createRenderWindow to VulkanWindowNull -- i.e. nothing on screen.
+        optInterfaces.possibleValues.push_back( "metal" );
+#endif
 #ifdef OGRE_VULKAN_WINDOW_NULL
         optInterfaces.possibleValues.push_back( "null" );
 #endif
