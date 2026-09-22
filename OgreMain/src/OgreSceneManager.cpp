@@ -2190,8 +2190,19 @@ namespace Ogre
             size_t firstRq = std::min<size_t>( request.firstRq, numRenderQueues );
             size_t lastRq = std::min<size_t>( request.lastRq, numRenderQueues );
 
+            // Jahshaka: upstream's ParticleFX2 fix widens every manager's loop to the
+            // PARTICLE managers' queue count so a set on a high queue is culled — but
+            // ObjectMemoryManager::getFirstObjectData indexes its per-queue vector
+            // unchecked, so a manager with fewer queues than the particle managers
+            // reads past its array (a segfault in cullFrustum on the worker threads).
+            // A manager only owns the queues it has.
+            const size_t ownRqs = memoryManager->getNumRenderQueues();
+
             for( size_t i = firstRq; i < lastRq; ++i )
             {
+                if( i >= ownRqs )
+                    break;
+
                 MovableObject::MovableObjectArray &outVisibleObjects =
                     *( visibleObjectsPerRq.begin() + i );
 
