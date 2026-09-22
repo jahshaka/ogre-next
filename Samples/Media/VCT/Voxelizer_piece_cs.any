@@ -327,7 +327,11 @@
 	int3  accNormalFolded	= int3( 0, 0, 0 );
 	uint3 accEmissive		= uint3( 0u, 0u, 0u );
 
-	for( uint i=p_instanceStart; i<p_instanceEnd; ++i )
+	// THE RECORDS OF THIS (octant, bucket), as the host's gather wrote them on the
+	// device: (start, count) into the instance buffer. Dynamically uniform - every
+	// lane reads the same range - which the emulated group vote below relies on.
+	uint2 instanceRange = ranges[p_rangeIdx];
+	for( uint i=instanceRange.x; i<instanceRange.x + instanceRange.y; ++i )
 	{
 		Instance instance = getInstance( i PARAMS_ARG );
 

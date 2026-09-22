@@ -9,9 +9,9 @@
             "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "Matrix_piece_all", "VoxelGeometry_piece_cs.any", "VoxelMerge_piece_cs.any", "Voxelizer_piece_cs.any"],
             "inform_shader_of_texture_data_change" : true,
 
-            "uav_units" : 6,
+            "uav_units" : 7,
 
-            "gl_tex_slot_start" : 6,
+            "gl_tex_slot_start" : 7,
 			
 			"params" :
             [
@@ -201,70 +201,6 @@
             [
                 ["inMeshBuffer",            [0], "int"]
             ]
-        },
-
-        "VCT/AabbWorldSpace" :
-        {
-            "threads_per_group" : [64, 1, 1],
-
-            "source" : "AabbWorldSpace_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "Matrix_piece_all", "AabbWorldSpace_piece_cs.any"],
-
-            "uav_units" : 1,
-
-            "gl_tex_slot_start" : 1,
-
-            "textures" :
-            [
-                {}
-            ]
-        },
-
-        "VCT/ImageVoxelizer" :
-		{
-            "threads_per_group" : [4, 4, 4],
-
-            "source" : "ImageVoxelizer_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "Matrix_piece_all", "ImageVoxelizer_piece_cs.any"],
-            "inform_shader_of_texture_data_change" : true,
-
-			"uav_units" : 4,
-			
-			"params" :
-            [
-			],
-			
-			"params_glsl" :
-            [
-                ["meshTextures",      	    [1], "int"],
-                ["voxelAlbedoTex",      	[0], "int"],
-                ["voxelNormalTex",  		[1], "int"],
-                ["voxelEmissiveTex",		[2], "int"],
-                ["voxelAccumVal",			[3], "int"]
-			],
-
-            "textures" :
-            [
-                {}
-            ]
-        },
-
-		"VCT/VoxelPartialClear" :
-		{
-			"threads_per_group" : [4, 4, 4],
-
-			"source" : "VoxelPartialClear_cs",
-			"pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "VoxelPartialClear_piece_cs.any"],
-			"inform_shader_of_texture_data_change" : true,
-
-			"uav_units" : 3,
-
-			"params_glsl" :
-			[
-				["dstTex0",      	        [0], "int"],
-				["dstTex1",  		        [1], "int"],
-				["dstTex2",	        	    [2], "int"]
-			]
-		}
+        }
 	}
 }

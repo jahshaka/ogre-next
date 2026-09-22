@@ -61,28 +61,42 @@
 
 @property( syntax == glsl )
 	#define ogre_U0 binding = 0
+	#define ogre_U1 binding = 1
 @end
 
 // Jahshaka (ATOM P4): U0 IS THE GEOMETRY TABLE. It replaces the two slots that used
 // to bind a private vertex copy and a private index copy - and with them the
 // `compressed_vertex_format` and `index_32bit` shader properties, since a dispatch no
-// longer binds a format. Every image below therefore moved down one slot.
+// longer binds a format. Every image below therefore moved down a slot (two, with U1).
 layout( std430, ogre_U0 ) readonly restrict buffer geometryTableLayout
 {
 	GeometryRow geometryTable[];
 };
 
-layout( vulkan( ogre_u1 ) vk_comma @insertpiece(uav1_pf_type) )
-uniform restrict image3D voxelAlbedoTex;
+// Jahshaka (ATOM P4b): THE RANGES - one (start, count) per (octant, bucket), written
+// on the device by the host's gather. This dispatch loops over ranges[rangeIdx]; the
+// count is only a LOOP BOUND, because the dispatch's thread count is the octant's and
+// never the instance count's, so no indirect dispatch is needed to take it from the GPU.
+// U1 and not after the images: the root layout packs UAV buffers and UAV images as
+// two contiguous ranges.
+layout( std430, ogre_U1 ) readonly restrict buffer rangesLayout
+{
+	uvec2 ranges[];
+};
+
 layout( vulkan( ogre_u2 ) vk_comma @insertpiece(uav2_pf_type) )
-uniform restrict image3D voxelNormalTex;
+uniform restrict image3D voxelAlbedoTex;
 layout( vulkan( ogre_u3 ) vk_comma @insertpiece(uav3_pf_type) )
-uniform restrict image3D voxelEmissiveTex;
+uniform restrict image3D voxelNormalTex;
 layout( vulkan( ogre_u4 ) vk_comma @insertpiece(uav4_pf_type) )
+uniform restrict image3D voxelEmissiveTex;
+layout( vulkan( ogre_u5 ) vk_comma @insertpiece(uav5_pf_type) )
 uniform restrict uimage3D voxelAccumVal;
 // Jahshaka patch 0065: the per-voxel INTEGER ACCUMULATOR the merge sums into.
-layout( vulkan( ogre_u5 ) vk_comma @insertpiece(uav5_pf_type) )
+layout( vulkan( ogre_u6 ) vk_comma @insertpiece(uav6_pf_type) )
 uniform restrict uimage3D voxelMergeAccum;
+
+
 
 layout( local_size_x = @value( threads_per_group_x ),
 		local_size_y = @value( threads_per_group_y ),
@@ -97,7 +111,7 @@ layout( local_size_x = @value( threads_per_group_x ),
 //		local_size_z = 4 ) in;
 
 @property( syntax == glsl )
-	ReadOnlyBufferF( 6, InstanceBuffer, instanceBuffer );
+	ReadOnlyBufferF( 7, InstanceBuffer, instanceBuffer );
 @else
 	ReadOnlyBufferF( 0, InstanceBuffer, instanceBuffer );
 @end
@@ -114,14 +128,13 @@ layout( local_size_x = @value( threads_per_group_x ),
 
 
 vulkan( layout( ogre_P0 ) uniform Params { )
-	uniform uint2 instanceStart_instanceEnd;
+	uniform uint2 rangeIdx_pad;
 	uniform float3 voxelOrigin;
 	uniform float3 voxelCellSize;
 	uniform uint3 voxelPixelOrigin;
 vulkan( }; )
 
-#define p_instanceStart instanceStart_instanceEnd.x
-#define p_instanceEnd instanceStart_instanceEnd.y
+#define p_rangeIdx rangeIdx_pad.x
 #define p_voxelOrigin voxelOrigin
 #define p_voxelCellSize voxelCellSize
 #define p_voxelPixelOrigin voxelPixelOrigin
