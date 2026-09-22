@@ -96,8 +96,22 @@
 		uint w1 = rawRef.v[lane + 1u];
 		if( fmt == GeomNormalShort4Snorm )
 		{
-			float2 xy = unpackSnorm2x16( w0 );
-			return float3( xy.x, xy.y, unpackSnorm2x16( w1 ).x );
+			// A VET_SHORT4_SNORM normal is a QTANGENT, not a vector: Ogre stores the
+			// tangent-space rotation as a quaternion and the NORMAL is its X AXIS.
+			// This is the same decode VertexBufferDownloadHelper::getNormal did for
+			// this element type (OgreVertexBufferDownloadHelper.h, the
+			// `Dealing with QTangents` arm: snorm16 x4 -> Quaternion -> xAxis()), and
+			// unpackSnorm2x16 is GLSL's spelling of Bitwise::snorm16ToFloat.
+			// Returning the quaternion's imaginary part instead - which is what a
+			// naive xyz read gives - would be a different vector entirely.
+			float2 qxy = unpackSnorm2x16( w0 );
+			float2 qzw = unpackSnorm2x16( w1 );
+			float qx = qxy.x, qy = qxy.y, qz = qzw.x, qw = qzw.y;
+			float fTy = 2.0f * qy;
+			float fTz = 2.0f * qz;
+			return float3( 1.0f - ( fTy * qy + fTz * qz ),
+						   fTy * qx + fTz * qw,
+						   fTz * qx - fTy * qw );
 		}
 		float2 hxy = unpackHalf2x16( w0 );
 		return float3( hxy.x, hxy.y, unpackHalf2x16( w1 ).x );
