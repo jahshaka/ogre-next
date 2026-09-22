@@ -96,7 +96,24 @@
 				pixelData.F0		= lerp( pixelData.F0, decalMetalness, decalMask );
 			@else
 				pixelData.specular	= lerp( pixelData.specular.xyz, midf3_c( 1.0f, 1.0f, 1.0f ), decalMask );
-				pixelData.F0.xyz	= lerp( pixelData.F0.xyz, decalF0.xyz, decalMask );
+				// JAHSHAKA patch 0031 -- `pixelData.F0` IS NOT ALWAYS A FLOAT3.
+				// Its type is `float_fresnel`, which is midf3 only when
+				// `fresnel_scalar` is set and midf otherwise (the FresnelSwizzle
+				// pair, Main/500.Structs_piece_vs_piece_ps.any:283-287). This
+				// branch is taken for `metallic_workflow || fresnel_workflow ||
+				// fresnel_scalar`, and the middle one of those three -- an
+				// authored F0 in the NON-separate form, which is what
+				// HlmsPbsDatablock::setFresnel writes unless the material asked
+				// for separate Fresnel -- keeps F0 SCALAR. The unconditional
+				// `.xyz` here then fails to compile ("'xyz' : vector swizzle
+				// selection out of range") and the whole PBS permutation is
+				// lost, which renders black. Split by the same property the
+				// declaration uses.
+				@property( fresnel_scalar )
+					pixelData.F0.xyz = lerp( pixelData.F0.xyz, decalF0.xyz, decalMask );
+				@else
+					pixelData.F0 = lerp( pixelData.F0, decalF0.x, decalMask );
+				@end
 			@end
 
 			@property( hlms_decals_normals || hlms_decals_emissive )
@@ -140,6 +157,13 @@
 
 	midf cubemapAccumWeight = _h( 0 );
 
+	// Jahshaka patch 0048: HOW MANY PROBE BOXES CONTAIN THIS POINT. Not a
+	// weight -- a count, and the only thing read off it is whether it is zero.
+	// See the composite at the bottom of this piece.
+	@property( jah_sky_env_probe )
+		midf jahProbesHere = _h( 0 );
+	@end
+
 	midf3 pccEnvS = midf3_c( 0, 0, 0 );
 	midf3 pccEnvD = midf3_c( 0, 0, 0 );
 
@@ -150,8 +174,12 @@
 	@property( vct_num_probes )
 	if( pixelData.roughness < 1.0f || vctSpecular.w == 0 )
 	{
-		float accumVctLerp = 0;
-		float numProbesVctLerp = 0;
+		// Jahshaka patch 0017: accumVctLerp is now the probeFade-WEIGHTED sum of
+		// each probe's PCC trust (1 - vctLerp), so that it shares pccEnvS's own
+		// normalisation by cubemapAccumWeight. The unweighted probe COUNT that
+		// upstream divided the whole blend by is gone -- derivation at the blend
+		// itself, at the bottom of this piece.
+		midf accumVctLerp = _h( 0 );
 	@end
 	for( uint i=0u; i<numLightsInGrid; ++i )
 	{
@@ -174,6 +202,12 @@
 
 		if( probeFade > _h( 0 ) )
 		{
+			// Jahshaka patch 0048: this probe's box contains the shaded point.
+			// The test is the loop's own -- `getProbeFade > 0` is upstream's
+			// statement that a probe may answer for a point at all.
+			@property( jah_sky_env_probe )
+				jahProbesHere += _h( 1.0 );
+			@end
 			float2 cubemapIdx_priority = unpackUshort2ToFloat2( floatBitsToUint( probe.halfSize.w ) );
 			float probeCubemapIdx   = cubemapIdx_priority.x;
 			float probePriority     = cubemapIdx_priority.y;
@@ -188,6 +222,111 @@
 			probeFade = probeFade * probeFade;
 			probeFade = probeFade * probeFade;
 			probeFade *= midf_c( probePriority );
+
+			// ---- JAHSHAKA PATCH 0029: CAN THIS POINT SEE THE PROBE? ----------
+			//
+			// Owner, 2026-09-13: "why would the outside of a building show the
+			// room inside? That makes zero sense to me." -- and, when the lead
+			// reached for enclosure detection: "the engine should not know if
+			// there is a room? Isn't it the layout of objects in a scene that
+			// matters?" Exactly so. A probe is a photograph taken from a point,
+			// and the only honest question is whether the shaded point is IN
+			// that photograph or hidden behind something in it. Pure geometry;
+			// no concept of a room required.
+			//
+			// The probe already captured the answer. Its cube's ALPHA is how far
+			// it could see in every direction (the DepthCompressor pass), so:
+			// march from the probe camera towards this pixel, read what the
+			// probe saw that way, and treat "it saw something nearer" as
+			// occlusion. The parallax box (getProbeFade, above) stays as the
+			// cheap first rejection; this is the test that knows about geometry.
+			//
+			// THE SLACK IS RELATIVE, because the error is: one cube texel spans
+			// a solid angle, the compressed depth is 8 bits at the LDR tiers,
+			// and a texel straddling a silhouette filters between two depths.
+			// 8% of the probe-to-point distance, floored at 2% of the captured
+			// distance, keeps grazing floors and walls fully visible while the
+			// case the owner pointed at -- the outward face of a slab whose
+			// inward face the probe photographed -- fails it by 30% or more.
+			midf3 probeCamPosLS   = midf3_c( probe.cubemapPosLS.xyz );
+			midf3 probeToPosLS    = posInProbSpace.xyz - probeCamPosLS;
+			midf  probeToPosDist  = length( probeToPosLS );
+			midf3 probeToPosDirLS = probeToPosLS / max( probeToPosDist, _h( 1e-6 ) );
+			// The cube is sampled LEFT HANDED (localCorrect flips z on the way
+			// out); the visibility ray is flipped the same way.
+			midf3 probeVisDirLS   = midf3_c( probeToPosDirLS.x, probeToPosDirLS.y,
+											 -probeToPosDirLS.z );
+			midf  probeVisDepth;
+			@property( !hlms_cubemaps_use_dpm )
+				probeVisDepth = OGRE_SampleArrayCubeLevelF16(
+					texEnvProbeMap, samplerState@value(envMapRegSampler),
+					float3( probeVisDirLS ), probeCubemapIdx, 0.0 ).w;
+			@else
+				probeVisDepth = OGRE_SampleArray2DLevelF16(
+					texEnvProbeMap, samplerState@value(envMapRegSampler),
+					mapCubemapToDpm( probeVisDirLS ), probeCubemapIdx, 0.0 ).w;
+			@end
+			midf probeSeenDist = probeCapturedDistance( probeToPosDirLS, probeCamPosLS,
+														midf3_c( probe.halfSize.xyz ),
+														probeVisDepth );
+			// SLACK, relative, because the error is: one cube texel spans a solid
+			// angle, the compressed depth is 8 bits at the LDR tiers, and a
+			// texel straddling a silhouette filters between two depths. 8% of
+			// the probe-to-point distance with a floor of 2% of the captured
+			// distance keeps grazing floors and walls fully visible; a partition
+			// with a room beyond it fails by 69% (measured).
+			midf probeVisSlack = max( probeToPosDist * _h( 0.08 ),
+									  probeSeenDist * _h( 0.02 ) );
+			midf probeVisPass = saturate( ( probeSeenDist - probeToPosDist + probeVisSlack ) /
+										   max( probeVisSlack, _h( 1e-6 ) ) );
+
+			// ...AND ONLY A PROBE IN FRONT OF THIS SURFACE MAY BE TESTED AT ALL.
+			// The thing most often standing between a probe and a shaded point
+			// is THE SHADED POINT'S OWN OBJECT: a probe beside or behind a
+			// mirror box photographs that box's own far face or its silhouette
+			// edge, and the depth test then says "cannot see you" about a
+			// surface whose only occluder is itself. Measured, in
+			// gi.probe_gate's room: the chrome box's front face reads 79% of
+			// its own distance from the probes behind it, and the runtime plate
+			// 39% -- both indistinguishable, by depth alone, from a wall.
+			// A probe behind the surface cannot be asked this question, so it
+			// is not: it keeps upstream's box reprojection, which is what a
+			// mirror in a sealed room lives on. A probe IN FRONT can be, and
+			// there the answer is meaningful -- it is a partition, a wall, a
+			// second room. The test fades in over the first quarter of the
+			// cosine (full trust about 15 degrees off the tangent plane), so a
+			// curved surface ramps instead of flickering along its own horizon.
+			// Both vectors live in the PROBE's local space, which is view space
+			// rotated, so the cosine is the same one; probeToPosDirLS runs FROM
+			// the probe TO the point, so facing the probe is its negative.
+			midf3x3 probeVsToLs = buildMidf3x3( probe.row0_centerX.xyz,
+												probe.row1_centerY.xyz,
+												probe.row2_centerZ.xyz );
+			midf3 probeNormalLS = mul( pixelData.normal, probeVsToLs );
+			midf probeFacing = -dot( probeNormalLS, probeToPosDirLS );
+			midf probeVisWeight = saturate( probeFacing * _h( 4.0 ) );
+			midf probeVisible = _h( 1.0 ) - probeVisWeight * ( _h( 1.0 ) - probeVisPass );
+
+			// CONFIDENCE SCALES THE CONTRIBUTION, NOT THE WEIGHT -- the measured
+			// trap from lane E3, and the reason this is two variables rather
+			// than one. `pccEnvS` is normalised by cubemapAccumWeight at the
+			// bottom of this piece, so crushing every probe's weight would only
+			// renormalise the SAME probes back to full strength. So `probeFade`
+			// (which multiplies every sampled term below, and patch 0017's
+			// probe-trust accumulator with it) carries the visibility, while
+			// cubemapAccumWeight keeps accumulating the FULL weight. The share
+			// an occluded probe does not claim is then handed back by patch
+			// 0017's blend to whatever filled envColourS before the probes ran
+			// -- cone tracing, the irradiance field, the sky -- and never to
+			// black, which is what a naive tightening of probe influence
+			// produces in a sealed room.
+			//
+			// In the non-VCT branch at the bottom (upstream-only: Jahshaka
+			// builds a probe grid in the VCT+PCC hybrid alone, so vct_num_probes
+			// is always set when probes exist) there is no other environment
+			// term to hand it back to, and the occluded share simply drops out.
+			midf probeFadeFull = probeFade;
+			probeFade = probeFade * probeVisible;
 
 			@property( vct_num_probes )
 				midf4 reflDirLS_dist = localCorrect( pixelData.reflDir, posInProbSpace, probe );
@@ -261,8 +400,7 @@
 					clearCoatPccSingleEnvS *= 1.0f - vctLerp;
 				@end
 
-				accumVctLerp += 1.0f - vctLerp;
-				numProbesVctLerp += 1.0f;
+				accumVctLerp += probeFade * midf_c( 1.0f - vctLerp );	// Jahshaka patch 0017
 			@end
 
 			pccEnvS	+= pccSingleEnvS.xyz;
@@ -271,7 +409,7 @@
 				clearCoatPccEnvS += clearCoatPccSingleEnvS;
 			@end
 
-			cubemapAccumWeight += probeFade;
+			cubemapAccumWeight += probeFadeFull;	// Jahshaka patch 0029 -- FULL weight
 		}
 	}
 
@@ -285,18 +423,50 @@
 	@end
 
 	@property( vct_num_probes )
-		numProbesVctLerp = numProbesVctLerp == 0.0f ? 1.0f : numProbesVctLerp;
-		pixelData.envColourS.xyz = ( pccEnvS +
-									 pixelData.envColourS * (numProbesVctLerp - accumVctLerp) ) /
-								   numProbesVctLerp;
+		// Jahshaka patch 0017 -- the overlapping-probe division fix.
+		//
+		// Upstream divided the finished blend by numProbesVctLerp, the COUNT of
+		// probes covering this pixel:
+		//     envColourS = ( pccEnvS + vct * (N - accumVctLerp) ) / N
+		// but pccEnvS is ALREADY a weighted average by then (the line above
+		// divides it by cubemapAccumWeight, the sum of probeFade), so dividing it
+		// again by N darkens every probe reflection by however many probes happen
+		// to overlap the pixel. Measured on one mirror pixel of gi.pcc_bounds
+		// with geometry and placement held identical: 1 probe -> r 1.000,
+		// 4 probes -> r 0.251. A 3x2x3 grid at overlap 1.5 puts a point inside up
+		// to 8 probe volumes, i.e. up to 8x too dark. The non-VCT branch of this
+		// very piece has no such division (envColourS.xyz = pccEnvS), and neither
+		// does the single-probe path in Main/800.PixelShader_piece_ps.any, which
+		// is a plain lerp( envS, vct, vctLerp ) == envS*(1-vctLerp) + vct*vctLerp.
+		//
+		// Derivation of the multi-probe generalisation of that lerp. Write
+		// w_p = probeFade of probe p, S_p = its sampled reflection, t_p = its PCC
+		// trust (1 - vctLerp_p), W = sum(w_p) = cubemapAccumWeight. The loop above
+		// accumulates sum(w_p * t_p * S_p) and the line above normalises it, so
+		//     pccEnvS = sum(w_p * t_p * S_p) / W
+		// which IS the probe contribution at its own accumulated weight; nothing
+		// further is owed to it. What is left for VCT is exactly the weight the
+		// probes did not claim, with T = sum(w_p * t_p) / W the weighted mean
+		// trust:
+		//     envColourS = pccEnvS + vct * (1 - T)
+		// One fully trusted probe collapses to S -- upstream's own single-probe
+		// result -- and so do N identical fully trusted probes, with no N left
+		// anywhere. T must be weighted the same way pccEnvS is or the two terms
+		// do not sum to one unit of weight: upstream's unweighted count on two
+		// probes with fades 1.0/0.1 and trusts 1/0 yields 0.909*S + 0.5*vct,
+		// 1.41 units of light. Hence the probeFade weighting above.
+		midf pccVctTrust = cubemapAccumWeight == _h( 0.0f )
+						   ? _h( 0.0f )
+						   : saturate( accumVctLerp / cubemapAccumWeight );
+		pixelData.envColourS.xyz = pccEnvS +
+								   pixelData.envColourS * ( _h( 1.0f ) - pccVctTrust );
 		@property( cubemaps_as_diffuse_gi )
 			pixelData.envColourD += vctSpecular.w > 0 ? midf3_c( 0, 0, 0 ) : pccEnvD;
 		@end
 
 		@property( clear_coat )
-			pixelData.clearCoatEnvColourS = ( clearCoatPccEnvS +
-											  pixelData.clearCoatEnvColourS * ( numProbesVctLerp - accumVctLerp ) )
-											/ numProbesVctLerp;
+			pixelData.clearCoatEnvColourS = clearCoatPccEnvS +	// Jahshaka patch 0017
+											pixelData.clearCoatEnvColourS * ( _h( 1.0f ) - pccVctTrust );
 		@end
 	@else
 		pixelData.envColourS.xyz = pccEnvS;
@@ -309,6 +479,112 @@
 		@end
 	@end
 
+
+	// ---- JAHSHAKA PATCH 0048: WHERE NO PROBE IS, THE SKY IS ---------------
+	//
+	// The environment slot of this pin's PBS shader has ONE occupant, and under
+	// automatic parallax-corrected cubemaps it is the probe cube ARRAY: the sky
+	// cubemap comes off every datablock the moment one probe exists, because a
+	// manual cube in that slot generates a shader that cannot compile (three
+	// ways -- OgreSky.cpp's note on reflectionTexFor has the list). That was
+	// survivable while a probe grid was an all-or-nothing scene-wide decision.
+	// It stopped being survivable when the grid became a PER PROBE decision
+	// (lane R5-ROOM): a PARTIAL grid is the normal case now -- one crate in an
+	// open scene keeps 2 of 18 candidates -- and every pixel that no surviving
+	// probe's box contains had no environment left but the cones, whose own
+	// escape term is a flat, pi-dimmed copy of the same sky.
+	//
+	// So the sky gets a second slot of its own, at the pass level, through the
+	// listener route HlmsPbs honours for exactly this purpose
+	// (getNumExtraPassTextures / propertiesMergedPreGenerationStep /
+	// hlmsTypeChanged; upstream's Terra sample is the reference use), and here
+	// it answers for the pixels the probe grid does not.
+	//
+	// THE TEST IS THE LOOP'S OWN, AND IT IS BINARY: did any probe's box contain
+	// this point. Upstream has no other statement of "a probe may answer here",
+	// and the two quantities that look like coverage are both measured NOT to
+	// be (this was built all three ways before it was written this way):
+	//
+	//   * cubemapAccumWeight is the sum of the INTER-PROBE BLEND weight, a
+	//     quartic in the distance from a probe's GRID CELL centre which is
+	//     divided out again ten lines above -- its magnitude carries no
+	//     information. At the centre of a four-probe room it is 0.006, so a
+	//     "1 - that" rule floods a closed room with sky (measured: gi.probe_open
+	//     case 13's mirror went green).
+	//   * the raw getProbeFade is the normalised depth inside the probe's own
+	//     box -- and the box is SHRINK-FITTED TO THE ROOM'S SURFACES, so every
+	//     wall and floor pixel lies essentially ON a face of it and reads ~0.001
+	//     (measured, same case). Depth inside the box cannot be coverage when
+	//     the box's faces are the things being shaded.
+	//
+	// Binary is also what keeps this patch honest about risk: a pixel any probe
+	// covers renders EXACTLY what it rendered before, bit for bit, so no room,
+	// no probe suite and no selftest pixel can move. Only the pixels that had
+	// no probe answer at all change, and they change from the cone's flat sky
+	// to the real one.
+	//
+	// The gain and the mip count come from our own pass float4 rather than from
+	// ambientUpperHemi.w and envMapNumMipmaps: both of those are shared with the
+	// probe array, whose captures must not be scaled by the Sky Light dial and
+	// whose mip chain is its own.
+	//
+	// ONLY THE SPECULAR LOBE. The diffuse half of the environment belongs to the
+	// irradiance field and the cones, which do not lose anything when a probe is
+	// dropped; cubemaps_as_diffuse_gi stays masked off on our side.
+	@property( jah_sky_env_probe )
+		if( jahProbesHere == _h( 0.0 ) )
+		{
+			midf3 jahSkyDirLS = mul( pixelData.reflDir, midf3x3_c( passBuf.invViewMatCubemap ) );
+			midf jahSkyLod = pixelData.perceptualRoughness * midf_c( passBuf.jahSky.y ) *
+							 ( _h( 2.0 ) - pixelData.perceptualRoughness );
+			midf3 jahSkyEnvS = OGRE_SampleLevelF16( jahSkyEnvProbe, jahSkyEnvSampler,
+													float3( jahSkyDirLS ),
+													float( jahSkyLod ) ).xyz *
+							   midf_c( passBuf.jahSky.x );
+			// THE SKY REPLACES THE CONE'S ESCAPE, NOT THE CONE.
+			//
+			// A pixel no probe box covers may still be INSIDE the voxel volume,
+			// and there the cone has a real answer: the crate standing beside
+			// this glossy floor, the overhang above it. What the cone does NOT
+			// have is the sky -- where its march left the volume without hitting
+			// anything it fills that share with the scene's FLAT ambient, a
+			// 0-band copy of the sky (Vct_piece_ps.any's specAlpha term). So the
+			// composite is a SWAP of exactly that term, at exactly its weight:
+			//
+			//     envColourS = cone - ambient x w + sky x w
+			//
+			// with both quantities exported from the cone itself rather than
+			// reconstructed here. Outside the voxel volume the cone did not run
+			// at all (vctSpecular.w is 0 and upstream's own ambient pieces are
+			// gated on that), so the whole lobe is unanswered and the weight is
+			// 1: the sky alone, which is the open-world case this patch is
+			// named for.
+			@property( vct_num_probes )
+				// `jahConeWeight` is 0 when the specular cone never ran for this
+				// pixel at all -- there is then nothing to keep and nothing to
+				// remove, and the whole lobe is the sky's.
+				midf jahSkyW = jahConeWeight > 0.0f ? saturate( midf_c( jahEscapeWeight ) )
+													: _h( 1.0 );
+				pixelData.envColourS.xyz = pixelData.envColourS.xyz -
+										   midf3_c( jahEscapeColour ) +
+										   jahSkyEnvS * jahSkyW;
+			@else
+				pixelData.envColourS.xyz = jahSkyEnvS;
+			@end
+			@property( clear_coat )
+				// The coat lobe has no cone term to keep -- the voxel arm writes
+				// envColourS only -- so it takes the sky at full strength.
+				midf jahSkyCoatLod = pixelData.clearCoatPerceptualRoughness *
+									 midf_c( passBuf.jahSky.y ) *
+									 ( _h( 2.0 ) - pixelData.clearCoatPerceptualRoughness );
+				pixelData.clearCoatEnvColourS = OGRE_SampleLevelF16( jahSkyEnvProbe,
+																	 jahSkyEnvSampler,
+																	 float3( jahSkyDirLS ),
+																	 float( jahSkyCoatLod ) ).xyz *
+												midf_c( passBuf.jahSky.x );
+			@end
+		}
+	@end
 
 	@property( vct_num_probes )
 	}

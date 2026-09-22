@@ -99,6 +99,31 @@ INLINE midf4 localCorrect( midf3 reflDir, midf3 posLS, CubemapProbe probe )
 	return min( min( vDiff.x, vDiff.y ), vDiff.z );
 }
 
+/** Jahshaka patch 0029 -- HOW FAR THE PROBE COULD SEE IN THIS DIRECTION.
+
+	The probe's own capture carries its depth: the DepthCompressor pass writes
+	`min( 0.5 * fDist / fApproxDist, 1 )` into the cube's ALPHA, where
+	fApproxDist is the distance from the probe camera to its parallax box along
+	that same direction (Common/Any/PccDepthCompressor_ps.any). This is the
+	exact inverse of that encoding, and it is what upstream's own
+	getPccVctBlendWeight already assumes (`interesectionPosVS = cubemapPosVS +
+	(...) * (pccCompressedDepth * 2.0)`, Vct_piece_ps.any).
+
+	dirLS must be NORMALISED and in the probe's local space; the return value is
+	a distance in that same space, saturating at 2 * fApproxDist (the encoding's
+	own ceiling, i.e. "at least this far").
+*/
+INLINE midf probeCapturedDistance( midf3 dirLS, midf3 cameraPosLS, midf3 probeShapeHalfSize,
+								   midf compressedDepth )
+{
+	midf3 invDirLS = midf3_c( 1.0, 1.0, 1.0 ) / dirLS;
+	midf3 atMinPlane = ( -probeShapeHalfSize - cameraPosLS ) * invDirLS;
+	midf3 atMaxPlane = (  probeShapeHalfSize - cameraPosLS ) * invDirLS;
+	midf3 largest = max( atMaxPlane.xyz, atMinPlane.xyz );
+	midf approxDist = min( min( largest.x, largest.y ), largest.z );
+	return compressedDepth * _h( 2.0 ) * approxDist;
+}
+
 INLINE midf getProbeNDF( midf3 posLS, midf3 probeToAreaCenterOffsetLS,
 						 midf3 innerRange, midf3 outerRange )
 {
