@@ -219,14 +219,16 @@ namespace Ogre
         VctLighting( IdType id, VctVoxelizerSourceBase *voxelizer, bool bAnisotropic );
         ~VctLighting() override;
 
-        /// Used by VctCascadedVoxelizer. By having extra cascade info, we can
-        /// calculate multiple bounces with extra info
+        /// Used by a host's cascade chain (upstream's VctCascadedVoxelizer is not in
+        /// this fork). By having extra cascade info, we can calculate multiple bounces
+        /// with extra info
         ///
         /// This function calls mExtraCascades.reserve
         void reserveExtraCascades( size_t numExtraCascades );
 
-        /// Used by VctCascadedVoxelizer. By having extra cascade info, we can
-        /// calculate multiple bounces with extra info
+        /// Used by a host's cascade chain (upstream's VctCascadedVoxelizer is not in
+        /// this fork). By having extra cascade info, we can calculate multiple bounces
+        /// with extra info
         void addCascade( VctLighting *cascade );
 
         /** This function allows VctLighting::update to pass numBounces > 0 as argument.
@@ -345,8 +347,9 @@ namespace Ogre
         */
         void setVoxelizer( VctVoxelizerSourceBase *voxelizer );
 
-        /// When VctImageVoxelizer::buildRelative is called; voxelizer's textures
-        /// (albedo, normal, emissive) may be swapped for a copy.
+        /// Upstream's VctImageVoxelizer::buildRelative called this (its voxeliser's
+        /// textures - albedo, normal, emissive - could be swapped for a copy). That class
+        /// is not in this fork (6be1ae1d7) and nothing here calls this any more.
         ///
         /// This function notifies us that buildRelative to update some of our references
         void resetTexturesFromBuildRelative();

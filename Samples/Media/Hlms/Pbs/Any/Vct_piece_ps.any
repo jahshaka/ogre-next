@@ -642,7 +642,7 @@
 						// ( 1 - result.alpha ) a second time squares the
 						// transmittance and darkens every outer cascade.
 						// Upstream calls that second factor "de-amplification"
-						// (VctCascadedVoxelizer::update) and pairs it with "more
+						// (upstream VctCascadedVoxelizer::update, not in this fork) and pairs it with "more
 						// bounces for coarser cascades" -- a brightness
 						// stabilisation invented when the opacity was doubling per
 						// hop, which patch 0033 fixed at the cause. With 0033 in it

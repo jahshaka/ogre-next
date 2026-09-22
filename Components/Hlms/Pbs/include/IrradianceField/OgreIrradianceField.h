@@ -268,7 +268,7 @@ namespace Ogre
             initialize() is the only way to place the field upstream, and it calls
             createTextures(), which destroys and re-creates both atlases: a field that
             must follow the camera (e.g. one riding the innermost cascade of a
-            VctCascadedVoxelizer chain) would therefore be born black on every step and
+            camera-centred cascade chain) would therefore be born black on every step and
             re-converge from nothing, and its compositor workspace, directions buffer and
             integration taps would be rebuilt for a change none of them depend on.
 

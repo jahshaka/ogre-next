@@ -873,7 +873,8 @@ namespace Ogre
         //     to where it started (a swap is an involution), which is why this survived:
         //     upstream's own cascade manager gives every cascade the same bounce count.
         //     A per-cascade count is not exotic — the stabilisation upstream documents
-        //     (a coarser cascade gets more bounces, OgreVctCascadedVoxelizer.cpp:465-491)
+        //     (a coarser cascade gets more bounces - upstream's VctCascadedVoxelizer,
+        //     which is not in this fork)
         //     produces 1/2/4/8 on a four-cascade chain at three total bounces, and
         //     odd counts on outer cascades at other totals (1/1/2/4 at two).
         //
@@ -951,7 +952,7 @@ namespace Ogre
         // with nothing but that one log line to say so.
         //
         // Nothing documents an order for these two calls (VctLighting's header does not),
-        // and upstream's own VctCascadedVoxelizer happens to chain BEFORE it enables
+        // and upstream's own VctCascadedVoxelizer (not in this fork) chained BEFORE it enabled
         // bounces, which is why upstream never meets this. Now either order works.
         if( getAllowMultipleBounces() )
             setupBounceTextures();
