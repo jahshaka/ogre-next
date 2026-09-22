@@ -139,6 +139,9 @@ namespace Ogre
         using RootLayout::findParamsBuffer;
         using RootLayout::getDescBindingRanges;
         using RootLayout::validateArrayBindings;
+        /// Jahshaka ogre-patch 0063: the shader cache stores what SPIR-V
+        /// reflection discovered, so it has to be able to read it back out.
+        using RootLayout::getArrayRanges;
 
         /// @copydoc RootLayout::copyFrom
         void copyFrom( const RootLayout &rootLayout, bool bIncludeArrayBindings = true );

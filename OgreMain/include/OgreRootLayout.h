@@ -446,6 +446,26 @@ namespace Ogre
         */
         void addArrayBinding( DescBindingTypes::DescBindingTypes bindingType, ArrayDesc arrayDesc );
 
+        /** Jahshaka ogre-patch 0063: read access to the array bindings.
+
+            A shader whose root layout is DISCOVERED by reflecting its own SPIR-V
+            (see GpuProgram::setAutoReflectArrayBindingsInRootLayout) has to be
+            compiled twice on a cold run: once to find the arrays, once against
+            the layout they imply. The second compile is only avoidable on a
+            later launch if the shader cache can store what the reflection found
+            beside the microcode, and that needs a way to read it back out.
+        @param bindingType
+            Which of the binding types to read. ParamBuffer never has arrays.
+        @return
+            The ArrayDesc keys, in ascending binding order — the same order
+            addArrayBinding() requires them to be replayed in.
+        */
+        const FastArray<uint32> &getArrayRanges(
+            DescBindingTypes::DescBindingTypes bindingType ) const
+        {
+            return mArrayRanges[bindingType];
+        }
+
         /** Copies all our parameters from 'other'
             Does NOT call validate()
         @param other

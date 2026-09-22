@@ -213,6 +213,21 @@ namespace Ogre
         bool mReflectArrayRootLayouts;
         bool mReplaceVersionMacro;
 
+        /// Jahshaka ogre-patch 0063. The microcode-cache key this program was
+        /// LOOKED UP under, captured in loadFromSource() before anything is
+        /// compiled.
+        ///
+        /// It has to be captured rather than recomputed at the end of compile(),
+        /// because a shader that reflects its own array bindings is compiled
+        /// against a root layout the first compile DISCOVERS: by the time the
+        /// microcode is stored, getPreamble() no longer produces the preamble a
+        /// later launch (which has not compiled anything yet) can compute. An
+        /// entry stored under the late key could never be found again.
+        ///
+        /// Empty means "not cacheable" — no custom root layout, or compile()
+        /// was reached without going through loadFromSource().
+        String mMicrocodeCacheKey;
+
         /// Flag indicating if shader object successfully compiled
         bool mCompiled;
         /// Preprocessor options
