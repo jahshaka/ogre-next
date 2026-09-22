@@ -14,6 +14,11 @@ in block
 vulkan( layout( ogre_P0 ) uniform Params { )
 	uniform vec4 texelSize;
 	uniform vec2 projectionParams;
+
+	// Jahshaka local patch (orthoview lane, ogre-patch 0019): x = 1 when the
+	// camera is ORTHOGRAPHIC. See the branch below - none of this file's
+	// position reconstruction is valid under an ortho frustum without it.
+	uniform vec4 jahOrthoParams;
 vulkan( }; )
 
 const float offsets[9] = float[9]( -8.0, -6.0, -4.0, -2.0, 0.0, 2.0, 4.0, 6.0, 8.0 );
@@ -24,6 +29,15 @@ out float fragColour;
 float getLinearDepth(vec2 uv)
 {
 	float fDepth = texture( vkSampler2D( depthTexture, samplerState ), uv ).x;
+	// Jahshaka local patch (orthoview lane): the ORTHO pair is the reciprocal
+	// of this one - same reasoning, and the same two lines, as
+	// SSAO_HS_ps.glsl's getScreenSpacePos. It matters HERE because the blur
+	// weight is 1/|depth difference|: read the wrong way round, an ortho
+	// frame's differences collapse toward zero, every weight becomes equal,
+	// and the depth-aware blur silently degrades into a box blur that smears
+	// the occlusion across every silhouette.
+	if( jahOrthoParams.x > 0.5 )
+		return abs( (fDepth - projectionParams.x) / projectionParams.y );
 	float linearDepth = projectionParams.y / (fDepth - projectionParams.x);
 	return linearDepth;
 }
