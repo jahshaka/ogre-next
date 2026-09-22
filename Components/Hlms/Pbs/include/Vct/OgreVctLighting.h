@@ -94,6 +94,26 @@ namespace Ogre
         HlmsComputeJob *mLightVctBounceInject;
         TextureGpu     *mLightBounce;
 
+        /// JAHSHAKA PATCH 0076: THE DIRECT TERM, KEPT.
+        ///
+        /// The bounce is a fixed-point iteration over the radiance in the volume,
+        /// L = D + rho * G( L ), and it needs D -- the light INJECTED from the
+        /// scene's lamps, before any bounce -- at every pass. Upstream's bounce job
+        /// re-read the running TOTAL and added to it (L_n = L_n-1 + rho * G( L_n-1 )),
+        /// which is a binomial series in (1 + rho*G) and never contracts: the first
+        /// bounce's energy is counted again at every later pass. The two textures
+        /// mLightVoxel[0]/mLightBounce ping-pong, so by the second pass the direct
+        /// term is the one being overwritten and cannot be recovered from them.
+        ///
+        /// This is that third volume: mip 0 only (the bounce reads it with a
+        /// Load3D at its own voxel, never filtered), same resolution and format as
+        /// mLightVoxel[0], written by the light-injection job's second UAV in the
+        /// same dispatch that writes the total -- so keeping it costs one image
+        /// store per voxel and no copy, no readback and no CPU path. It lives
+        /// exactly as long as mLightBounce does (see setAllowMultipleBounces): a
+        /// volume that cannot bounce has no use for it.
+        TextureGpu *mLightDirect;
+
         float mBakingMultiplier;
         float mInvBakingMultiplier;
 
@@ -180,12 +200,20 @@ namespace Ogre
         void createTextures();
         void destroyTextures();
         void checkTextures();
-        void setupBounceTextures();
+        /// Re-derives the bounce injection job's texture UNIT COUNT and writes every
+        /// slot it reads from the CURRENT textures. `bSetSamplerRefs` false skips the
+        /// OpenGL-only samplerblock reference-counting, which makes the call safe to
+        /// repeat per dispatch (the textures move under it; the samplers do not).
+        void setupBounceTextures( bool bSetSamplerRefs = true );
         void setupGlslTextureUnits();
 
         void generateAnisotropicMips();
 
-        void runBounce( uint32 bounceIteration );
+        /// JAHSHAKA PATCH 0076: the pass index is gone with the per-iteration
+        /// dampening it fed (upstream's commented-out 1 / ( pi * ( n/2 + 1 ) )).
+        /// Every pass of a Jacobi iteration is the same operator; nothing about it
+        /// depends on which pass it is.
+        void runBounce();
 
     public:
         VctLighting( IdType id, VctVoxelizerSourceBase *voxelizer, bool bAnisotropic );
@@ -291,6 +319,32 @@ namespace Ogre
                      bool autoMultiplier = true, float rayMarchStepScale = 1.0f,
                      uint32 lightMask = 0xffffffff );
 
+        /** Points this VctLighting at a DIFFERENT voxelizer, in place.
+
+            A VctLighting is normally bound to the voxelizer it was constructed with for
+            its whole life. That is a problem for any caller that must re-voxelize with a
+            FRESH VctVoxelizer rather than rebuild an existing one -- VctMaterial caches
+            each datablock's conversion by raw pointer for the voxelizer's lifetime, so a
+            material whose parameters changed (or whose datablock died and whose address
+            was recycled) can only be answered by a new voxelizer. Destroying the
+            VctLighting as well is not an option when it is part of a cascade chain:
+            addCascade() hands the cascades inside this one raw pointers to it and
+            fillConstBufferData() walks them on every pass, so replacing one cascade's
+            lighting forces every cascade inside it to be rebuilt in the same frame.
+
+            Everything this object holds that depends on the voxelizer is re-derived here:
+            the TextureGpuListener registrations move to the new albedo/normal textures
+            and the light voxel textures are re-created from the new resolution -- the
+            same recovery the LostResidency path performs.
+        @remarks
+            The new voxelizer must already have been built (its albedo texture is what the
+            light voxels are sized from), and the caller keeps ownership of both: the old
+            one is only safe to destroy AFTER this returns.
+        @param voxelizer
+            The voxelizer to sample from now. Null or the current one is a no-op.
+        */
+        void setVoxelizer( VctVoxelizerSourceBase *voxelizer );
+
         /// When VctImageVoxelizer::buildRelative is called; voxelizer's textures
         /// (albedo, normal, emissive) may be swapped for a copy.
         ///
@@ -344,6 +398,12 @@ namespace Ogre
         void setAmbient( const ColourValue &upperHemisphere, const ColourValue &lowerHemisphere );
 
         TextureGpu **getLightVoxelTextures() { return mLightVoxel; }
+        /// JAHSHAKA PATCH: THE DIRECT TERM'S VOLUME (patch 0076's D term), or null
+        /// on a VctLighting that cannot bounce. Read-only, and it exists so a host
+        /// can MEASURE the store -- the normalisation's own self-check is "the
+        /// direct term is <= the ceiling by construction", and nothing outside this
+        /// class could see the volume to check it.
+        TextureGpu  *getLightDirectTexture() const { return mLightDirect; }
         TextureGpu **getLightVoxelTextures( const size_t cascadeIdx );
         uint32       getNumVoxelTextures() const { return mAnisotropic ? 4u : 1u; }
 

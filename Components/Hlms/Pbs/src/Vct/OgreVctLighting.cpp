@@ -71,6 +71,21 @@ namespace Ogre
 
     static const size_t c_maxCascades = 8u;
 
+    // JAHSHAKA PATCH 0080: THE FORMAT OF THE TOTAL VOLUME.
+    //
+    // The volume holds the fixed point of L = D + rho * G( L ). The DIRECT term D
+    // is normalised to <= 1 by VctLighting::update's auto multiplier; the FIXED
+    // POINT is not bounded by 1 at all -- it is D * sum( (rho*f)^i ), i.e. up to
+    // D / (1 - rho*f), which for a white enclosure has no useful bound (measured:
+    // 2.05x the direct term at albedo 0.79, 2.76x and climbing at albedo 1.0, 3.5x
+    // in a shipped sample). An 8-bit UNORM store clips it, per channel, which
+    // desaturates as it darkens and reads downstream exactly like a scene with
+    // less bounce in it; and every fixed headroom that clears one room costs the
+    // dark end, where the GI signal lives. So the total is a float. The direct
+    // volume (patch 0076) keeps its 8-bit sRGB store: D <= 1 by construction.
+    static PixelFormatGpu jahLightVoxelFormat() { return PFG_RGBA16_FLOAT; }
+    static PixelFormatGpu jahLightVoxelUavFormat() { return PFG_RGBA16_FLOAT; }
+    //-------------------------------------------------------------------------
     VctLighting::VctLighting( IdType id, VctVoxelizerSourceBase *voxelizer, bool bAnisotropic ) :
         IdObject( id ),
         mSamplerblockTrilinear( 0 ),
@@ -82,6 +97,7 @@ namespace Ogre
         mAnisoGeneratorStep0( 0 ),
         mLightVctBounceInject( 0 ),
         mLightBounce( 0 ),
+        mLightDirect( 0 ),  // JAHSHAKA PATCH 0076
         mBakingMultiplier( 1.0f ),
         mInvBakingMultiplier( 1.0f ),
         mDefaultLightDistThreshold( 0.5f ),
@@ -308,7 +324,15 @@ namespace Ogre
 
         TextureGpuManager *textureManager = mVoxelizer->getTextureGpuManager();
 
-        uint32 texFlags = TextureFlags::Uav | TextureFlags::Reinterpretable;
+        // JAHSHAKA PATCH 0080: NOT Reinterpretable. The flag existed for the 8-bit
+        // store, whose UAV view (RGBA8_UNORM) reinterpreted the sRGB texture; a float
+        // store's UAV view IS its format. And the flag is not free: a reinterpretable
+        // texture is created as its format FAMILY -- R16G16B16A16_UINT for 16F --
+        // and the mip chain's linear blit (_autogenerateMipmaps) is then invalid on
+        // an integer image (VUID-vkCmdBlitImage-filter-02001: the format has no
+        // linear-filter feature), so the coarse mips the cone gather reads would be
+        // undefined. The direct volume below keeps the flag with its 8-bit store.
+        uint32 texFlags = TextureFlags::Uav;
 
         const bool bSdfQuality = shouldEnableSpecularSdfQuality();
         if( !mAnisotropic || bSdfQuality )
@@ -357,7 +381,7 @@ namespace Ogre
                 texture->setResolution( widthAniso, heightAniso, depthAniso );
                 texture->setNumMipmaps( numMipsAniso );
             }
-            texture->setPixelFormat( PFG_RGBA8_UNORM_SRGB );
+            texture->setPixelFormat( jahLightVoxelFormat() );  // JAHSHAKA PATCH 0080
             texture->scheduleTransitionTo( GpuResidency::Resident );
             mLightVoxel[i] = texture;
 
@@ -383,7 +407,7 @@ namespace Ogre
                 DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
                 uavSlot.access = ResourceAccess::Write;
                 uavSlot.texture = mLightVoxel[i + 1u];
-                uavSlot.pixelFormat = PFG_RGBA8_UNORM;
+                uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
                 mAnisoGeneratorStep0->_setUavTexture( i, uavSlot );
             }
 
@@ -426,7 +450,7 @@ namespace Ogre
                     uavSlot.access = ResourceAccess::Write;
                     uavSlot.texture = mLightVoxel[axis + 1u];
                     uavSlot.mipmapLevel = i + 1u;
-                    uavSlot.pixelFormat = PFG_RGBA8_UNORM;
+                    uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
                     mipJob->_setUavTexture( axis, uavSlot );
                 }
 
@@ -501,7 +525,15 @@ namespace Ogre
     void VctLighting::checkTextures()
     {
         if( mVoxelizerTexturesChanged )
+        {
             createTextures();
+            // The textures have been re-created; the request has been served. Without
+            // this the flag stays raised for the object's whole life (it is only ever
+            // assigned false in the constructor), so a voxelizer that loses residency
+            // ONCE makes every subsequent update() destroy and re-create the light voxel
+            // textures, for ever.
+            mVoxelizerTexturesChanged = false;
+        }
 
         if( mVoxelizerListenersRemoved )
         {
@@ -511,19 +543,48 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    void VctLighting::setupBounceTextures()
+    void VctLighting::setVoxelizer( VctVoxelizerSourceBase *voxelizer )
+    {
+        if( !voxelizer || voxelizer == mVoxelizer )
+            return;
+
+        if( !mVoxelizerListenersRemoved )
+        {
+            mVoxelizer->getAlbedoVox()->removeListener( this );
+            mVoxelizer->getNormalVox()->removeListener( this );
+        }
+
+        mVoxelizer = voxelizer;
+        // The same two requests a LostResidency notification raises, served immediately:
+        // re-create the light voxels from the new voxelizer's resolution and re-register
+        // as a listener on its albedo/normal textures.
+        mVoxelizerTexturesChanged = true;
+        mVoxelizerListenersRemoved = true;
+        checkTextures();
+    }
+    //-------------------------------------------------------------------------
+    void VctLighting::setupBounceTextures( bool bSetSamplerRefs )
     {
         const size_t numExtraCascades = mExtraCascades.size();
 
+        // JAHSHAKA PATCH 0076: +1 for `directVoxel`, the fixed point's D term. It is
+        // bound LAST so that every existing slot index -- albedo, normal, this
+        // cascade's probes, the extra cascades', the three anisotropic sets -- keeps
+        // the number it had, in the C++ and in the shader's ogre_tN layout alike.
         uint8 numNeededTexUnits;
         if( mAnisotropic )
-            numNeededTexUnits = 6u + 4u * static_cast<uint8>( numExtraCascades );
+            numNeededTexUnits = 6u + 4u * static_cast<uint8>( numExtraCascades ) + 1u;
         else
-            numNeededTexUnits = 3u + static_cast<uint8>( numExtraCascades );
+            numNeededTexUnits = 3u + static_cast<uint8>( numExtraCascades ) + 1u;
 
         HlmsManager *hlmsManager = mVoxelizer->getHlmsManager();
         const RenderSystemCapabilities *caps = hlmsManager->getRenderSystem()->getCapabilities();
         const bool bSetSampler = !caps->hasCapability( RSC_SEPARATE_SAMPLERS_FROM_TEXTURES );
+        // The samplerblocks are bound ONCE and never move; the textures move on every
+        // bounce. So a re-assert (runBounce, below) writes the textures and leaves the
+        // sampler reference counting alone, which is the only reason this call is cheap
+        // enough to repeat per dispatch.
+        const bool bSetSamplerNow = bSetSampler && bSetSamplerRefs;
 
         if( mLightVctBounceInject->getNumTexUnits() != numNeededTexUnits )
         {
@@ -548,7 +609,7 @@ namespace Ogre
         {
             texSlot.texture = mExtraCascades[cascadeIdx]->mLightVoxel[0];
             mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
-            if( bSetSampler )
+            if( bSetSamplerNow )
             {
                 // Only OpenGL needs this sampler set
                 hlmsManager->addReference( mSamplerblockTrilinear );
@@ -562,7 +623,7 @@ namespace Ogre
             {
                 texSlot.texture = mLightVoxel[i + 1u];
                 mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
-                if( bSetSampler )
+                if( bSetSamplerNow )
                 {
                     // Only OpenGL needs this sampler set
                     hlmsManager->addReference( mSamplerblockTrilinear );
@@ -573,7 +634,7 @@ namespace Ogre
                 {
                     texSlot.texture = mExtraCascades[cascadeIdx]->mLightVoxel[i + 1u];
                     mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
-                    if( bSetSampler )
+                    if( bSetSamplerNow )
                     {
                         // Only OpenGL needs this sampler set
                         hlmsManager->addReference( mSamplerblockTrilinear );
@@ -584,21 +645,27 @@ namespace Ogre
             }
         }
 
+        // JAHSHAKA PATCH 0076: THE DIRECT TERM, at the last unit. Read with a plain
+        // Load3D at the voxel being written, so it needs no sampler of its own (the
+        // OpenGL path's samplerblock loop above deliberately skips it).
+        texSlot.texture = mLightDirect;
+        mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
+
         DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
         uavSlot.access = ResourceAccess::Write;
         uavSlot.texture = mLightBounce;
-        uavSlot.pixelFormat = PFG_RGBA8_UNORM;
+        uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
         mLightVctBounceInject->_setUavTexture( 0, uavSlot );
     }
     //-------------------------------------------------------------------------
     void VctLighting::setupGlslTextureUnits()
     {
         const size_t numExtraCascades = mExtraCascades.size();
-        size_t numNeededTexUnits;
+        size_t numNeededTexUnits;  // +1: `directVoxel` (JAHSHAKA PATCH 0076)
         if( mAnisotropic )
-            numNeededTexUnits = 6u + 4u * numExtraCascades;
+            numNeededTexUnits = 6u + 4u * numExtraCascades + 1u;
         else
-            numNeededTexUnits = 3u + numExtraCascades;
+            numNeededTexUnits = 3u + numExtraCascades + 1u;
 
         // This code assumes there's 2 textures at the beginning that always stays the same
         // the rest of them are dynamically generated.
@@ -628,6 +695,12 @@ namespace Ogre
                 glslShaderParams.mParams.push_back( param );
             }
 
+            // JAHSHAKA PATCH 0076: the direct volume's own unit, after every probe
+            // array -- the same order setupBounceTextures() binds them in.
+            param.name = "directVoxel";
+            param.setManualValue( texSlotIdx );
+            glslShaderParams.mParams.push_back( param );
+
             glslShaderParams.setDirty();
         }
     }
@@ -656,16 +729,33 @@ namespace Ogre
         renderSystem->debugAnnotationPop();
     }
     //-------------------------------------------------------------------------
-    void VctLighting::runBounce( uint32 bounceIteration )
+    void VctLighting::runBounce()
     {
         RenderSystem *renderSystem = mVoxelizer->getRenderSystem();
         renderSystem->debugAnnotationPush( "VctLighting Bounce" );
 
         mBounceVoxelCellSize->setManualValue( mVoxelizer->getVoxelCellSize() );
         mBounceInvVoxelResolution->setManualValue( 1.0f / mVoxelizer->getVoxelResolution() );
-        // mBounceIterationDampening->setManualValue( 1.0f /
-        //                                           ( Math::PI * ( bounceIteration * 0.5f + 1.0f ) ) );
-        mBounceIterationDampening->setManualValue( 1.0f / (float)Math::PI );
+        // JAHSHAKA PATCH 0076: ONE, AND IT IS THE PHYSICS.
+        //
+        // The bounce adds `albedo * G` where G is the six-cone weighted mean of the
+        // voxel radiance -- weights that sum to 1 over a cosine-ish set, i.e. an
+        // ESTIMATE OF E / PI already (that is exactly why HlmsPbs consumes the same
+        // gather as `envColourD` with no division of its own,
+        // 200.BRDFs_piece_ps.any: Rd = envColourD * albedo). The bounced outgoing
+        // radiance of a Lambertian surface is rho * E / pi = rho * G: no further
+        // factor exists to apply.
+        //
+        // Upstream divided by pi here (and its commented-out line divided by an extra
+        // 1 + n/2 per pass). Both were fudges against the runaway this patch fixes at
+        // the cause: the job re-gathered the TOTAL and added to it, so the series was
+        // binomial in (1 + rho*G) and every extra pass amplified the first bounce
+        // instead of adding a dimmer one. With the Jacobi form -- new = direct +
+        // rho * G( total ) -- the series contracts by rho * f per pass on its own,
+        // and a dampening of 1/pi would simply make every bounce pi times too dark
+        // (which is what upstream's "more bounces for coarser cascades" stabilisation,
+        // deleted by PHOTON-M1, was compensating for).
+        mBounceIterationDampening->setManualValue( 1.0f );
 
         const size_t numCascades = mExtraCascades.size() + 1u;
 
@@ -768,6 +858,39 @@ namespace Ogre
         mBounceShaderParams->mParams.swap( mLocalBounceShaderParams );
         mBounceShaderParams->setDirty();
 
+        // THE BINDINGS ARE RE-ASSERTED PER DISPATCH, and it is not belt and braces —
+        // it is the only way they can be right. Two independent reasons:
+        //
+        // (1) THE TEXTURES MOVE UNDER THE JOB. This function ends with
+        //     `std::swap( mLightVoxel[0], mLightBounce )`, and re-binds slot 2 (its own
+        //     light voxel) right after it — but slots 3..N hold the EXTRA CASCADES'
+        //     mLightVoxel[], written once in setupBounceTextures() and never again.
+        //     Every one of those cascades runs its own runBounce() and swaps its own
+        //     pointers, so after an ODD number of bounce iterations on a cascade, this
+        //     job is reading the texture that cascade has just stopped writing: the
+        //     cross-cascade term of the bounce integrates stale radiance, silently, with
+        //     no log line and no validation error. An EVEN number happens to come back
+        //     to where it started (a swap is an involution), which is why this survived:
+        //     upstream's own cascade manager gives every cascade the same bounce count.
+        //     A per-cascade count is not exotic — the stabilisation upstream documents
+        //     (a coarser cascade gets more bounces, OgreVctCascadedVoxelizer.cpp:465-491)
+        //     produces 1/2/4/8 on a four-cascade chain at three total bounces, and
+        //     odd counts on outer cascades at other totals (1/1/2/4 at two).
+        //
+        // (2) THE JOB IS SHARED BY NAME. "VCT/LightVctBounceInject" is found by name, so
+        //     every VctLighting in the process uses ONE HlmsComputeJob while the
+        //     bindings belong to whichever instance called setupBounceTextures() last —
+        //     the same shared-job class as this file's albedo/normal listeners. Two
+        //     live chains would inject one chain's voxels through the other's textures.
+        //     Re-asserting here makes the bindings belong to the instance DISPATCHING.
+        //
+        // The cost is the slot writes themselves: the unit count is change-guarded, the
+        // GLSL unit list is rewritten (cheap, and OpenGL-only), and `false` skips the
+        // OpenGL-only samplerblock
+        // reference counting, which would otherwise leak a reference per dispatch (the
+        // samplers do not move — only the textures do).
+        setupBounceTextures( false );
+
         HlmsCompute *hlmsCompute = mVoxelizer->getHlmsManager()->getComputeHlms();
         mLightVctBounceInject->analyzeBarriers( mResourceTransitions );
         renderSystem->executeResourceTransition( mResourceTransitions );
@@ -782,7 +905,7 @@ namespace Ogre
         DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
         uavSlot.access = ResourceAccess::Write;
         uavSlot.texture = mLightBounce;
-        uavSlot.pixelFormat = PFG_RGBA8_UNORM;
+        uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
         mLightVctBounceInject->_setUavTexture( 0, uavSlot );
 
         if( mAnisotropic )
@@ -811,7 +934,28 @@ namespace Ogre
         mExtraCascades.reserve( numExtraCascades );
     }
     //-------------------------------------------------------------------------
-    void VctLighting::addCascade( VctLighting *cascade ) { mExtraCascades.push_back( cascade ); }
+    void VctLighting::addCascade( VctLighting *cascade )
+    {
+        mExtraCascades.push_back( cascade );
+
+        // THE CHAIN DECIDES HOW MANY TEXTURES THE BOUNCE SHADER DECLARES, so the job has
+        // to be told the moment the chain grows. runBounce() sets
+        // hlms_num_vct_cascades from mExtraCascades.size() + 1 on every injection, and
+        // the generated compute shader declares one light-voxel texture per cascade
+        // (four with anisotropy) — but the job's TEXTURE UNIT COUNT and its bindings are
+        // only ever derived in setupBounceTextures(), which upstream calls from
+        // setAllowMultipleBounces() and resetTexturesFromBuildRelative(). Add a cascade
+        // after enabling bounces and the shader asks for ogre_t6 while the root layout
+        // still has six units: "'ogre_t6': unrecognized layout identifier", the compute
+        // program fails to compile, and the whole VctLighting arm renders no GI at all
+        // with nothing but that one log line to say so.
+        //
+        // Nothing documents an order for these two calls (VctLighting's header does not),
+        // and upstream's own VctCascadedVoxelizer happens to chain BEFORE it enables
+        // bounces, which is why upstream never meets this. Now either order works.
+        if( getAllowMultipleBounces() )
+            setupBounceTextures();
+    }
     //-------------------------------------------------------------------------
     void VctLighting::setAllowMultipleBounces( bool bAllowMultipleBounces )
     {
@@ -821,7 +965,8 @@ namespace Ogre
         TextureGpuManager *textureManager = mVoxelizer->getTextureGpuManager();
         if( bAllowMultipleBounces )
         {
-            uint32 texFlags = TextureFlags::Uav | TextureFlags::Reinterpretable;
+            // JAHSHAKA PATCH 0080: not Reinterpretable -- see createTextures.
+            uint32 texFlags = TextureFlags::Uav;
             if( !mAnisotropic || shouldEnableSpecularSdfQuality() )
                 texFlags |= TextureFlags::RenderToTexture | TextureFlags::AllowAutomipmaps;
 
@@ -834,15 +979,38 @@ namespace Ogre
             texture->setResolution( mLightVoxel[0]->getWidth(), mLightVoxel[0]->getHeight(),
                                     mLightVoxel[0]->getDepth() );
             texture->setNumMipmaps( mLightVoxel[0]->getNumMipmaps() );
-            texture->setPixelFormat( PFG_RGBA8_UNORM_SRGB );
+            texture->setPixelFormat( jahLightVoxelFormat() );  // JAHSHAKA PATCH 0080
             texture->scheduleTransitionTo( GpuResidency::Resident );
             mLightBounce = texture;
+
+            // JAHSHAKA PATCH 0076: the direct term's own volume, born and buried with
+            // the bounce texture -- it is the bounce iteration that needs it, and
+            // nothing else reads it. ONE mip: the bounce job reads it with a Load3D at
+            // the voxel it is writing (the fixed point's D term at this cell), never
+            // filtered and never at a coarser level, so the mip chain the total needs
+            // for the cone gather would be dead weight (+14 % of the volume).
+            texName.clear();
+            texName.a( "VctLightingDirect/Id", getId() );
+            TextureGpu *directTex = textureManager->createTexture(
+                texName.c_str(), GpuPageOutStrategy::Discard,
+                TextureFlags::Uav | TextureFlags::Reinterpretable, TextureTypes::Type3D );
+            directTex->setResolution( mLightVoxel[0]->getWidth(), mLightVoxel[0]->getHeight(),
+                                      mLightVoxel[0]->getDepth() );
+            directTex->setNumMipmaps( 1u );
+            directTex->setPixelFormat( PFG_RGBA8_UNORM_SRGB );
+            directTex->scheduleTransitionTo( GpuResidency::Resident );
+            mLightDirect = directTex;
         }
         else
         {
             restoreSwappedTextures();
             textureManager->destroyTexture( mLightBounce );
             mLightBounce = 0;
+            if( mLightDirect )
+            {
+                textureManager->destroyTexture( mLightDirect );  // JAHSHAKA PATCH 0076
+                mLightDirect = 0;
+            }
         }
 
         if( mLightVctBounceInject )
@@ -876,6 +1044,19 @@ namespace Ogre
 
         checkTextures();
 
+        // "VCT/LightInjection" is a job SHARED by every VctLighting in the process
+        // (they all find it by name), while this property is a property of the
+        // VOXELIZER being injected -- whether its albedo has the mips the area-light
+        // shadow correction reads. createTextures() writes it, so with more than one
+        // VctLighting alive the value in force is whichever one created its textures
+        // LAST, not the one about to dispatch. Re-asserted here, per injection, from
+        // the voxelizer this lighting actually samples. setProperty() only invalidates
+        // the PSO cache when the value changes, so re-asserting the same value costs
+        // nothing.
+        mLightInjectionJob->setProperty(
+            "correct_area_light_shadows",
+            mVoxelizer->getAlbedoVox()->getNumMipmaps() > 1u ? 1 : 0 );
+
         RenderSystem *renderSystem = mVoxelizer->getRenderSystem();
 
         renderSystem->debugAnnotationPush( "VctLighting Update" );
@@ -893,8 +1074,33 @@ namespace Ogre
         DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
         uavSlot.access = ResourceAccess::Write;
         uavSlot.texture = mLightVoxel[0];
-        uavSlot.pixelFormat = PFG_RGBA8_UNORM;
+        uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
         mLightInjectionJob->_setUavTexture( 0, uavSlot );
+
+        // JAHSHAKA PATCH 0076: THE SAME DISPATCH WRITES THE DIRECT TERM TWICE -- once
+        // into the running total the bounce gathers from, once into the volume the
+        // bounce's fixed point needs as its D term. It is one extra image store per
+        // voxel inside a job that already walks every light's shadow ray per voxel;
+        // no copy, no second dispatch, no encoder switch.
+        //
+        // RE-ASSERTED PER INJECTION, both the property and the slot, for the same
+        // reason `correct_area_light_shadows` is above: "VCT/LightInjection" is ONE
+        // HlmsComputeJob shared by name by every VctLighting in the process, and the
+        // state in force belongs to whoever touched it last. A cascade with bounces
+        // and a volume without them would otherwise take each other's UAV count --
+        // and an unbound u1 on a shader that declares it is a dead descriptor.
+        // The count is change-guarded because setNumUavUnits() invalidates the PSO
+        // cache hash unconditionally.
+        const uint8 numUavsNeeded = mLightDirect ? 2u : 1u;
+        if( mLightInjectionJob->getNumUavUnits() != numUavsNeeded )
+            mLightInjectionJob->setNumUavUnits( numUavsNeeded );
+        mLightInjectionJob->setProperty( "vct_keep_direct", mLightDirect ? 1 : 0 );
+        if( mLightDirect )
+        {
+            uavSlot.texture = mLightDirect;
+            uavSlot.pixelFormat = PFG_RGBA8_UNORM;
+            mLightInjectionJob->_setUavTexture( 1, uavSlot );
+        }
 
         float autoMultiplierValue = 0.0f;
 
@@ -950,9 +1156,22 @@ namespace Ogre
         mLightsConstBuffer->unmap( UO_KEEP_PERSISTENT );
 
         autoMultiplierValue /= Math::PI;
-        autoMultiplierValue = 1.0f / autoMultiplierValue;
-        if( !autoMultiplier )
+        // A SCENE WITH NO VISIBLE LIGHTS HAS NOTHING TO NORMALISE AGAINST, and the
+        // arithmetic below turned that into "the VCT arm contributes nothing": the
+        // maximum radiance collected above is exactly 0, its inverse is +inf, so
+        // mInvBakingMultiplier comes out 0 and the shader's
+        // blendWeight = blendFade * blend * multiplier is 0 for every voxel. That used
+        // to be invisible (no lights, nothing to inject) but it is not any more: a
+        // bound VctLighting switches the PBS ambient pieces off inside its volume, so an
+        // AMBIENT-LIT scene whose only lamp is switched off goes black the moment VCT is
+        // enabled. The fallback for "no measurement available" is the same one
+        // autoMultiplier == false asks for -- mBakingMultiplier -- so the zero case is
+        // folded into that branch. Note the collection loop above gathers only
+        // LAYER_VISIBILITY lights, so a hidden lamp is this case too.
+        if( !autoMultiplier || autoMultiplierValue <= 0.0f )
             autoMultiplierValue = mBakingMultiplier;
+        else
+            autoMultiplierValue = 1.0f / autoMultiplierValue;
         mInvBakingMultiplier = 1.0f / autoMultiplierValue;
 
         const Vector3 voxelRes( Real( mLightVoxel[0]->getWidth() ), Real( mLightVoxel[0]->getHeight() ),
@@ -998,7 +1217,7 @@ namespace Ogre
                              "VctLighting::update" );
             }
             for( uint32 i = 0u; i < numBounces; ++i )
-                runBounce( i );
+                runBounce();
         }
 
         if( mDebugVoxelVisualizer )
