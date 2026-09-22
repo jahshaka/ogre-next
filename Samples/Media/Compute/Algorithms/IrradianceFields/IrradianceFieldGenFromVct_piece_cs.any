@@ -160,15 +160,25 @@
 	float3 probeCenter = getProbeCenterInVctSpace( probeIdx PARAMS_ARG );
 	float3 posLS = mul( float4( probeCenter, 1.0f ), p.irrProbeToVctTransform ).xyz;
 
-	JahConeResult ray = jahConeMarch( posLS, dir, p.coneAngleTan, float3( 0, 0, 0 ),
+	// THE START BIAS (0070's rule, the ray's own direction as the bias direction).
+	// A probe sits at a lattice point, and one standing in or beside a surface's
+	// own cell would otherwise meet that cell's opacity on its first sample - a
+	// grazing ray on an open floor stopped by the floor it is lying on. The pixel's
+	// cones leave their surface's cell by one cell along the normal before they
+	// sample; a probe ray leaves its own cell by one cell (of cascade 0, where every
+	// ray starts) along the ray, componentwise, so the step is one cell long in
+	// every direction.
+	float3 startBias = dir * JAH_VOX_INVRES( 0 );
+	JahConeResult ray = jahConeMarch( posLS + startBias, dir, p.coneAngleTan, float3( 0, 0, 0 ),
 									  float3( 0, 0, 0 ), JAH_MARCH_GAP_ALONG_DIR );
-	// THE DEPTH STAYS CASCADE-0-LOCAL: the march's age converted back into cascade
-	// 0's normalised units (travelledC0 = the age in the last cascade's units over
-	// the product of the per-hop scales along the ray; in cascade 0 it IS the
-	// distance the old march returned), then into the units the pixel shader
+	// THE DEPTH STAYS CASCADE-0-LOCAL AND IS MEASURED FROM THE PROBE: the march's
+	// age converted back into cascade 0's normalised units (travelledC0 = the age
+	// in the last cascade's units over the product of the per-hop scales along the
+	// ray), plus the start bias's own length, then into the units the pixel shader
 	// compares against, as before.
 	float4 diffuse = float4( ray.colour,
-							 ray.travelledC0 * dot( abs( dir ), float3( p.numProbes.xyz ) ) );
+							 ( ray.travelledC0 + length( startBias ) ) *
+								 dot( abs( dir ), float3( p.numProbes.xyz ) ) );
 	g_diffuseDepth[gl_LocalInvocationIndex] = diffuse;
 	// THE ESCAPE FRACTION: the share of this ray the voxels did not stop, which is
 	// the share of the sky it sees - the quantity the pixel's cones weight their
