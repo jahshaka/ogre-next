@@ -263,6 +263,56 @@ namespace Ogre
         void initialize( const IrradianceFieldSettings &settings, const Vector3 &fieldOrigin,
                          const Vector3 &fieldSize, VctLighting *vctLighting );
 
+        /** Moves (and/or resizes) the field's volume WITHOUT re-creating its textures.
+
+            initialize() is the only way to place the field upstream, and it calls
+            createTextures(), which destroys and re-creates both atlases: a field that
+            must follow the camera (e.g. one riding the innermost cascade of a
+            VctCascadedVoxelizer chain) would therefore be born black on every step and
+            re-converge from nothing, and its compositor workspace, directions buffer and
+            integration taps would be rebuilt for a change none of them depend on.
+
+            Everything that reads the placement reads it LIVE — fillConstBufferData()
+            rebuilds the pixel transform per pass, IrradianceFieldRaster::renderProbes()
+            derives each probe camera from it, and the generation params below hold the
+            probe-to-voxel transform — so moving the volume is exactly these two members
+            plus a re-derivation of those params.
+
+            The probe COUNTS are settings and are not touched, so the atlases stay valid.
+            The atlases keep the irradiance integrated at the PREVIOUS placement: the
+            caller decides whether to reset() and re-converge progressively over it or to
+            converge the whole field in one update() before the next pass reads it.
+        @remarks
+            Must not be called before initialize().
+        @param fieldOrigin
+            The volume's origin, in the same units and with the same meaning initialize()
+            gives it (it is enlarged by one probe block per side here too).
+        @param fieldSize
+            The volume's size, same meaning as initialize()'s.
+        */
+        void setFieldVolume( const Vector3 &fieldOrigin, const Vector3 &fieldSize );
+
+        /** Re-points the field at a VctLighting, and re-binds the generation job to the
+            light voxel textures that object owns RIGHT NOW.
+
+            VctLighting re-creates its light voxel textures whenever its voxelizer's
+            textures change — on a LostResidency/Deleted notification (checkTextures()),
+            and, since VctLighting::setVoxelizer() exists, whenever it is moved to a
+            replacement voxelizer. The IrradianceField bound those textures ONCE, in
+            initialize(), by pointer: after any such re-creation its generation job holds
+            pointers to destroyed textures and the next update() integrates from freed
+            GPU memory (or from whatever the allocator has since handed the address to).
+            There is no notification from VctLighting to its readers, so this is the hook
+            that answers it; passing the SAME VctLighting is meaningful and re-binds.
+
+            Cheaper than initialize() and it keeps the atlases: nothing about the field's
+            geometry has changed, only where its rays read radiance from.
+        @remarks
+            Must not be called before initialize(), nor on a raster-sourced field (which
+            has no VctLighting and no generation job bindings to refresh) — both are no-ops.
+        */
+        void setVctLighting( VctLighting *vctLighting );
+
         /// If VctLighting was updated with minor changes (e.g. light position/direction changed,
         /// number of bounces setting changed) then call this function so update() process it
         /// again.

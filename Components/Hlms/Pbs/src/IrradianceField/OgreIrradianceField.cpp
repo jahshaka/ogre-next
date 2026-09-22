@@ -447,6 +447,10 @@ namespace Ogre
 
         mIfGenParams.invNumRaysPerPixel = 1.0f / float( numRaysPerPixel );
         mIfGenParams.invNumRaysPerIrradiancePixel = 1.0f / float( numRaysPerIrradiancePixel );
+        // Uploaded with the rest of the struct on every update, so it must hold
+        // something: the voxel branch never wrote it (only the raster branch's
+        // memset did), so the generation job read an uninitialised float here.
+        mIfGenParams.unused0 = 0.0f;
 
         const TextureGpu *vctLightingTex = mVctLighting->getLightVoxelTextures()[0];
         const float smallestRes = static_cast<float>(
@@ -695,6 +699,62 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
+    void IrradianceField::setFieldVolume( const Vector3 &fieldOrigin, const Vector3 &fieldSize )
+    {
+        mFieldOrigin = fieldOrigin;
+        mFieldSize = fieldSize;
+
+        // The same enlargement initialize() applies, for the same reason (limited
+        // information at the borders), so that a moved field is placed exactly as a
+        // field initialized at this volume would have been.
+        Vector3 probeBlockSize = mFieldSize / mSettings.getNumProbes3f();
+        mFieldOrigin -= probeBlockSize;
+        mFieldSize += probeBlockSize * 2.0f;
+
+        if( mDebugIfdProbeVisualizer )
+        {
+            SceneNode *sceneNode = mDebugIfdProbeVisualizer->getParentSceneNode();
+            sceneNode->setPosition( mFieldOrigin );
+            sceneNode->setScale( mFieldSize / mSettings.getNumProbes3f() );
+            sceneNode->getCreator()->notifyStaticDirty( sceneNode );
+        }
+
+        // A raster field's probe cameras are derived from mFieldOrigin/mFieldSize on
+        // every renderProbes() call, so there is nothing else to do for it; the voxel
+        // source's probe-to-voxel transform lives in the generation params and must be
+        // re-derived (the voxelizer may have moved too, which is the whole point).
+        if( !mSettings.isRaster() && mVctLighting )
+            setIrradianceFieldGenParams();
+    }
+    //-------------------------------------------------------------------------
+    void IrradianceField::setVctLighting( VctLighting *vctLighting )
+    {
+        if( mSettings.isRaster() || !vctLighting || !mGenerationJob )
+            return;
+
+        mVctLighting = vctLighting;
+
+        // The bindings createTextures() made, re-made against the textures the lighting
+        // owns now. Everything else it created (the atlases, the directions buffer, the
+        // integration taps, the workspace) describes the FIELD and is unaffected.
+        const bool bIsAnisotropic = mVctLighting->isAnisotropic();
+        mGenerationJob->setProperty( "vct_anisotropic", bIsAnisotropic ? 1 : 0 );
+        mGenerationJob->setNumTexUnits( 1u + ( bIsAnisotropic ? 4u : 1u ) );
+
+        TextureGpu **vctLightingTextures = mVctLighting->getLightVoxelTextures();
+        DescriptorSetTexture2::TextureSlot texSlot( DescriptorSetTexture2::TextureSlot::makeEmpty() );
+        for( uint8 i = 0u; i < ( bIsAnisotropic ? 4u : 1u ); ++i )
+        {
+            texSlot.texture = vctLightingTextures[i];
+            mGenerationJob->setTexture( 1u + i, texSlot, mVctLighting->getBindTrilinearSamplerblock() );
+        }
+
+        // The generation params carry the voxel volume's placement and the cone start
+        // bias derived from its resolution: both belong to the lighting that was just
+        // bound.
+        setIrradianceFieldGenParams();
+    }
+    //-------------------------------------------------------------------------
     void IrradianceField::reset() { mNumProbesProcessed = 0u; }
     //-------------------------------------------------------------------------
     void IrradianceField::update( uint32 probesPerFrame )
@@ -768,7 +828,18 @@ namespace Ogre
     //-------------------------------------------------------------------------
     size_t IrradianceField::getConstBufferSize() const
     {
-        return sizeof( float ) * ( 4u * 3u + 4u + 4u );
+        // THE LAST float4 USED TO BE MISSING. fillConstBufferData() writes an
+        // IrradianceFieldRenderParams: a float4x3 (12 floats), then numProbesAggregated
+        // plus two paddings (4), then the depth pair (4), then the IRRADIANCE pair (4) —
+        // 24 floats, 96 bytes — and the struct the generated shader declares
+        // (Hlms/Pbs/Any/IrradianceField_piece_ps.any) is the same 24. This function
+        // returned 20, so HlmsPbs reserved 16 bytes too few for the pass buffer and
+        // advanced its write pointer by 20 floats after a 24-float write: the next
+        // occupant of the pass buffer (any HlmsListener, or nothing at all in the
+        // samples, which simply overrun their map) lands on top of the irradiance
+        // atlas parameters and every irradiance UV collapses onto texel 0 — DDGI goes
+        // to an almost-black constant, with no error anywhere.
+        return sizeof( float ) * ( 4u * 3u + 4u + 4u + 4u );
     }
     //-------------------------------------------------------------------------
     void IrradianceField::fillConstBufferData( const Matrix4 &viewMatrix,

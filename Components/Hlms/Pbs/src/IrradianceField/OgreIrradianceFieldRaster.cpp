@@ -170,6 +170,12 @@ namespace Ogre
 
         CompositorManager2 *compositorManager = mCreator->mRoot->getCompositorManager2();
 
+        // All THREE workspaces createWorkspace() made, not two: mIfdIntegrationWorkspace
+        // was left behind, and since it was created against mCamera -- destroyed at the
+        // end of this function -- every createWorkspace/destroyWorkspace round left a
+        // live compositor workspace holding a dangling Camera*.
+        compositorManager->removeWorkspace( mIfdIntegrationWorkspace );
+        mIfdIntegrationWorkspace = 0;
         compositorManager->removeWorkspace( mConvertToIfdWorkspace );
         mConvertToIfdWorkspace = 0;
         compositorManager->removeWorkspace( mRenderWorkspace );
