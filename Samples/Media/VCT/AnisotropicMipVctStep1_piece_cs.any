@@ -9,6 +9,20 @@
 
 @piece( HeaderCS )
 	@insertpiece( DeclSRgbFuncs )
+	// JAHSHAKA PATCH 0080: THE STORE'S ENCODING FOLLOWS ITS FORMAT.
+	// `uav0_orig_pf_srgb` is the property HlmsComputeJob derives from the pixel
+	// format of the texture actually bound, so this one branch covers both
+	// stores: an 8-bit UNORM_SRGB volume is written through the sRGB encode --
+	// which is the dark-end precision an 8-bit store lives on -- and a float one
+	// is written LINEAR. A format with no fixed range has no transfer function to
+	// apply, and encoding into one would throw away the headroom it is there for
+	// (the encode saturates nothing, but toSRGB of a value above 1 is above 1 and
+	// the UNORM write clamps it -- which is the clip this patch removes).
+	@property( uav0_orig_pf_srgb )
+		#define jahStoreLight( x ) toSRGB( x )
+	@else
+		#define jahStoreLight( x ) ( x )
+	@end
 @end
 
 @piece( BodyCS )
@@ -51,7 +65,7 @@
 			  samples[5] + samples[1] * (1.0f - samples[5].a) +
 			  samples[6] + samples[2] * (1.0f - samples[6].a) +
 			  samples[7] + samples[3] * (1.0f - samples[7].a) ) * 0.25f;
-	OGRE_imageWrite3D4( outLightHigherMip0, negAxisDstIUvw, toSRGB( finalValue.xyzw ) );
+	OGRE_imageWrite3D4( outLightHigherMip0, negAxisDstIUvw, jahStoreLight( finalValue.xyzw ) );
 
 	//+X
 	@foreach( 8, n )
@@ -62,7 +76,7 @@
 			  samples[1] + samples[5] * (1.0f - samples[1].a) +
 			  samples[2] + samples[6] * (1.0f - samples[2].a) +
 			  samples[3] + samples[7] * (1.0f - samples[3].a) ) * 0.25f;
-	OGRE_imageWrite3D4( outLightHigherMip0, posAxisDstIUvw, toSRGB( finalValue.xyzw ) );
+	OGRE_imageWrite3D4( outLightHigherMip0, posAxisDstIUvw, jahStoreLight( finalValue.xyzw ) );
 
 	//-Y
 	@foreach( 8, n )
@@ -73,7 +87,7 @@
 			  samples[3] + samples[1] * (1.0f - samples[3].a) +
 			  samples[7] + samples[5] * (1.0f - samples[7].a) +
 			  samples[6] + samples[4] * (1.0f - samples[6].a) ) * 0.25f;
-	OGRE_imageWrite3D4( outLightHigherMip1, negAxisDstIUvw, toSRGB( finalValue.xyzw ) );
+	OGRE_imageWrite3D4( outLightHigherMip1, negAxisDstIUvw, jahStoreLight( finalValue.xyzw ) );
 
 	//+Y
 	@foreach( 8, n )
@@ -84,7 +98,7 @@
 			  samples[1] + samples[3] * (1.0f - samples[1].a) +
 			  samples[5] + samples[7] * (1.0f - samples[5].a) +
 			  samples[4] + samples[6] * (1.0f - samples[4].a) ) * 0.25f;
-	OGRE_imageWrite3D4( outLightHigherMip1, posAxisDstIUvw, toSRGB( finalValue.xyzw ) );
+	OGRE_imageWrite3D4( outLightHigherMip1, posAxisDstIUvw, jahStoreLight( finalValue.xyzw ) );
 
 	//-Z
 	@foreach( 8, n )
@@ -95,7 +109,7 @@
 			  samples[3] + samples[2] * (1.0f - samples[3].a) +
 			  samples[5] + samples[4] * (1.0f - samples[5].a) +
 			  samples[7] + samples[6] * (1.0f - samples[7].a) ) * 0.25f;
-	OGRE_imageWrite3D4( outLightHigherMip2, negAxisDstIUvw, toSRGB( finalValue.xyzw ) );
+	OGRE_imageWrite3D4( outLightHigherMip2, negAxisDstIUvw, jahStoreLight( finalValue.xyzw ) );
 
 	//+Z
 	@foreach( 8, n )
@@ -106,5 +120,5 @@
 			  samples[2] + samples[3] * (1.0f - samples[2].a) +
 			  samples[4] + samples[5] * (1.0f - samples[4].a) +
 			  samples[6] + samples[7] * (1.0f - samples[6].a) ) * 0.25f;
-	OGRE_imageWrite3D4( outLightHigherMip2, posAxisDstIUvw, toSRGB( finalValue.xyzw ) );
+	OGRE_imageWrite3D4( outLightHigherMip2, posAxisDstIUvw, jahStoreLight( finalValue.xyzw ) );
 @end

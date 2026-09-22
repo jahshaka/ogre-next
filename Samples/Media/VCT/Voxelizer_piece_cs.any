@@ -357,11 +357,16 @@
 							  4.0f * p_voxelCellSize * (float3( gl_WorkGroupID.xyz ) + 0.5f);
 	groupVoxelAabb.halfSize	= 4.0f * p_voxelCellSize * 0.5f;
 
-	bool doubleSided = false;
 	float accumTris = 0;
-	float4 voxelAlbedo		= float4( 0, 0, 0, 0 );
-	float4 voxelNormal		= float4( 0, 0, 0, 0 );
-	float4 voxelEmissive	= float4( 0, 0, 0, 0 );
+	// Jahshaka patch 0065: the SUMS this dispatch adds to the voxel's running
+	// integer total, on VoxelMerge's fixed-point grid. They are exact and they
+	// are ALL of the state, so neither the split of the instances between
+	// dispatches nor their order inside one decides anything
+	// (VoxelMerge_piece_cs.any has the whole argument).
+	uint4 accAlbedo			= uint4( 0u, 0u, 0u, 0u );
+	int3  accNormalRaw		= int3( 0, 0, 0 );
+	int3  accNormalFolded	= int3( 0, 0, 0 );
+	uint3 accEmissive		= uint3( 0u, 0u, 0u );
 
 	for( uint i=p_instanceStart; i<p_instanceEnd; ++i )
 	{
@@ -420,26 +425,25 @@
 																	  material.emissiveTexIdx, 0 ).xyz;
 						@end
 
-							voxelAlbedo			+= finalDiffuse;
-							voxelEmissive.xyz	+= finalEmissive;
+							accAlbedo		+= voxelMergeQuantize4( finalDiffuse );
+							accEmissive		+= voxelMergeQuantize3( finalEmissive );
 
 							float3 triNormal = tri_barycentric_normal( voxelAabb.center, tri );
 							triNormal = normalize( triNormal );
 
-							bool bIsZeroLength = dot( voxelNormal, voxelNormal ) <= 1e-6f;
-
-							//voxelNormal is not normalized for properly blend-averaging in multiple
-							//passes. But we need it normalized for this check to work
-							float cosAngle =
-								bIsZeroLength ? 1.0f : dot( normalize( voxelNormal.xyz ), triNormal );
-							float cos120 = -0.5f;
-							/*Rewrote as ternary operator because it was glitching in iOS Metal
-							if( cosAngle <= cos120 )
-								doubleSided = true;
-							else
-								voxelNormal.xyz += triNormal;*/
-							doubleSided		= cosAngle <= cos120 ? true : doubleSided;
-							voxelNormal.xyz	+= cosAngle <= cos120 ? float3( 0, 0, 0 ) : triNormal;
+							// Jahshaka patch 0065: every normal goes into BOTH sums,
+							// raw and folded, and nothing is dropped. The "these two
+							// surfaces face opposite ways" decision upstream made
+							// here, against the sum SO FAR, is made once at the end
+							// of this shader from the two sums — see
+							// `voxelMergeNormal` in VoxelMerge_piece_cs.any. (The old
+							// code is worth remembering: `cosAngle <= -0.5` dropped
+							// the triangle from the sum and set a double-sided flag,
+							// so the FIRST triangle a thread happened to see decided
+							// which way the voxel faced.)
+							accNormalRaw	+= voxelMergeQuantizeSigned3( triNormal );
+							accNormalFolded	+= voxelMergeQuantizeSigned3(
+													voxelMergeCanonical( triNormal ) );
 
 							++accumTris;
 						}
@@ -449,42 +453,104 @@
 		}
 	}
 
+	// Jahshaka patch 0065 — ACCUMULATE, THEN RESOLVE, IN ONE DISPATCH.
+	//
+	// This dispatch adds ITS triangles to the voxel's exact integer sums and then
+	// writes the mean of the TOTAL the accumulator now holds. Whichever dispatch
+	// happens to be last at a voxel therefore leaves the complete answer, and an
+	// earlier one's partial answer is always overwritten by it — so the picture
+	// depends on the sums and not on who wrote them, which is the whole point.
+	// It also stops visiting voxels it contributed nothing to (the merge this
+	// replaces had `accumTris + origAccumTris > 0`, so a dispatch re-rounded
+	// every voxel an earlier one had filled), which is most of them.
+	//
+	// `voxelAccumVal` stays the pin's own triangle counter and the divisor, so
+	// the count is read and written exactly where upstream read and wrote it.
 	wshort3 voxelCelUvw = wshort3( gl_GlobalInvocationID.xyz + ushort3( p_voxelPixelOrigin ) );
 
 	@property( syntax != hlsl || typed_uav_load )
-		float4 origAlbedo	= OGRE_imageLoad3D( voxelAlbedoTex, voxelCelUvw );
-		float4 origNormal	= OGRE_imageLoad3D( voxelNormalTex, voxelCelUvw );
-		float4 origEmissive = OGRE_imageLoad3D( voxelEmissiveTex, voxelCelUvw );
 		float origAccumTris = OGRE_imageLoad3D( voxelAccumVal, voxelCelUvw ).x;
 	@else
-		float4 origAlbedo	= unpackUnorm4x8( OGRE_imageLoad3D( voxelAlbedoTex, voxelCelUvw ) );
-		float4 origNormal	= unpackUnormRGB10A2( OGRE_imageLoad3D( voxelNormalTex, voxelCelUvw ) );
-		float4 origEmissive = unpackUnorm4x8( OGRE_imageLoad3D( voxelEmissiveTex, voxelCelUvw ) );
 		uint origAccumTrisVal = OGRE_imageLoad3D( voxelAccumVal,
 												  wshort3( voxelCelUvw.x >> 1u, voxelCelUvw.yz ) ).x;
 		float origAccumTris = (gl_LocalInvocationIndex & 0x1u) ? (origAccumTrisVal >> 16u) :
 																 (origAccumTrisVal & 0xFFFFu);
 	@end
 
-	origNormal.xyz = origNormal.xyz * 2.0f - 1.0f;
-
-	if( accumTris + origAccumTris > 0 )
+	if( accumTris > 0 )
 	{
-		voxelAlbedo			= mixAverage4( voxelAlbedo, accumTris, origAlbedo, origAccumTris );
-		voxelNormal.xyz		= mixAverage3( voxelNormal.xyz, accumTris, origNormal.xyz, origAccumTris );
-		voxelEmissive.xyz	= mixAverage3( voxelEmissive.xyz, accumTris, origEmissive.xyz, origAccumTris );
+		uint3 voxelCel = uint3( gl_GlobalInvocationID.xyz ) + uint3( p_voxelPixelOrigin );
 
-		voxelNormal.a	= doubleSided ? 1.0f : 0.0f;
-		voxelNormal.a	= max( voxelNormal.a, voxelNormal.a );
-		voxelNormal.xyz	= voxelNormal.xyz * 0.5 + 0.5f;
+		// Thirteen scalar texels per voxel: albedo rgba, the raw normal xyz, the
+		// emissive rgb, the folded normal xyz. Only what carries something.
+		uint4 sumAlbedo		= uint4( 0u, 0u, 0u, 0u );
+		uint4 sumNormal		= uint4( 0u, 0u, 0u, 0u );
+		uint4 sumEmissive	= uint4( 0u, 0u, 0u, 0u );
+		uint4 sumFolded		= uint4( 0u, 0u, 0u, 0u );
+		@foreach( 4, c )
+			sumAlbedo[@c]	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, @c ) ).x;
+		@end
+		@foreach( 3, c )
+			sumNormal[@c]	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 4u + @c ) ).x;
+			sumEmissive[@c]	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 7u + @c ) ).x;
+			sumFolded[@c]	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 10u + @c ) ).x;
+		@end
+
+		// SATURATING on the two unsigned sums — a contribution is at most
+		// 16 * 4096, sixty-five thousand of them fill a uint32, and nothing caps
+		// the triangle count at sixty-five thousand on this backend. Saturating
+		// addition is commutative and associative, so the merge stays exactly as
+		// order-independent as it was (VoxelMerge_piece_cs.any, THE GRID).
+		@foreach( 4, c )
+			sumAlbedo[@c]	= voxelMergeAddSat( sumAlbedo[@c], accAlbedo[@c] );
+		@end
+		@foreach( 3, c )
+			sumEmissive[@c]	= voxelMergeAddSat( sumEmissive[@c], accEmissive[@c] );
+		@end
+		// Two's complement: a signed sum kept in a uint wraps the same way in
+		// every order, which is the whole point of doing this in integers — and a
+		// unit vector's quantised component is 4,096, so half a million triangles
+		// in one voxel would be needed to reach the wrap at all.
+		sumNormal.xyz	= uint3( int3( sumNormal.xyz ) + accNormalRaw );
+		sumFolded.xyz	= uint3( int3( sumFolded.xyz ) + accNormalFolded );
+
+		@foreach( 4, c )
+			OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, @c ),
+								uint4( sumAlbedo[@c], 0u, 0u, 0u ) );
+		@end
+		@foreach( 3, c )
+			OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 4u + @c ),
+								uint4( sumNormal[@c], 0u, 0u, 0u ) );
+			OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 7u + @c ),
+								uint4( sumEmissive[@c], 0u, 0u, 0u ) );
+			OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 10u + @c ),
+								uint4( sumFolded[@c], 0u, 0u, 0u ) );
+		@end
+
+		float totalTris = accumTris + origAccumTris;
+		float invAccum = 1.0f / ( VOXEL_MERGE_SCALE * totalTris );
+		float4 voxelAlbedo		= voxelMergeAlbedo( sumAlbedo, invAccum );
+		float4 voxelNormal		= voxelMergeNormal( sumNormal, sumFolded, invAccum );
+		float4 voxelEmissive	= voxelMergeEmissive( sumEmissive, invAccum );
 
 		@property( syntax != hlsl || typed_uav_load )
 			OGRE_imageWrite3D4( voxelAlbedoTex, voxelCelUvw, voxelAlbedo );
 			OGRE_imageWrite3D4( voxelNormalTex, voxelCelUvw, voxelNormal );
 			OGRE_imageWrite3D4( voxelEmissiveTex, voxelCelUvw, voxelEmissive );
-			OGRE_imageWrite3D1( voxelAccumVal, voxelCelUvw,
-								uint4( accumTris + origAccumTris, 0, 0, 0 ) );
+			OGRE_imageWrite3D1( voxelAccumVal, voxelCelUvw, uint4( totalTris, 0, 0, 0 ) );
 		@else
+			// JAHSHAKA PATCH 0087: THE BRANCH THAT CANNOT FOLLOW THE FLOAT STORE.
+			// This is D3D11 without typed UAV loads, where each texel is packed
+			// into ONE 32-bit uint, and the emissive volume is now RGBA16_FLOAT
+			// (64 bits per texel, OgreVctVoxelizer.cpp createVoxelTextures): a
+			// half pair per channel needs two uints, so this path would need the
+			// volume declared as a two-component uint image to carry it. It is
+			// left packing UNORM8 deliberately -- this tree ships Vulkan only,
+			// the GLSL and Metal paths take the branch above, and a silent
+			// half-written texel would be worse than a documented ceiling. A
+			// D3D11 port fixes this line together with the image declaration in
+			// Voxelizer_cs.hlsl; the emissive clip at 1.0 is what it inherits
+			// until then.
 			OGRE_imageWrite3D4( voxelAlbedoTex, voxelCelUvw, packUnorm4x8( voxelAlbedo ) );
 			OGRE_imageWrite3D4( voxelNormalTex, voxelCelUvw, packUnormRGB10A2( voxelNormal ) );
 			OGRE_imageWrite3D4( voxelEmissiveTex, voxelCelUvw, packUnorm4x8( voxelEmissive ) );

@@ -28,6 +28,13 @@ vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbes[@value( hl
 	@add( vctTexUnit, hlms_num_vct_cascades )
 @end
 
+// JAHSHAKA PATCH 0076: THE DIRECT TERM, at the unit after every probe array (the
+// same order VctLighting::setupBounceTextures binds them in). It is read with a
+// plain Load3D at the voxel this invocation writes -- the D of the fixed point
+// L = D + rho * G( L ) -- so it needs no sampler and no mip chain.
+vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D directVoxel;
+@add( vctTexUnit, 1 )
+
 vulkan( layout( ogre_s2 ) uniform sampler vctProbeSampler );
 
 layout( vulkan( ogre_u0 ) vk_comma @insertpiece(uav0_pf_type) )

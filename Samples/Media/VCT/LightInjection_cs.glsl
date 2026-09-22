@@ -16,6 +16,17 @@ vulkan( layout( ogre_s0 ) uniform sampler voxelAlbedoSampler );
 layout( vulkan( ogre_u0 ) vk_comma @insertpiece(uav0_pf_type) )
 uniform restrict writeonly image3D lightVoxel;
 
+// JAHSHAKA PATCH 0076: the DIRECT term's own volume, written by the same dispatch.
+// The bounce's fixed point is L = D + rho * G( L ) and needs D at every pass; the
+// total's two textures ping-pong, so D cannot be recovered from them after the first
+// pass. Declared only when the host has a volume to write it to (a VctLighting with
+// no bounce texture has no use for it): VctLighting::update() sets the property and
+// binds the slot per injection, because this job is shared by name process-wide.
+@property( vct_keep_direct )
+	layout( vulkan( ogre_u1 ) vk_comma @insertpiece(uav1_pf_type) )
+	uniform restrict writeonly image3D directVoxel;
+@end
+
 layout( local_size_x = @value( threads_per_group_x ),
 		local_size_y = @value( threads_per_group_y ),
 		local_size_z = @value( threads_per_group_z ) ) in;

@@ -36,10 +36,35 @@
 	#define lightType uvwPos.w
 	#define spotDirection points[0].xyz
 	#define spotParams points[1]
-	#define c_invPI 3.14159265359f
+	// JAHSHAKA PATCH 0077: 1 / PI, WHICH IS WHAT THE NAME SAYS.
+	// Upstream defined `c_invPI` as PI and never used it. The direct term below
+	// needs exactly this factor -- see the unit chain there.
+	#define c_invPI 0.318309886f
 
 	@insertpiece( DeclAreaLtcLightFuncs )
 	@insertpiece( DeclSRgbFuncs )
+	// JAHSHAKA PATCH 0080: THE STORE'S ENCODING FOLLOWS ITS FORMAT.
+	// `uav0_orig_pf_srgb` is the property HlmsComputeJob derives from the pixel
+	// format of the texture actually bound, so this one branch covers both
+	// stores: an 8-bit UNORM_SRGB volume is written through the sRGB encode --
+	// which is the dark-end precision an 8-bit store lives on -- and a float one
+	// is written LINEAR. A format with no fixed range has no transfer function to
+	// apply, and encoding into one would throw away the headroom it is there for
+	// (the encode saturates nothing, but toSRGB of a value above 1 is above 1 and
+	// the UNORM write clamps it -- which is the clip this patch removes).
+	@property( uav0_orig_pf_srgb )
+		#define jahStoreLight( x ) toSRGB( x )
+	@else
+		#define jahStoreLight( x ) ( x )
+	@end
+	// JAHSHAKA PATCH 0080: the DIRECT volume keeps its 8-bit sRGB store and so
+	// keeps its encode -- D is normalised to at most the ceiling by construction
+	// (VctLighting::update's auto multiplier), so nothing about it needs range.
+	@property( uav1_orig_pf_srgb )
+		#define jahStoreDirect( x ) toSRGB( x )
+	@else
+		#define jahStoreDirect( x ) ( x )
+	@end
 @end
 
 //in uvec3 gl_NumWorkGroups;
@@ -159,12 +184,55 @@
 				}
 			}
 
-			blockColour += NdotL * light.diffuse.xyz * alpha * albedoVal.xyz;
+			// JAHSHAKA PATCH 0077: THE VOXEL STORES RADIANCE. THE UNIT CHAIN,
+			// from the lamp to the pixel, is:
+			//
+			//   light.diffuse = colour * powerScale = D, and in this tree
+			//       D = PI * I  (IrisGL's intensity I; HlmsPbs divides the
+			//       diffuse by PI, IrisGL does not -- kD = albedo / PI,
+			//       OgreHlmsPbsDatablock.cpp:82-84).
+			//   The Lambertian OUTGOING RADIANCE of this voxel's surface is
+			//       L_out = rho * E / PI = rho * NdotL * D / PI,
+			//       which is exactly what HlmsPbs computes for the direct
+			//       lighting of the same surface (NdotL * D * kD).
+			//   What stood here was  NdotL * D * rho * shadow  = PI * L_out.
+			//
+			// The cone gather downstream is a weighted mean of these voxels over
+			// a cosine-ish set of directions -- an estimate of E / PI -- and
+			// HlmsPbs consumes it as `envColourD` with NO division of its own
+			// (200.BRDFs_piece_ps.any: Rd = envColourD * albedo). So a voxel
+			// holding PI * L_out made every cone-lit diffuse surface PI times
+			// brighter than the EMISSIVE and the AMBIENT sharing the same slot
+			// (both of which are radiance already, here and in
+			// VctLighting::fillConstBufferData's invFinalMultiplier), and the
+			// specular path carried an eye-tuned 0.31831 -- "I'm not sure why is
+			// it even needed" -- to cancel this very factor. Patch 0077 removes
+			// that fudge with this one line.
+			//
+			// AND IT IS WHAT THE 8-BIT VOLUME CAN HOLD. The store below is
+			// scaled by p_bakingMultiplier = PI / D_max
+			// (OgreVctLighting.cpp: autoMultiplierValue), so with the PI the
+			// stored value was PI * rho * NdotL * D / D_max -- above 1, i.e.
+			// CLIPPED, for every surface with rho * NdotL * D / D_max > 1/PI,
+			// which is most lit surfaces. Clipping an RGB triple channel by
+			// channel does not just darken it, it desaturates it: a red wall at
+			// (1.0, 0.31, 0.31) bleeds pink. With the PI gone the stored value
+			// is rho * NdotL * D / D_max, at most exactly 1 -- the whole 8-bit
+			// range, used and never exceeded, and the bleed keeps its hue.
+			blockColour += c_invPI * NdotL * light.diffuse.xyz * alpha * albedoVal.xyz;
 		}
 	}
 
 	blockColour *= p_bakingMultiplier;
 
 	wshort3 voxelCelUvw = wshort3( gl_GlobalInvocationID.xyz );
-	OGRE_imageWrite3D4( lightVoxel, voxelCelUvw, toSRGB( float4( blockColour, albedoVal.w ) ) );
+	float4 injectedVoxel = float4( blockColour, albedoVal.w );
+	OGRE_imageWrite3D4( lightVoxel, voxelCelUvw, jahStoreLight( injectedVoxel ) );
+	// JAHSHAKA PATCH 0076: the same value, kept apart as the bounce iteration's
+	// D term. One extra image store; no copy and no second dispatch.
+	// JAHSHAKA PATCH 0080: encoded for ITS OWN format, which is not the total's
+	// any more -- the total may be float and this one is always 8-bit sRGB.
+	@property( vct_keep_direct )
+		OGRE_imageWrite3D4( directVoxel, voxelCelUvw, jahStoreDirect( injectedVoxel ) );
+	@end
 @end

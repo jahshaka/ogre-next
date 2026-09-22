@@ -100,6 +100,8 @@ RWTexture3D<@insertpiece(uav2_pf_type)> voxelAlbedoTex		: register(u2);
 RWTexture3D<@insertpiece(uav3_pf_type)> voxelNormalTex		: register(u3);
 RWTexture3D<@insertpiece(uav4_pf_type)> voxelEmissiveTex	: register(u4);
 RWTexture3D<@insertpiece(uav5_pf_type)> voxelAccumVal		: register(u5);
+// Jahshaka patch 0065: the per-voxel integer accumulator.
+RWTexture3D<@insertpiece(uav6_pf_type)> voxelMergeAccum		: register(u6);
 
 StructuredBuffer<InstanceBuffer> instanceBuffer : register(t0);
 
@@ -107,6 +109,8 @@ StructuredBuffer<InstanceBuffer> instanceBuffer : register(t0);
 	SamplerState		poolSampler		: register(s1);
 	Texture2DArray		texturePool		: register(t1);
 @end
+
+@insertpiece( DeclVoxelMerge )
 
 @insertpiece( HeaderCS )
 

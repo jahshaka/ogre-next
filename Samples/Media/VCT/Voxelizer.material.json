@@ -6,12 +6,12 @@
             "threads_per_group" : [4, 4, 4],
 
             "source" : "Voxelizer_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "Matrix_piece_all", "Voxelizer_piece_cs.any"],
+            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "Matrix_piece_all", "VoxelMerge_piece_cs.any", "Voxelizer_piece_cs.any"],
             "inform_shader_of_texture_data_change" : true,
 
-            "uav_units" : 6,
+            "uav_units" : 7,
 
-            "gl_tex_slot_start" : 6,
+            "gl_tex_slot_start" : 7,
 			
 			"params" :
             [
@@ -22,7 +22,8 @@
                 ["voxelAlbedoTex",      	[2], "int"],
                 ["voxelNormalTex",  		[3], "int"],
                 ["voxelEmissiveTex",		[4], "int"],
-                ["voxelAccumVal",			[5], "int"]
+                ["voxelAccumVal",			[5], "int"],
+                ["voxelMergeAccum",			[6], "int"]
 			],
 
 			"properties" :

@@ -80,6 +80,8 @@ inline uint packUnormRGB10A2( float4 v )
 @pset( samplerRegister, 1 )
 @pset( texRegister, 1 )
 
+@insertpiece( DeclVoxelMerge )
+
 @insertpiece( HeaderCS )
 
 #define p_instanceStart p.instanceStart_instanceEnd.x
@@ -100,6 +102,8 @@ kernel void main_metal
 	texture3d<@insertpiece(uav3_pf_type), access::read_write> voxelNormalTex	[[texture(UAV_SLOT_START+3)]],
 	texture3d<@insertpiece(uav4_pf_type), access::read_write> voxelEmissiveTex	[[texture(UAV_SLOT_START+4)]],
 	texture3d<@insertpiece(uav5_pf_type), access::read_write> voxelAccumVal		[[texture(UAV_SLOT_START+5)]],
+	// Jahshaka patch 0065: the per-voxel integer accumulator.
+	texture3d<@insertpiece(uav6_pf_type), access::read_write> voxelMergeAccum	[[texture(UAV_SLOT_START+6)]],
 
 @property( has_diffuse_tex || has_emissive_tex )
 	sampler					poolSampler	[[sampler(@counter(samplerRegister))]],

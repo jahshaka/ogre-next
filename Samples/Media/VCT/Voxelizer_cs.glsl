@@ -76,6 +76,9 @@ layout( vulkan( ogre_u4 ) vk_comma @insertpiece(uav4_pf_type) )
 uniform restrict image3D voxelEmissiveTex;
 layout( vulkan( ogre_u5 ) vk_comma @insertpiece(uav5_pf_type) )
 uniform restrict uimage3D voxelAccumVal;
+// Jahshaka patch 0065: the per-voxel INTEGER ACCUMULATOR the merge sums into.
+layout( vulkan( ogre_u6 ) vk_comma @insertpiece(uav6_pf_type) )
+uniform restrict uimage3D voxelMergeAccum;
 
 layout( local_size_x = @value( threads_per_group_x ),
 		local_size_y = @value( threads_per_group_y ),
@@ -90,7 +93,7 @@ layout( local_size_x = @value( threads_per_group_x ),
 //		local_size_z = 4 ) in;
 
 @property( syntax == glsl )
-	ReadOnlyBufferF( 6, InstanceBuffer, instanceBuffer );
+	ReadOnlyBufferF( 7, InstanceBuffer, instanceBuffer );
 @else
 	ReadOnlyBufferF( 0, InstanceBuffer, instanceBuffer );
 @end
@@ -100,6 +103,8 @@ layout( local_size_x = @value( threads_per_group_x ),
 	vulkan( layout( ogre_s1 ) uniform sampler poolSampler );
 @end
 
+
+@insertpiece( DeclVoxelMerge )
 
 @insertpiece( HeaderCS )
 

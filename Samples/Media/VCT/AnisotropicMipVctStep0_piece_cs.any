@@ -23,6 +23,20 @@
 	}
 
 	@insertpiece( DeclSRgbFuncs )
+	// JAHSHAKA PATCH 0080: THE STORE'S ENCODING FOLLOWS ITS FORMAT.
+	// `uav0_orig_pf_srgb` is the property HlmsComputeJob derives from the pixel
+	// format of the texture actually bound, so this one branch covers both
+	// stores: an 8-bit UNORM_SRGB volume is written through the sRGB encode --
+	// which is the dark-end precision an 8-bit store lives on -- and a float one
+	// is written LINEAR. A format with no fixed range has no transfer function to
+	// apply, and encoding into one would throw away the headroom it is there for
+	// (the encode saturates nothing, but toSRGB of a value above 1 is above 1 and
+	// the UNORM write clamps it -- which is the clip this patch removes).
+	@property( uav0_orig_pf_srgb )
+		#define jahStoreLight( x ) toSRGB( x )
+	@else
+		#define jahStoreLight( x ) ( x )
+	@end
 @end
 
 @piece( BodyCS )
@@ -78,6 +92,6 @@
 		@property( @dir == 1 || @dir == 3 || @dir == 5 )
 			outIUvw.x += p_higherMipHalfWidth;
 		@end
-		OGRE_imageWrite3D4( outLightHigherMip@value(axis), outIUvw, toSRGB( accumVal.xyzw ) );
+		OGRE_imageWrite3D4( outLightHigherMip@value(axis), outIUvw, jahStoreLight( accumVal.xyzw ) );
 	@end
 @end
