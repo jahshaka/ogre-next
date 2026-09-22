@@ -478,6 +478,28 @@ namespace Ogre
         uint32 addRenderableCache( const HlmsPropertyVec &renderableSetProperties,
                                    const PiecesMap       *pieces );
 
+        /** Finds `passCache` in mPassCache, appending it when it is new, and returns its
+            INDEX — the one place in the engine that may grow the pass cache.
+
+            THE ONLY WAY TO GROW IT (Jahshaka lane HLMSBITS-1). It used to be open-coded
+            in three places (Hlms::preparePassHashBase, HlmsUnlit::preparePassHash and
+            HlmsDiskCache::applyTo), each with a copy of the same `assert` that release
+            builds compile out, and HlmsUnlit's copy had no warning of any kind. The
+            overflow they failed to stop is not a wrap: index 8,192 spills into the
+            renderable field and the next reader of that field indexes mRenderableCache
+            out of range.
+        @param bThrowOnOverflow
+            true (the render path): refuse, loudly, with the counts. There is no correct
+            shader to return once the index cannot be addressed, and a wrong one is worse
+            than an exception that names the cache that filled up.
+            false (loading a disk cache): return false instead, so a too-large cache file
+            costs a slower start rather than a dead boot.
+        @return
+            false only when the cache is full and bThrowOnOverflow is false.
+        */
+        bool findOrAddPassCache( const PassCache &passCache, bool bThrowOnOverflow,
+                                 size_t &outIdx );
+
         /// Retrieves a cache entry using the returned value from @addRenderableCache
         const RenderableCache &getRenderableCache( uint32 hash ) const;
 
@@ -653,6 +675,23 @@ namespace Ogre
         virtual ~Hlms();
 
         HlmsTypes getType() const { return mType; }
+
+        /** How full the two caches the shader hash addresses are, and how much they
+            can address at all (Jahshaka lane HLMSBITS-1).
+
+            THE ONLY WAY TO SEE THIS FROM OUTSIDE. Both vectors are protected, never
+            evicted, and their SIZE is the quantity that decides whether a long editing
+            session is safe: the pass cache filled up and corrupted the renderable index
+            on 2026-09-14 with nothing able to report the number until a crash. An app
+            that watches these can say "115 of 8192" in its own diagnostics instead of
+            discovering the limit the way we did.
+        */
+        size_t getPassCacheSize() const { return mPassCache.size(); }
+        size_t getRenderableCacheSize() const { return mRenderableCache.size(); }
+        /// Entries the shader hash's pass / renderable fields can address. Defined in
+        /// the .cpp: HlmsBits is declared below this class.
+        static size_t getMaxPassCacheEntries();
+        static size_t getMaxRenderableCacheEntries();
         IdString  getTypeName() const { return mTypeName; }
 
         const String &getTypeNameStr() const { return mTypeNameStr; }
@@ -1415,22 +1454,65 @@ namespace Ogre
         static const IdString AlphaTestCmpFunc;
     };
 
+    /** How Hlms::getMaterial packs a 32-bit shader hash: [type][renderable][pass],
+        most significant field first.
+
+        THE SPLIT IS JAHSHAKA'S (lane HLMSBITS-1, 2026-09-15), upstream's was 3/21/8.
+        Eight bits for the PASS index is 256 distinct sets of pass properties per Hlms
+        for the lifetime of a process, and it is the pass index that an EDITOR grows:
+        every render_pass shape (view, shadow atlas, reflection, probe capture, prepass,
+        SSR, refractions), every MSAA count, every shadow filter, every GI mode and
+        every probe/reflection target NAME is a pass property. Measured on this app
+        (instrumented pin, one session that opened the eight shipped samples, walked
+        Low->Epic on each, drove every World Mode row through every option, changed the
+        sky forty times, entered play and took screenshots): HlmsPbs peaked at 115 pass
+        entries, HlmsLowLevel at 94, HlmsUnlit at 12 — 45 % of what the field can
+        address, from one session. Past 256 the index does not saturate or wrap in
+        place: it spills into the RENDERABLE field beside it and the renderable index
+        read back is somebody else's, which is how the 2026-09-14 crash happened
+        (HlmsDiskCache::copyFrom subscripting mRenderableCache out of range, SIGSEGV at
+        address 0 from the periodic shader-cache save).
+
+        RENDERABLE 16 / PASS 13 buys 65,536 renderable and 8,192 pass entries: 630x and
+        71x the measured peaks. The renderable cache counts distinct MATERIAL+MESH
+        property sets (24 for HlmsPbs, 104 for HlmsLowLevel here) and every entry it
+        holds costs a shader compile per pass entry it meets, so 16 bits is far past
+        anything a machine could compile; the pass side gets the rest because it is the
+        side with the measured pressure and the side a session can re-enter (a warm boot
+        re-populates it from the disk cache before a frame is drawn — measured 79 of the
+        previous session's entries).
+
+        BOTH CACHES NOW REFUSE rather than overflow (Hlms::findOrAddPassCache /
+        addRenderableCache): an assert is compiled out of every release build, which is
+        exactly where the silent corruption happened.
+
+        InputLayoutShift/InputLayoutMask are GONE: they were declared here and defined
+        nowhere, so any use was a link error; the only references in the tree are two
+        commented-out lines in HlmsDiskCache.
+    */
     struct _OgreExport HlmsBits
     {
-        static const int HlmsTypeBits;
-        static const int RenderableBits;
-        static const int PassBits;
+        static constexpr int HlmsTypeBits = 3;
+        static constexpr int RenderableBits = 16;
+        static constexpr int PassBits = 13;
 
-        static const int HlmsTypeShift;
-        static const int RenderableShift;
-        static const int PassShift;
-        static const int InputLayoutShift;
+        static constexpr int HlmsTypeShift = 32 - HlmsTypeBits;
+        static constexpr int RenderableShift = HlmsTypeShift - RenderableBits;
+        static constexpr int PassShift = RenderableShift - PassBits;
 
-        static const int RendarebleHlmsTypeMask;
-        static const int HlmsTypeMask;
-        static const int RenderableMask;
-        static const int PassMask;
-        static const int InputLayoutMask;
+        static constexpr int RendarebleHlmsTypeMask = ( 1 << ( HlmsTypeBits + RenderableBits ) ) - 1;
+        static constexpr int HlmsTypeMask = ( 1 << HlmsTypeBits ) - 1;
+        static constexpr int RenderableMask = ( 1 << RenderableBits ) - 1;
+        static constexpr int PassMask = ( 1 << PassBits ) - 1;
+
+        /// The three fields must tile the 32 bits exactly: no gap (a gap is wasted
+        /// address space) and no overlap (an overlap is the silent corruption above).
+        static_assert( HlmsTypeBits + RenderableBits + PassBits == 32,
+                       "The Hlms shader hash must tile a uint32 exactly" );
+        static_assert( PassShift == 0, "The pass field must sit in the low bits" );
+        /// HLMS_MAX (8) types must fit the type field, or type 8 would eat the
+        /// renderable index's top bit on its way into the hash.
+        static_assert( ( 1 << HlmsTypeBits ) >= HLMS_MAX, "HlmsTypeBits is too small" );
     };
 
     /** @} */

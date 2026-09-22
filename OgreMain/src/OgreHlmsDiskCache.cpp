@@ -177,6 +177,50 @@ namespace Ogre
 
                 bool bCacheable = true;
 
+                // THE TWO INDICES ARE READ OUT OF A 32-BIT HASH AND USED RAW
+                // (Jahshaka). `finalHash` packs the Hlms type in 3 bits, the
+                // renderable index in 21 and the PASS index in 8 — and the pass
+                // index is the one with no headroom: `Hlms::preparePassHashFinal`
+                // appends to `mPassCache` for every distinct set of pass
+                // properties a session ever produces and shifts the index into
+                // those 8 bits guarded by nothing but an `assert`, which is
+                // compiled out of every release build. An editor that opens
+                // scenes, enters and leaves play and rebuilds compositor
+                // workspaces reaches 256 combinations in minutes; entry 256 then
+                // spills straight into the renderable field, and THIS loop reads
+                // `mRenderableCache[garbage]` — a SIGSEGV at address 0 inside
+                // `getProperty`'s `std::lower_bound`, from the periodic disk-cache
+                // save, over a cache that was merely too large.
+                //
+                // Skip the entry and say so. The cache is still written, without
+                // the entries whose indices cannot be resolved; a shader that
+                // cannot be described is a slower next run, not a dead process.
+                if( renderableIdx >= hlms->mRenderableCache.size() ||
+                    passIdx >= hlms->mPassCache.size() )
+                {
+                    // Everything the next diagnosis needs is in this one line:
+                    // the hash, both indices against both sizes, and the TYPE
+                    // the hash itself claims — because a hash whose type does
+                    // not match the Hlms it was filed under would name the cause
+                    // outright (a renderable hashed against one Hlms and
+                    // rendered through another).
+                    LogManager::getSingleton().logMessage(
+                        "HlmsDiskCache: skipping shader cache entry " +
+                            StringConverter::toString( ( *itor )->hash ) +
+                            " - its renderable index (" + StringConverter::toString( renderableIdx ) +
+                            " of " + StringConverter::toString( hlms->mRenderableCache.size() ) +
+                            ") or pass index (" + StringConverter::toString( passIdx ) + " of " +
+                            StringConverter::toString( hlms->mPassCache.size() ) +
+                            ") is out of range. The hash claims Hlms type " +
+                            StringConverter::toString( ( finalHash >> HlmsBits::HlmsTypeShift ) &
+                                                       (uint32)HlmsBits::HlmsTypeMask ) +
+                            " and this is type " + StringConverter::toString( hlms->getType() ) +
+                            ". The disk cache will be saved without it.",
+                        LML_CRITICAL );
+                    ++itor;
+                    continue;
+                }
+
                 for( size_t i = 0u; i < CustomPieceStage::NumCustomPieceStages; ++i )
                 {
                     const int32 customPieceName =
@@ -187,6 +231,26 @@ namespace Ogre
                     {
                         bCacheable = false;
                     }
+                }
+
+                // A SHADER THAT FAILED TO COMPILE LEAVES AN ENTRY WITH NO PSO
+                // (Jahshaka). Hlms::createShaderCacheEntry adds the cache entry
+                // before the backend builds the PSO, so when the compile throws
+                // (a bad property combination, a driver rejecting the source)
+                // the entry survives with a default-constructed HlmsPso whose
+                // macroblock and blendblock are null — and this copy
+                // dereferences both. Saving the disk cache then crashed the
+                // process over a shader that had merely failed: skip the entry
+                // and say so, once per cache copy.
+                if( bCacheable && ( !( *itor )->pso.macroblock || !( *itor )->pso.blendblock ) )
+                {
+                    bCacheable = false;
+                    LogManager::getSingleton().logMessage(
+                        "HlmsDiskCache: skipping shader cache entry " +
+                            StringConverter::toString( ( *itor )->hash ) +
+                            " - it has no PSO (its shader failed to compile). The disk cache will "
+                            "be saved without it.",
+                        LML_CRITICAL );
                 }
 
                 if( bCacheable )
@@ -435,23 +499,23 @@ namespace Ogre
 
                 // uint32 passHash = 0;
                 {
-                    assert( hlms->mPassCache.size() <= (uint32)HlmsBits::PassMask &&
-                            "Too many passes combinations, we'll overflow "
-                            "the bits assigned in the hash!" );
-
                     Hlms::PassCache passCache;
                     passCache.passPso = itor->pso.pass;
                     passCache.properties = itor->passProperties;
 
-                    Hlms::PassCacheVec::iterator it =
-                        std::find( hlms->mPassCache.begin(), hlms->mPassCache.end(), passCache );
-                    if( it == hlms->mPassCache.end() )
-                    {
-                        hlms->mPassCache.push_back( passCache );
-                        it = hlms->mPassCache.end() - 1u;
-                    }
+                    // A CACHE FILE MUST NOT BE ABLE TO KILL A BOOT (Jahshaka lane
+                    // HLMSBITS-1): this is the one caller that may hit the limit with
+                    // no live scene behind it — a previous session's pass sets are
+                    // replayed here before a frame is drawn — so it asks the appender
+                    // NOT to throw and simply stops filling the cache. A slower start
+                    // is the whole cost. (The third copy of the open-coded
+                    // find-or-append, with the same compiled-out assert as the other
+                    // two, is what this replaces.)
+                    size_t passIdx = 0u;
+                    if( !hlms->findOrAddPassCache( passCache, false, passIdx ) )
+                        break;
 
-                    // passHash = (uint32)(it - hlms->mPassCache.begin()) << (uint32)HlmsBits::PassShift;
+                    // passHash = (uint32)passIdx << (uint32)HlmsBits::PassShift;
                 }
 
                 // const uint32 finalHash = renderableHash | passHash;

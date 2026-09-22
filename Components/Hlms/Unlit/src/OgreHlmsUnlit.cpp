@@ -719,16 +719,14 @@ namespace Ogre
         passCache.passPso = getPassPsoForScene( sceneManager, false );
         passCache.properties = mT[kNoTid].setProperties;
 
-        assert( mPassCache.size() <= (size_t)HlmsBits::PassMask &&
-                "Too many passes combinations, we'll overflow the bits assigned in the hash!" );
-        PassCacheVec::iterator it = std::find( mPassCache.begin(), mPassCache.end(), passCache );
-        if( it == mPassCache.end() )
-        {
-            mPassCache.push_back( passCache );
-            it = mPassCache.end() - 1;
-        }
+        // Through the base class' appender (Jahshaka lane HLMSBITS-1): this copy of the
+        // find-or-append had the `assert` and NOT the overflow warning its Hlms
+        // counterpart carries, so an Unlit pass cache that outgrew the hash said
+        // nothing at all before corrupting the renderable index.
+        size_t passIdx = 0u;
+        findOrAddPassCache( passCache, true, passIdx );
 
-        const uint32 hash = uint32( it - mPassCache.begin() ) << HlmsBits::PassShift;
+        const uint32 hash = uint32( passIdx ) << HlmsBits::PassShift;
 
         // Fill the buffers
         HlmsCache retVal( hash, mType, HLMS_CACHE_FLAGS_NONE, HlmsPso() );

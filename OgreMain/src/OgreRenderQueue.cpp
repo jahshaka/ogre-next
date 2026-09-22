@@ -66,6 +66,10 @@ namespace Ogre
     const int RqBits::TransparencyBits      = 1;
     const int RqBits::MacroblockBits        = 10;
     const int RqBits::ShaderBits            = 10;    //The higher 3 bits contain HlmsTypes
+                                                     //(true since the Jahshaka HLMSBITS-1 patch:
+                                                     //addRenderable composes this field from the
+                                                     //shader hash's type and renderable FIELDS,
+                                                     //not from its low bits)
     const int RqBits::MeshBits              = 14;
     const int RqBits::TextureBits           = 11;
     const int RqBits::DepthBits             = 15;
@@ -236,6 +240,23 @@ namespace Ogre
         assert( subId <= OGRE_RQ_MAKE_MASK( RqBits::SubRqIdBits ) );
 
         uint32 hlmsHash = casterPass ? pRend->getHlmsCasterHash() : pRend->getHlmsHash();
+
+        // THE SORT KEY'S SHADER FIELD, READ FROM THE HASH'S FIELDS INSTEAD OF ITS LOW
+        // BITS (Jahshaka lane HLMSBITS-1). `hlmsHash` is [type][renderable][pass-sized
+        // hole]; masking its low ShaderBits bits, which is what this line used to hand
+        // to OGRE_RQ_HASH, therefore samples whatever happens to sit at the BOTTOM of
+        // the renderable field — two bits of the index at upstream's 3/21/8 split, and
+        // NOTHING AT ALL (a constant) at any split whose pass field is at least as wide
+        // as ShaderBits. The comment beside RqBits::ShaderBits has always said "the
+        // higher 3 bits contain HlmsTypes", and this is what makes that true: the Hlms
+        // type in the top 3 bits of the field and as much of the renderable index as
+        // the remaining 7 hold. Objects drawn by the same shader sort together again,
+        // and this line no longer depends on how the hash's fields are split.
+        const uint32 shaderKey =
+            ( ( ( hlmsHash >> HlmsBits::HlmsTypeShift ) & (uint32)HlmsBits::HlmsTypeMask )
+              << ( RqBits::ShaderBits - HlmsBits::HlmsTypeBits ) ) |
+            ( ( hlmsHash >> HlmsBits::RenderableShift ) &
+              OGRE_RQ_MAKE_MASK( RqBits::ShaderBits - HlmsBits::HlmsTypeBits ) );
         const HlmsDatablock *datablock = pRend->getDatablock();
 
         const bool transparent = datablock->mBlendblock[casterPass]->mIsTransparent != 0u;
@@ -290,7 +311,7 @@ namespace Ogre
             OGRE_RQ_HASH( subId,            RqBits::SubRqIdBits,        RqBits::SubRqIdShift )      |
             OGRE_RQ_HASH( transparent,      RqBits::TransparencyBits,   RqBits::TransparencyShift ) |
             OGRE_RQ_HASH( macroblock,       RqBits::MacroblockBits,     RqBits::MacroblockShift )   |
-            OGRE_RQ_HASH( hlmsHash,         RqBits::ShaderBits,         RqBits::ShaderShift )       |
+            OGRE_RQ_HASH( shaderKey,        RqBits::ShaderBits,         RqBits::ShaderShift )       |
             OGRE_RQ_HASH( meshHash,         RqBits::MeshBits,           RqBits::MeshShift )         |
             OGRE_RQ_HASH( texturehash,      RqBits::TextureBits,        RqBits::TextureShift )      |
             OGRE_RQ_HASH( quantizedDepth,   RqBits::DepthBits,          RqBits::DepthShift );
@@ -306,7 +327,7 @@ namespace Ogre
             OGRE_RQ_HASH( transparent,      RqBits::TransparencyBits,   RqBits::TransparencyShift )     |
             OGRE_RQ_HASH( quantizedDepth,   RqBits::DepthBits,          RqBits::DepthShiftTransp )      |
             OGRE_RQ_HASH( macroblock,       RqBits::MacroblockBits,     RqBits::MacroblockShiftTransp ) |
-            OGRE_RQ_HASH( hlmsHash,         RqBits::ShaderBits,         RqBits::ShaderShiftTransp )     |
+            OGRE_RQ_HASH( shaderKey,        RqBits::ShaderBits,         RqBits::ShaderShiftTransp )     |
             OGRE_RQ_HASH( meshHash,         RqBits::MeshBits,           RqBits::MeshShiftTransp );
             // clang-format on
         }
