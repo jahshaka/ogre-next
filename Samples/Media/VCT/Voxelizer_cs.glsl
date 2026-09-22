@@ -15,6 +15,11 @@
 
 @piece( CustomGlslExtensions )
 	#extension GL_ARB_shader_group_vote: require
+	// Jahshaka (ATOM P4): the geometry is read where the raster keeps it, through
+	// buffer device addresses - see VoxelGeometry_piece_cs.any. The uvec2 form is
+	// deliberate: shaderInt64 is not an enabled device feature.
+	#extension GL_EXT_buffer_reference: require
+	#extension GL_EXT_buffer_reference_uvec2: require
 @end
 
 @property( !vendor_shader_extension )
@@ -56,28 +61,27 @@
 
 @property( syntax == glsl )
 	#define ogre_U0 binding = 0
-	#define ogre_U1 binding = 1
 @end
 
-layout( std430, ogre_U0 ) readonly restrict buffer vertexBufferLayout
+// Jahshaka (ATOM P4): U0 IS THE GEOMETRY TABLE. It replaces the two slots that used
+// to bind a private vertex copy and a private index copy - and with them the
+// `compressed_vertex_format` and `index_32bit` shader properties, since a dispatch no
+// longer binds a format. Every image below therefore moved down one slot.
+layout( std430, ogre_U0 ) readonly restrict buffer geometryTableLayout
 {
-	Vertex vertexBuffer[];
-};
-layout( std430, ogre_U1 ) readonly restrict buffer indexBufferLayout
-{
-	uint indexBuffer[];
+	GeometryRow geometryTable[];
 };
 
-layout( vulkan( ogre_u2 ) vk_comma @insertpiece(uav2_pf_type) )
+layout( vulkan( ogre_u1 ) vk_comma @insertpiece(uav1_pf_type) )
 uniform restrict image3D voxelAlbedoTex;
-layout( vulkan( ogre_u3 ) vk_comma @insertpiece(uav3_pf_type) )
+layout( vulkan( ogre_u2 ) vk_comma @insertpiece(uav2_pf_type) )
 uniform restrict image3D voxelNormalTex;
-layout( vulkan( ogre_u4 ) vk_comma @insertpiece(uav4_pf_type) )
+layout( vulkan( ogre_u3 ) vk_comma @insertpiece(uav3_pf_type) )
 uniform restrict image3D voxelEmissiveTex;
-layout( vulkan( ogre_u5 ) vk_comma @insertpiece(uav5_pf_type) )
+layout( vulkan( ogre_u4 ) vk_comma @insertpiece(uav4_pf_type) )
 uniform restrict uimage3D voxelAccumVal;
 // Jahshaka patch 0065: the per-voxel INTEGER ACCUMULATOR the merge sums into.
-layout( vulkan( ogre_u6 ) vk_comma @insertpiece(uav6_pf_type) )
+layout( vulkan( ogre_u5 ) vk_comma @insertpiece(uav5_pf_type) )
 uniform restrict uimage3D voxelMergeAccum;
 
 layout( local_size_x = @value( threads_per_group_x ),
@@ -93,7 +97,7 @@ layout( local_size_x = @value( threads_per_group_x ),
 //		local_size_z = 4 ) in;
 
 @property( syntax == glsl )
-	ReadOnlyBufferF( 7, InstanceBuffer, instanceBuffer );
+	ReadOnlyBufferF( 6, InstanceBuffer, instanceBuffer );
 @else
 	ReadOnlyBufferF( 0, InstanceBuffer, instanceBuffer );
 @end

@@ -2,18 +2,9 @@
 //#include "SyntaxHighlightingMisc.h"
 
 @piece( PreBindingsHeaderCS )
-	@property( !compressed_vertex_format )
-		struct Vertex
-		{
-			float4 pos_normX;
-			float4 normYZ_uv;
-		};
-	@else
-		struct Vertex
-		{
-			uint4 pos_normal_uv;
-		};
-	@end
+	// Jahshaka (ATOM P4): no private vertex format to describe - the positions are
+	// read where the raster keeps them.
+	@insertpiece( DeclVoxelGeometry )
 
 	struct MeshAabb
 	{
@@ -31,8 +22,8 @@
 
 	struct PartitionedSubMesh
 	{
-		uint vertexBufferStart;
-		uint indexBufferStart;
+		uint geomRow;
+		uint firstIndex;
 		uint numIndices;
 		uint padding;
 	};
@@ -41,38 +32,18 @@
 	{
 		uint4 meshData = bufferFetch( inMeshBuffer, rint(meshIdx) );
 		PartitionedSubMesh retVal;
-		retVal.vertexBufferStart	= meshData.x;
-		retVal.indexBufferStart		= meshData.y;
-		retVal.numIndices			= meshData.z;
-		retVal.padding				= 0u;
-		return retVal;
-	}
-
-	INLINE uint getIndexBufferIndex( uint index PARAMS_ARG_DECL )
-	{
-	@property( !index_32bit )
-		uint retVal = indexBuffer[index >> 1u];
-		retVal = ((index & 0x01u) != 0u) ? (retVal >> 16u) : (retVal & 0xFFFFu);
-	@else
-		uint retVal = indexBuffer[index];
-	@end
+		retVal.geomRow		= meshData.x;
+		retVal.firstIndex	= meshData.y;
+		retVal.numIndices	= meshData.z;
+		retVal.padding		= 0u;
 		return retVal;
 	}
 
 	INLINE float3 getVertexPos( uint indexId, PartitionedSubMesh mesh PARAMS_ARG_DECL )
 	{
-		float3 retVal;
-
-		uint idx = getIndexBufferIndex( mesh.indexBufferStart + indexId PARAMS_ARG );
-		@property( !compressed_vertex_format )
-			retVal = vertexBuffer[idx + mesh.vertexBufferStart].pos_normX.xyz;
-		@else
-			uint4 pos_normal_uv = vertexBuffer[idx + mesh.vertexBufferStart].pos_normal_uv;
-			retVal.xy	= unpackSnorm2x16( pos_normal_uv.x );
-			retVal.z    = unpackSnorm2x16( pos_normal_uv.y ).x;
-		@end
-
-		return retVal;
+		GeometryRow row = geometryTable[mesh.geomRow];
+		uint idx = geomIndex( row, mesh.firstIndex + indexId );
+		return geomPosition( row, idx );
 	}
 @end
 

@@ -10,18 +10,10 @@
 // Matias N. Goldberg Copyright (c) 2019
 
 @piece( PreBindingsHeaderCS )
-	@property( !compressed_vertex_format )
-		struct Vertex
-		{
-			float4 pos_normX;
-			float4 normYZ_uv;
-		};
-	@else
-		struct Vertex
-		{
-			uint4 pos_normal_uv;
-		};
-	@end
+	// Jahshaka (ATOM P4): the `Vertex` struct is GONE. There is no private vertex
+	// buffer to describe - the shader reads the raster's own through the device
+	// addresses in a geometry row (VoxelGeometry_piece_cs.any).
+	@insertpiece( DeclVoxelGeometry )
 
 	struct InstanceBuffer
 	{
@@ -74,10 +66,14 @@
 		float2 uv[3];
 	};
 
+	// Jahshaka (ATOM P4): WHICH GEOMETRY, AND WHICH SLICE OF IT. `vertexBufferStart`
+	// is gone - the row's vertex address already points at this submesh's own buffer.
+	// `geomRow` names a (mesh, LOD LEVEL, submesh), so two instances of one mesh can
+	// be voxelized at two different levels in the same dispatch (AT-A10).
 	struct Mesh
 	{
-		uint vertexBufferStart;
-		uint indexBufferStart;
+		uint geomRow;
+		uint firstIndex;
 		uint numIndices;
 	};
 
@@ -105,21 +101,10 @@
 		//retVal.meshIdx		= floatBitsToUint( instanceBuffer[instanceIdx].aabb0.w );
 		retVal.materialIdx	= floatBitsToUint( instanceBuffer[instanceIdx].aabb1.w );
 
-		retVal.mesh.vertexBufferStart	= instanceBuffer[instanceIdx].meshData.x;
-		retVal.mesh.indexBufferStart	= instanceBuffer[instanceIdx].meshData.y;
+		retVal.mesh.geomRow				= instanceBuffer[instanceIdx].meshData.x;
+		retVal.mesh.firstIndex			= instanceBuffer[instanceIdx].meshData.y;
 		retVal.mesh.numIndices			= instanceBuffer[instanceIdx].meshData.z;
 
-		return retVal;
-	}
-
-	INLINE uint getIndexBufferIndex( uint index PARAMS_ARG_DECL )
-	{
-	@property( !index_32bit )
-		uint retVal = indexBuffer[index >> 1u];
-		retVal = ((index & 0x01u) != 0u) ? (retVal >> 16u) : (retVal & 0xFFFFu);
-	@else
-		uint retVal = indexBuffer[index];
-	@end
 		return retVal;
 	}
 
@@ -127,26 +112,14 @@
 	{
 		Triangle retVal;
 
+		GeometryRow row = geometryTable[mesh.geomRow];
+
 		for( uint i=0u; i<3u; ++i )
 		{
-			uint idx = getIndexBufferIndex( mesh.indexBufferStart + triIdx * 3u + i PARAMS_ARG );
-			@property( !compressed_vertex_format )
-				retVal.v[i] = vertexBuffer[idx + mesh.vertexBufferStart].pos_normX.xyz;
-				retVal.n[i] = float3( vertexBuffer[idx + mesh.vertexBufferStart].pos_normX.w,
-									  vertexBuffer[idx + mesh.vertexBufferStart].normYZ_uv.xy );
-				retVal.uv[i] = vertexBuffer[idx + mesh.vertexBufferStart].normYZ_uv.zw;
-			@else
-				uint4 pos_normal_uv = vertexBuffer[idx + mesh.vertexBufferStart].pos_normal_uv;
-				retVal.v[i].xy = unpackSnorm2x16( pos_normal_uv.x );
-
-				float2 tmp = unpackSnorm2x16( pos_normal_uv.y );
-				retVal.v[i].z	= tmp.x;
-
-				retVal.n[i].x	= tmp.y;
-				retVal.n[i].xy	= unpackSnorm2x16( pos_normal_uv.z );
-
-				retVal.uv[i].xy = unpackHalf2x16( pos_normal_uv.w );
-			@end
+			uint idx = geomIndex( row, mesh.firstIndex + triIdx * 3u + i );
+			retVal.v[i]		= geomPosition( row, idx );
+			retVal.n[i]		= geomNormal( row, idx );
+			retVal.uv[i]	= geomUv( row, idx );
 		}
 
 		return retVal;
@@ -154,32 +127,18 @@
 
 	INLINE Aabb getTriangleAabb( uint triIdx, Mesh mesh, ogre_float4x3 worldTransform PARAMS_ARG_DECL )
 	{
-		uint idx = getIndexBufferIndex( mesh.indexBufferStart + triIdx * 3u + 0 PARAMS_ARG );
-	@property( !compressed_vertex_format )
-		float3 vertexPos = vertexBuffer[idx + mesh.vertexBufferStart].pos_normX.xyz;
-	@else
-		uint4 pos_normal_uv = vertexBuffer[idx + mesh.vertexBufferStart].pos_normal_uv;
-		float3 vertexPos;
-		vertexPos.xy	= unpackSnorm2x16( pos_normal_uv.x );
-		vertexPos.z		= unpackSnorm2x16( pos_normal_uv.y ).x;
-	@end
-		vertexPos = mul( float4( vertexPos, 1.0f ), worldTransform );
+		GeometryRow row = geometryTable[mesh.geomRow];
+
+		uint idx = geomIndex( row, mesh.firstIndex + triIdx * 3u + 0u );
+		float3 vertexPos = mul( float4( geomPosition( row, idx ), 1.0f ), worldTransform );
 		float3 minValue = vertexPos;
 		float3 maxValue = vertexPos;
 		for( uint i=1u; i<3u; ++i )
 		{
-			idx = getIndexBufferIndex( mesh.indexBufferStart + triIdx * 3u + i PARAMS_ARG );
-
-			@property( !compressed_vertex_format )
-				vertexPos = vertexBuffer[idx + mesh.vertexBufferStart].pos_normX.xyz;
-			@else
-				pos_normal_uv = vertexBuffer[idx + mesh.vertexBufferStart].pos_normal_uv;
-				vertexPos.xy	= unpackSnorm2x16( pos_normal_uv.x );
-				vertexPos.z		= unpackSnorm2x16( pos_normal_uv.y ).x;
-			@end
-				vertexPos = mul( float4( vertexPos, 1.0f ), worldTransform );
-				minValue = min( minValue, vertexPos );
-				maxValue = max( maxValue, vertexPos );
+			idx = geomIndex( row, mesh.firstIndex + triIdx * 3u + i );
+			vertexPos = mul( float4( geomPosition( row, idx ), 1.0f ), worldTransform );
+			minValue = min( minValue, vertexPos );
+			maxValue = max( maxValue, vertexPos );
 		}
 
 		Aabb retVal;
