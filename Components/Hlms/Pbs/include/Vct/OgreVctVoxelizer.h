@@ -30,7 +30,10 @@ THE SOFTWARE.
 
 #include "OgreVctVoxelizerSourceBase.h"
 
-#include "Vao/OgreVertexBufferDownloadHelper.h"
+// The download helper used to be included here and pulled these in with it.
+#include "Vao/OgreVertexBufferPacked.h"
+
+#include "ogrestd/map.h"
 
 #ifdef OGRE_FORCE_VCT_VOXELIZER_DETERMINISTIC
 #    include "OgreMesh2.h"
@@ -44,12 +47,19 @@ namespace Ogre
 
     namespace VoxelizerJobSetting
     {
+        /// Jahshaka (ATOM P4): `Index32bit` and `CompressedVertexFormat` are GONE.
+        /// They existed because the voxelizer owned PRIVATE COPIES of every mesh's
+        /// geometry, in one of two formats, in one of two index widths - so the format
+        /// was a property of the buffer a dispatch BOUND and therefore a shader
+        /// permutation and a bucket key. The shader now reads each instance's geometry
+        /// where the raster reads it, through the buffer device addresses and the
+        /// layout in its geometry row, so the width and the packing are per-MESH DATA
+        /// read at runtime and no longer split a dispatch. Sixteen job variants became
+        /// four, and two reasons for one octant to need several dispatches disappeared.
         enum VoxelizerJobSetting
         {
-            Index32bit = 1u << 0u,
-            CompressedVertexFormat = 1u << 1u,
-            HasDiffuseTex = 1u << 2u,
-            HasEmissiveTex = 1u << 3u,
+            HasDiffuseTex = 1u << 0u,
+            HasEmissiveTex = 1u << 1u,
         };
     }
 
@@ -57,8 +67,6 @@ namespace Ogre
     {
         HlmsComputeJob    *job;
         ConstBufferPacked *materialBuffer;
-        UavBufferPacked   *vertexBuffer;
-        UavBufferPacked   *indexBuffer;
         bool               needsTexPool;
         /// WHAT THIS BUCKET IS, said without a pointer: the compute job's VARIANT
         /// (the VoxelizerJobSetting bits — it also decides the vertex and index
@@ -98,11 +106,7 @@ namespace Ogre
                 return this->needsTexPool < other.needsTexPool;
             if( this->job != other.job )
                 return this->job < other.job;
-            if( this->materialBuffer != other.materialBuffer )
-                return this->materialBuffer < other.materialBuffer;
-            if( this->vertexBuffer != other.vertexBuffer )
-                return this->vertexBuffer < other.vertexBuffer;
-            return this->indexBuffer < other.indexBuffer;
+            return this->materialBuffer < other.materialBuffer;
         }
     };
 
@@ -144,61 +148,94 @@ namespace Ogre
     class _OgreHlmsPbsExport VctVoxelizer : public VctVoxelizerSourceBase
     {
     protected:
-        struct MappedBuffers
+        /** JAHSHAKA (ATOM P4) - ONE (mesh, LOD level, submesh)'s GEOMETRY, AS THE
+            SHADER READS IT. std430, 48 bytes, three uvec4 lanes so C++ and GLSL agree
+            with no padding rule to remember.
+
+            THE WHOLE POINT OF THIS STRUCT is that it holds ADDRESSES, not data. The
+            voxelizer used to download every mesh's vertices to the CPU, unpack them to
+            8 floats each and upload the result into a private buffer, once per build();
+            indices were copied GPU-side into two more private buffers. All of it is
+            gone: a row names where the RASTER's vertices and indices already live
+            (VaoManager::getBufferDeviceAddress) and how they are laid out, and the
+            compute shader dereferences that through GL_EXT_buffer_reference.
+
+            WHY THE ROW IS PER (mesh, LEVEL, submesh) AND NOT PER MESH. A LOD level is
+            its own index buffer over the SAME vertex buffer, so the vertex address is
+            the mesh's and the index address is the level's; and one mesh instanced at
+            two distances is now voxelized at two levels in the same build (the finest
+            request no longer wins for every instance of a mesh - AT-A10). A submesh is
+            its own vertex buffer entirely.
+        */
+        struct GeometryRow
         {
-            float *RESTRICT_ALIAS uncompressedVertexBuffer;
-            size_t                index16BufferOffset;
-            size_t                index32BufferOffset;
+            /// Device address of vertex 0 of this submesh's vertex buffer, and of index
+            /// 0 of this (submesh, level)'s index range. Split into two uint32 because
+            /// shaderInt64 is not enabled on this device; GLSL rebuilds the reference
+            /// from a uvec2 (GL_EXT_buffer_reference_uvec2).
+            uint32 posAddress[2];
+            uint32 idxAddress[2];
+            uint32 vertexStride;   ///< bytes between vertices
+            uint32 posOffset;      ///< bytes from the vertex start to VES_POSITION
+            uint32 normalOffset;   ///< ditto VES_NORMAL; 0xFFFFFFFF when absent
+            uint32 uvOffset;       ///< ditto VES_TEXTURE_COORDINATES; 0xFFFFFFFF absent
+            /// bit 0: indices are 32-bit. bit 1: positions are float3 (always, today -
+            /// reserved so a packed position format becomes data, not a permutation).
+            uint32 flags;
+            /// Index ELEMENTS skipped by rounding `idxAddress` down to a 4-byte
+            /// boundary. A 16-bit index buffer can start at an odd uint16, and a
+            /// buffer_reference of uints must be 4-byte aligned, so the address is
+            /// floored and the remainder rides here - the same bookkeeping upstream's
+            /// adjustIndexOffsets16 did for its private copy, now costing no copy.
+            uint32 idxBias;
+            uint32 padding[2];
         };
 
         struct PartitionedSubMesh
         {
-            uint32 vbOffset;
-            uint32 ibOffset;
+            /// Element offset of this partition's first index INSIDE its level's index
+            /// buffer (the level's own primitiveStart is already folded in).
+            uint32 firstIndex;
             uint32 numIndices;
             uint32 aabbSubMeshIdx;
         };
 
         struct QueuedSubMesh
         {
-            // Due to an infrastructure bug, we're commenting out the 'STREAM_DOWNLOAD' path
-            // The goal was to queue up several transfer GPU -> staging area, then map
-            // the staging area. However this backfired as each AsyncTicket will hold its own
-            // StagingBuffer (and each one is at least 4MB) instead of sharing it. This balloons
-            // memory consumption and still needs to map staging buffers a lot, defeating part of
-            // its purpose.
-            // Since fixing it would take a lot of time, it has been ifdef'ed out and instead
-            // we download the data and immediately map it. This causes more stalls but is
-            // far more memory friendly.
-#ifdef STREAM_DOWNLOAD
-            VertexBufferDownloadHelper downloadHelper;
-#else
-            size_t downloadVertexStart;
-            size_t downloadNumVertices;
-#endif
+            /// Row in the geometry table. 0xFFFFFFFF = this (submesh, level) has no
+            /// usable geometry (no index buffer, or a device with no buffer addresses).
+            uint32                        geomRow;
             FastArray<PartitionedSubMesh> partSubMeshes;
         };
 
         typedef FastArray<QueuedSubMesh> QueuedSubMeshArray;
 
+        /// ONE LOD LEVEL OF A QUEUED MESH. A level nobody asked for holds nothing and
+        /// costs nothing: the table only describes levels some instance is voxelized at.
+        struct QueuedMeshLevel
+        {
+            bool               wanted;
+            QueuedSubMeshArray submeshes;
+            QueuedMeshLevel() : wanted( false ) {}
+        };
+
         struct QueuedMesh
         {
-            bool               bCompressed;
-            uint32             numItems;
-            uint32             indexCountSplit;
-            /// WHICH MESH LOD OF THIS MESH IS VOXELIZED (Jahshaka patch 0064).
-            /// 0 = the finest level, which is what every caller that does not ask
-            /// gets and is exactly the behaviour this class always had. Clamped
-            /// per SubMesh to the levels that exist, so a mesh with no LOD chain
-            /// ignores it entirely.
-            ///
-            /// It is a property of the MESH inside THIS voxelizer and not of the
-            /// item, because the buffers are downloaded, converted and indexed
-            /// once per mesh: two items of one mesh in one voxelizer share the
-            /// level, and the FINEST request wins (the same precedence rule
-            /// `bCompressed` uses).
-            uint32             lodLevel;
-            QueuedSubMeshArray submeshes;
+            uint32                      numItems;
+            uint32                      indexCountSplit;
+            /// Indexed by LOD level. `lodLevel` and "the finest request wins" are GONE
+            /// (patch 0064's rule): nothing is downloaded per mesh any more, so two
+            /// instances of one mesh can be voxelized at two levels and each pays for
+            /// its own.
+            FastArray<QueuedMeshLevel>  levels;
+        };
+
+        /// ONE QUEUED ITEM AND THE LEVEL IT ASKED FOR. The level is the ITEM's, not the
+        /// mesh's - see QueuedMesh::levels.
+        struct QueuedItem
+        {
+            Item  *item;
+            uint32 lodLevel;
         };
 
         typedef map<v1::MeshPtr, bool>::type v1MeshPtrMap;
@@ -207,7 +244,7 @@ namespace Ogre
 #else
         typedef map<MeshPtr, QueuedMesh>::type MeshPtrMap;
 #endif
-        typedef FastArray<Item *> ItemArray;
+        typedef FastArray<QueuedItem> ItemArray;
 
         v1MeshPtrMap mMeshesV1;
         MeshPtrMap   mMeshesV2;
@@ -219,8 +256,10 @@ namespace Ogre
         ///
         /// However the way we will be using may abuse the cache too much, thus we pre-set
         /// all variants as long as the number of variants is manageable.
-        HlmsComputeJob *mComputeJobs[1u << 4u];
-        HlmsComputeJob *mAabbCalculator[1u << 2u];
+        HlmsComputeJob *mComputeJobs[1u << 2u];
+        /// ONE AABB CALCULATOR, not four: its variants were the index width and the
+        /// vertex packing, both of which are now data in a geometry row.
+        HlmsComputeJob *mAabbCalculator;
         HlmsComputeJob *mAabbWorldSpaceJob;
 
         /// Jahshaka patch 0065 — THE ORDER-INDEPENDENT MERGE'S ACCUMULATOR.
@@ -243,25 +282,19 @@ namespace Ogre
         float                *mCpuInstanceBuffer;
         UavBufferPacked      *mInstanceBuffer;
         ReadOnlyBufferPacked *mInstanceBufferAsTex;
-        UavBufferPacked      *mVertexBufferCompressed;
-        UavBufferPacked      *mVertexBufferUncompressed;
-        UavBufferPacked      *mIndexBuffer16;
-        UavBufferPacked      *mIndexBuffer32;
+        /// THE GEOMETRY TABLE (ATOM P4): one GeometryRow per (mesh, level, submesh).
+        /// It replaces mVertexBufferUncompressed / mVertexBufferCompressed /
+        /// mIndexBuffer16 / mIndexBuffer32 - four private copies of the world's
+        /// geometry - with a few dozen bytes per mesh that POINT at the raster's.
+        UavBufferPacked        *mGeometryBuffer;
+        FastArray<GeometryRow> mCpuGeometry;
         // Aabb Calculator
-        uint32           mNumUncompressedPartSubMeshes16;
-        uint32           mNumUncompressedPartSubMeshes32;
-        uint32           mNumCompressedPartSubMeshes16;
-        uint32           mNumCompressedPartSubMeshes32;
+        uint32           mNumPartSubMeshes;
         TexBufferPacked *mGpuPartitionedSubMeshes;
         UavBufferPacked *mMeshAabb;
 
         bool mNeedsAlbedoMipmaps;
         bool mNeedsAllMipmaps;
-
-        uint32 mNumVerticesCompressed;
-        uint32 mNumVerticesUncompressed;
-        uint32 mNumIndices16;
-        uint32 mNumIndices32;
 
         uint32 mDefaultIndexCountSplit;
 
@@ -270,11 +303,17 @@ namespace Ogre
         struct QueuedInstance
         {
             MovableObject *movableObject;
-            uint32         vertexBufferStart;
-            uint32         indexBufferStart;
+            /// Row in the geometry table - which (mesh, LEVEL, submesh) this instance
+            /// draws. `vertexBufferStart` is gone: the row's address already points at
+            /// this submesh's own vertex buffer.
+            uint32         geomRow;
+            uint32         firstIndex;
             uint32         numIndices;
             uint32         aabbSubMeshIdx;
             uint32         materialIdx;
+            /// The LOD level this instance is voxelized at - a reading, for the
+            /// (mesh, level) histogram AT-A10 asks for.
+            uint32         lodLevel;
             bool           needsAabbUpdate;
         };
         struct BucketData
@@ -311,32 +350,27 @@ namespace Ogre
 
         ResourceTransitionArray mResourceTransitions;
 
-        /** 16-bit buffer values must always be even since the UAV buffer
-            is internally packed uint32 and BufferPacked::copyTo doesn't
-            like copying with odd-starting offsets in some APIs.
-        @returns
-            True if indexStart was decremented
-        */
-        static bool adjustIndexOffsets16( uint32 &indexStart, uint32 &numIndices );
-
         void createComputeJobs();
         void clearComputeJobResources( bool calculatorDataOnly );
 
-        void countBuffersSize( const MeshPtr &mesh, QueuedMesh &queuedMesh );
+        /// Fills one (mesh, level)'s geometry rows and partitions. Replaces
+        /// countBuffersSize + convertMeshUncompressed: there is nothing to count and
+        /// nothing to convert, only addresses to read.
+        void describeMeshLevel( const MeshPtr &mesh, QueuedMesh &queuedMesh, uint32 level );
         void prepareAabbCalculatorMeshData();
         void destroyAabbCalculatorMeshData();
-        void convertMeshUncompressed( const MeshPtr &mesh, QueuedMesh &queuedMesh,
-                                      MappedBuffers &mappedBuffers );
 
         void freeBuffers( bool bForceFree );
 
-        void buildMeshBuffers();
+        /// Builds the geometry table (the old buildMeshBuffers, with the download, the
+        /// repack, the staging upload and the index copies DELETED).
+        void buildGeometryTable();
         void createVoxelTextures();
         /// Jahshaka patch 0065: drops mMergeAccumTex too.
         void destroyVoxelTextures() override;
 
         void   placeItemsInBuckets();
-        size_t countSubMeshPartitionsIn( Item *item ) const;
+        size_t countSubMeshPartitionsIn( const QueuedItem &queuedItem ) const;
         void   createInstanceBuffers();
         void   destroyInstanceBuffers();
         void   fillInstanceBuffers();
@@ -354,36 +388,37 @@ namespace Ogre
 
         /**
         @param item
-        @param bCompressed
-            True if we should compress:
-                position to 16-bit SNORM
-                normal to 16-bit SNORM
-                uv as 16-bit Half
-            False if we should use everything as 32-bit float
-            If multiple Items using the same Mesh are added and one of them asks
-            to not use compression, then not using compression takes precedence.
+            The item to voxelize.
         @param indexCountSplit
-            0 to use mDefaultIndexCountSplit. Use a different value to override
+            0 to use mDefaultIndexCountSplit. Use a different value to override.
             This value is ignored if the mesh had already been added.
 
             Use std::numeric_limits<uint32>::max to avoid partitioning at all.
         @param lodLevel
             Which LOD level of the item's mesh to voxelize. 0 (the default) is the
-            finest level and is what this class always did. Higher levels are
-            clamped to the levels the mesh actually has, so a mesh with no LOD
-            chain is voxelized exactly as before.
+            finest level. Higher levels are clamped to the levels the mesh actually
+            has, so a mesh with no LOD chain is voxelized exactly as before.
 
-            The level belongs to the MESH within this voxelizer: if several Items
-            share a mesh and ask for different levels, the FINEST (lowest) wins,
-            because the mesh's vertex/index data is downloaded and converted once.
+            THE LEVEL IS THE ITEM'S (Jahshaka, ATOM P4 / AT-A10). It used to be the
+            MESH's inside this voxelizer, and the FINEST request won, because the
+            mesh's geometry was downloaded and converted once per mesh: one mesh
+            instanced at 1x near the eye and 10x far away paid the near level for all
+            eleven. Nothing is downloaded now - the shader reads each instance's own
+            level through its geometry row - so each instance gets the level it asked
+            for and a volume's cost follows its own error rule.
 
-            A voxel grid cannot represent detail finer than its own cell, so a
-            coarse volume voxelizing a simplified level produces the same voxels
-            for a fraction of the raster cost. The caller decides which level that
-            is; this class only spends it.
+            A voxel grid cannot represent detail finer than its own cell, so a coarse
+            volume voxelizing a simplified level produces the same voxels for a
+            fraction of the raster cost. The caller decides which level that is; this
+            class only spends it.
+
+        @remarks
+            The `bCompressed` argument is GONE. It chose between two PRIVATE vertex
+            formats this class no longer has: the shader reads the pool's own vertices
+            through the layout in the geometry row, so "compressed" is whatever the
+            mesh was baked as and is not a decision a caller can make here.
         */
-        void addItem( Item *item, bool bCompressed, uint32 indexCountSplit = 0u,
-                      uint32 lodLevel = 0u );
+        void addItem( Item *item, uint32 indexCountSplit = 0u, uint32 lodLevel = 0u );
 
         /** Removes an item added via VctVoxelizer::addItem
         @remarks
@@ -439,16 +474,15 @@ namespace Ogre
         size_t getNumBuckets() const { return mBuckets.size(); }
         size_t getNumOctants() const { return mOctants.size(); }
 
-        /// JAHSHAKA PATCH 0089 - HOW MANY INDICES THE LAST build() ACTUALLY BOUND.
+        /// JAHSHAKA - HOW MANY INDICES THE LAST build() ACTUALLY BOUND.
         ///
-        /// `QueuedInstance::numIndices` is what sizes each raster dispatch, and it
-        /// is filled in `placeItemsInBuckets` from `getLodVao( subMesh, lodLevel )`
-        /// (patch 0064) - i.e. from the LOD LEVEL this voxelizer resolved and
-        /// CLAMPED for itself. Summing it is therefore a READING of the geometry
-        /// the volume holds, where a host walking the mesh's VAOs from outside can
-        /// only ever produce a prediction that re-implements the clamp and drifts
-        /// from it (Jahshaka: GiStatus::CascadeStatus::voxelTriangles used to be
-        /// exactly that prediction).
+        /// `QueuedInstance::numIndices` is what sizes each raster dispatch, and it is
+        /// filled in `placeItemsInBuckets` from the LEVEL THAT INSTANCE ASKED FOR,
+        /// clamped here to the levels the mesh has. Summing it is therefore a READING
+        /// of the geometry the volume holds, where a host walking the mesh's VAOs from
+        /// outside can only ever produce a prediction that re-implements the clamp and
+        /// drifts from it. Since the level is per instance, this number now also
+        /// reflects that a mesh instanced at two distances pays two different costs.
         ///
         /// Counted over the buckets and not over `mItems`, because the buckets are
         /// what the dispatches iterate: an item the region declined contributes
@@ -471,6 +505,37 @@ namespace Ogre
             }
             return total;
         }
+        /// JAHSHAKA (ATOM P4 / AT-A10) - THE (mesh, LEVEL) HISTOGRAM, MEASURED.
+        ///
+        /// `out[level]` = how many queued instances the last build() voxelized at that
+        /// LOD level. On a mesh instanced at 1x and 10x this reads two non-zero entries;
+        /// under the old rule (the finest request winning for the whole mesh) it could
+        /// only ever read one, which is why a host-side histogram of what it ASKED for
+        /// was not evidence of what happened.
+        void getLevelHistogram( FastArray<uint32> &out ) const
+        {
+            out.clear();
+            VoxelizerBucketMap::const_iterator itor = mBuckets.begin();
+            VoxelizerBucketMap::const_iterator endt = mBuckets.end();
+            while( itor != endt )
+            {
+                FastArray<QueuedInstance>::const_iterator itInst = itor->second.queuedInst.begin();
+                FastArray<QueuedInstance>::const_iterator enInst = itor->second.queuedInst.end();
+                while( itInst != enInst )
+                {
+                    if( out.size() <= itInst->lodLevel )
+                        out.resize( itInst->lodLevel + 1u, 0u );
+                    ++out[itInst->lodLevel];
+                    ++itInst;
+                }
+                ++itor;
+            }
+        }
+
+        /// How many (mesh, level, submesh) geometry rows the table holds - the VRAM the
+        /// voxelizer spends on describing geometry, which used to be a full copy of it.
+        size_t getNumGeometryRows() const { return mCpuGeometry.size(); }
+
     public:
         /// JAHSHAKA PATCH 0081: the voxeliser's material cache, so a host can
         /// evict a dying datablock (VctMaterial::removeDatablock) instead of

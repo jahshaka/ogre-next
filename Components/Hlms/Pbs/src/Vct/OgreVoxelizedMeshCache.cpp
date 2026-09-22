@@ -28,6 +28,8 @@ THE SOFTWARE.
 
 #include "OgreStableHeaders.h"
 
+#include "OgreBitwise.h"
+
 #include "Vct/OgreVoxelizedMeshCache.h"
 
 #include "Vct/OgreVctVoxelizer.h"
