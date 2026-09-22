@@ -283,14 +283,144 @@ namespace Ogre
         };
     }
     //-------------------------------------------------------------------------
-    /// THE ONE PLACE A (mesh, level, submesh)'s GEOMETRY IS DESCRIBED.
-    ///
-    /// It replaces `countBuffersSize` and `convertMeshUncompressed`: there is nothing
-    /// to count (no private buffer is sized) and nothing to convert (no vertex is
-    /// downloaded, repacked or uploaded). What is produced is a GeometryRow - two
-    /// device addresses and a layout - plus this (submesh, level)'s partitions.
-    void VctVoxelizer::describeMeshLevel( const MeshPtr &mesh, QueuedMesh &queuedMesh,
-                                          uint32 level )
+    /// THE ONE PLACE A (mesh, level, submesh)'s GEOMETRY IS DESCRIBED - and it is a
+    /// STATIC, because a row is a fact about a MESH and not about a voxelisation.
+    /// See the declaration for why the host owns the table.
+    bool VctVoxelizer::describeGeometryRow( const MeshPtr &mesh, uint32 level, uint32 submesh,
+                                           VaoManager *vaoManager, GeometryRow &out )
+    {
+        if( !mesh || !vaoManager || submesh >= mesh->getNumSubMeshes() )
+            return false;
+
+        SubMesh *subMesh = mesh->getSubMesh( (uint16)submesh );
+        VertexArrayObject *vao = getLodVao( subMesh, level );
+        if( !vao )
+            return false;
+        IndexBufferPacked *indexBuffer = vao->getIndexBuffer();
+        if( !indexBuffer )
+        {
+            TODO_deal_no_index_buffer;
+            return false;
+        }
+
+        if( jahRefuseGeometry() )
+        {
+            LogManager::getSingleton().logMessage(
+                "WARNING: JAH_VCT_REFUSE_GEOMETRY: refusing mesh '" + mesh->getName() +
+                    "'. It will not contribute to GI.",
+                LML_CRITICAL );
+            return false;
+        }
+
+        size_t posSource = 0u, posOffset = 0u;
+        const VertexElement2 *posElem = vao->findBySemantic( VES_POSITION, posSource, posOffset );
+        if( !posElem || posElem->mType != VET_FLOAT3 ||
+            posSource >= vao->getVertexBuffers().size() )
+        {
+            LogManager::getSingleton().logMessage(
+                "WARNING: Mesh '" + mesh->getName() +
+                    "' has no float3 VES_POSITION the voxelizer can read in place. It "
+                    "will not contribute to GI.",
+                LML_CRITICAL );
+            return false;
+        }
+
+        VertexBufferPacked *vertexBuffer = vao->getVertexBuffers()[posSource];
+        const uint64 posAddress = vaoManager->getBufferDeviceAddress( vertexBuffer );
+        const uint64 rawIdxAddress = vaoManager->getBufferDeviceAddress( indexBuffer );
+        if( !posAddress || !rawIdxAddress )
+            return false;  // no addresses on this device
+
+        GeometryRow row;
+        memset( &row, 0, sizeof( row ) );
+        row.vertexStride = vertexBuffer->getBytesPerElement();
+        row.posOffset = uint32( posOffset );
+        row.normalOffset = 0xFFFFFFFFu;
+        row.uvOffset = 0xFFFFFFFFu;
+        row.flags = indexBuffer->getIndexType() == IndexBufferPacked::IT_32BIT
+                        ? VoxelizerGeomFlag::Index32bit
+                        : 0u;
+
+        // A SEMANTIC IN ANOTHER SOURCE BUFFER IS TREATED AS ABSENT, which is exactly
+        // what the deleted download path did when its helper returned no data for one
+        // (normal fell back to UNIT_Y, uv to zero). One row carries one vertex address;
+        // a second source would need a second, and no mesh this engine bakes has one.
+        size_t normSource = 0u, normOffset = 0u;
+        const VertexElement2 *normElem = vao->findBySemantic( VES_NORMAL, normSource, normOffset );
+        if( normElem && normSource == posSource )
+        {
+            uint32 fmt = VoxelizerGeomFlag::NormalNone;
+            if( normElem->mType == VET_FLOAT3 || normElem->mType == VET_FLOAT4 )
+                fmt = VoxelizerGeomFlag::NormalFloat3;
+            else if( normElem->mType == VET_SHORT4_SNORM )
+                fmt = VoxelizerGeomFlag::NormalShort4Snorm;
+            else if( normElem->mType == VET_HALF4 )
+                fmt = VoxelizerGeomFlag::NormalHalf4;
+            if( fmt != VoxelizerGeomFlag::NormalNone )
+            {
+                row.flags |= fmt;
+                row.normalOffset = uint32( normOffset );
+            }
+        }
+
+        size_t uvSource = 0u, uvOffset = 0u;
+        const VertexElement2 *uvElem =
+            vao->findBySemantic( VES_TEXTURE_COORDINATES, uvSource, uvOffset );
+        if( uvElem && uvSource == posSource )
+        {
+            uint32 fmt = VoxelizerGeomFlag::UvNone;
+            if( uvElem->mType == VET_FLOAT2 || uvElem->mType == VET_FLOAT3 ||
+                uvElem->mType == VET_FLOAT4 )
+                fmt = VoxelizerGeomFlag::UvFloat2;
+            else if( uvElem->mType == VET_HALF2 || uvElem->mType == VET_HALF4 )
+                fmt = VoxelizerGeomFlag::UvHalf2;
+            if( fmt != VoxelizerGeomFlag::UvNone )
+            {
+                row.flags |= fmt;
+                row.uvOffset = uint32( uvOffset );
+            }
+        }
+
+        // A buffer_reference of uints must sit on a 4-byte boundary and a 16-bit index
+        // buffer can start on an odd uint16. Floor the address and carry the remainder
+        // as an ELEMENT bias, so the shader's index arithmetic stays whole-element and
+        // nothing is copied to make it align.
+        const uint32 idxBytes = indexBuffer->getBytesPerElement();
+        const uint64 flooredIdx = rawIdxAddress & ~uint64( 3u );
+        row.idxBias = uint32( ( rawIdxAddress - flooredIdx ) / idxBytes );
+        row.posAddress[0] = uint32( posAddress & 0xFFFFFFFFu );
+        row.posAddress[1] = uint32( posAddress >> 32u );
+        row.idxAddress[0] = uint32( flooredIdx & 0xFFFFFFFFu );
+        row.idxAddress[1] = uint32( flooredIdx >> 32u );
+
+        // THE SHADER'S ADDRESS ARITHMETIC IS IN 4-BYTE LANES (`GEOM_LANE` does a
+        // `>> 2`), so an odd stride or element offset would not fail - it would read
+        // the WRONG BYTES, silently, for that one mesh.
+        const bool bAligned = ( row.vertexStride & 3u ) == 0u && ( row.posOffset & 3u ) == 0u &&
+                              ( row.normalOffset == 0xFFFFFFFFu ||
+                                ( row.normalOffset & 3u ) == 0u ) &&
+                              ( row.uvOffset == 0xFFFFFFFFu || ( row.uvOffset & 3u ) == 0u );
+        if( !bAligned )
+        {
+            LogManager::getSingleton().logMessage(
+                "WARNING: Mesh '" + mesh->getName() +
+                    "' has a vertex stride or element offset that is not a multiple of 4 "
+                    "bytes; the voxelizer reads vertices in 4-byte lanes and will not "
+                    "read this mesh. It will not contribute to GI.",
+                LML_CRITICAL );
+            return false;
+        }
+
+        out = row;
+        return true;
+    }
+    //-------------------------------------------------------------------------
+    /// ONE (mesh, level)'s PARTITIONS. A mesh with a lot of triangles would have every
+    /// voxel of the octant test every triangle; splitting the index range and giving
+    /// each piece its own AABB is the broadphase. The GEOMETRY is not described here any
+    /// more - the row index arrives from the host.
+    void VctVoxelizer::partitionMeshLevel( const MeshPtr &mesh, QueuedMesh &queuedMesh,
+                                           uint32 level, uint32 geomRowBase )
     {
         QueuedMeshLevel &lvl = queuedMesh.levels[level];
         const unsigned numSubmeshes = mesh->getNumSubMeshes();
@@ -299,141 +429,19 @@ namespace Ogre
         for( unsigned subMeshIdx = 0; subMeshIdx < numSubmeshes; ++subMeshIdx )
         {
             QueuedSubMesh &qsm = lvl.submeshes[subMeshIdx];
-            qsm.geomRow = 0xFFFFFFFFu;
+            qsm.geomRow = geomRowBase == 0xFFFFFFFFu ? 0xFFFFFFFFu : geomRowBase + subMeshIdx;
             qsm.partSubMeshes.clear();
+            if( qsm.geomRow == 0xFFFFFFFFu )
+                continue;
 
             SubMesh *subMesh = mesh->getSubMesh( (uint16)subMeshIdx );
             VertexArrayObject *vao = getLodVao( subMesh, level );
-            if( !vao )
-                continue;
-            IndexBufferPacked *indexBuffer = vao->getIndexBuffer();
-            if( !indexBuffer )
+            if( !vao || !vao->getIndexBuffer() )
             {
-                TODO_deal_no_index_buffer;
+                qsm.geomRow = 0xFFFFFFFFu;
                 continue;
             }
 
-            size_t posSource = 0u, posOffset = 0u;
-            const VertexElement2 *posElem =
-                vao->findBySemantic( VES_POSITION, posSource, posOffset );
-            if( jahRefuseGeometry() )
-            {
-                LogManager::getSingleton().logMessage(
-                    "WARNING: JAH_VCT_REFUSE_GEOMETRY: refusing mesh '" + mesh->getName() +
-                        "'. It will not contribute to GI.",
-                    LML_CRITICAL );
-                continue;
-            }
-            if( !posElem || posElem->mType != VET_FLOAT3 ||
-                posSource >= vao->getVertexBuffers().size() )
-            {
-                LogManager::getSingleton().logMessage(
-                    "WARNING: Mesh '" + mesh->getName() +
-                        "' has no float3 VES_POSITION the voxelizer can read in place. It "
-                        "will not contribute to GI.",
-                    LML_CRITICAL );
-                continue;
-            }
-
-            VertexBufferPacked *vertexBuffer = vao->getVertexBuffers()[posSource];
-            const uint64 posAddress = mVaoManager->getBufferDeviceAddress( vertexBuffer );
-            const uint64 rawIdxAddress = mVaoManager->getBufferDeviceAddress( indexBuffer );
-            if( !posAddress || !rawIdxAddress )
-                continue;  // no addresses on this device; the ctor already said so
-
-            GeometryRow row;
-            memset( &row, 0, sizeof( row ) );
-            row.vertexStride = vertexBuffer->getBytesPerElement();
-            row.posOffset = uint32( posOffset );
-            row.normalOffset = 0xFFFFFFFFu;
-            row.uvOffset = 0xFFFFFFFFu;
-            row.flags = indexBuffer->getIndexType() == IndexBufferPacked::IT_32BIT
-                            ? VoxelizerGeomFlag::Index32bit
-                            : 0u;
-
-            // A SEMANTIC IN ANOTHER SOURCE BUFFER IS TREATED AS ABSENT, which is
-            // exactly what the download path did when its helper returned no data for
-            // one (normal fell back to UNIT_Y, uv to zero). One row carries one vertex
-            // address; a second source would need a second, and no mesh this engine
-            // bakes has one.
-            size_t normSource = 0u, normOffset = 0u;
-            const VertexElement2 *normElem =
-                vao->findBySemantic( VES_NORMAL, normSource, normOffset );
-            if( normElem && normSource == posSource )
-            {
-                uint32 fmt = VoxelizerGeomFlag::NormalNone;
-                if( normElem->mType == VET_FLOAT3 || normElem->mType == VET_FLOAT4 )
-                    fmt = VoxelizerGeomFlag::NormalFloat3;
-                else if( normElem->mType == VET_SHORT4_SNORM )
-                    fmt = VoxelizerGeomFlag::NormalShort4Snorm;
-                else if( normElem->mType == VET_HALF4 )
-                    fmt = VoxelizerGeomFlag::NormalHalf4;
-                if( fmt != VoxelizerGeomFlag::NormalNone )
-                {
-                    row.flags |= fmt;
-                    row.normalOffset = uint32( normOffset );
-                }
-            }
-
-            size_t uvSource = 0u, uvOffset = 0u;
-            const VertexElement2 *uvElem =
-                vao->findBySemantic( VES_TEXTURE_COORDINATES, uvSource, uvOffset );
-            if( uvElem && uvSource == posSource )
-            {
-                uint32 fmt = VoxelizerGeomFlag::UvNone;
-                if( uvElem->mType == VET_FLOAT2 || uvElem->mType == VET_FLOAT3 ||
-                    uvElem->mType == VET_FLOAT4 )
-                    fmt = VoxelizerGeomFlag::UvFloat2;
-                else if( uvElem->mType == VET_HALF2 || uvElem->mType == VET_HALF4 )
-                    fmt = VoxelizerGeomFlag::UvHalf2;
-                if( fmt != VoxelizerGeomFlag::UvNone )
-                {
-                    row.flags |= fmt;
-                    row.uvOffset = uint32( uvOffset );
-                }
-            }
-
-            // A buffer_reference of uints must sit on a 4-byte boundary and a 16-bit
-            // index buffer can start on an odd uint16. Floor the address and carry the
-            // remainder as an ELEMENT bias, so the shader's index arithmetic stays
-            // whole-element and nothing is copied to make it align.
-            const uint32 idxBytes = indexBuffer->getBytesPerElement();
-            const uint64 flooredIdx = rawIdxAddress & ~uint64( 3u );
-            row.idxBias = uint32( ( rawIdxAddress - flooredIdx ) / idxBytes );
-            row.posAddress[0] = uint32( posAddress & 0xFFFFFFFFu );
-            row.posAddress[1] = uint32( posAddress >> 32u );
-            row.idxAddress[0] = uint32( flooredIdx & 0xFFFFFFFFu );
-            row.idxAddress[1] = uint32( flooredIdx >> 32u );
-
-            // THE SHADER'S ADDRESS ARITHMETIC IS IN 4-BYTE LANES (`GEOM_LANE` does a
-            // `>> 2` over `vertexIdx * stride + offset`), so an odd stride or an odd
-            // element offset would not fail - it would read the WRONG BYTES, silently,
-            // and only for that one mesh. Refuse it with a reason instead. Every layout
-            // this engine bakes is 48 or 68 bytes with 4-aligned elements; a format that
-            // is not wants the row widened to carry a byte shift, not this loosened.
-            const bool bAligned =
-                ( row.vertexStride & 3u ) == 0u && ( row.posOffset & 3u ) == 0u &&
-                ( row.normalOffset == 0xFFFFFFFFu || ( row.normalOffset & 3u ) == 0u ) &&
-                ( row.uvOffset == 0xFFFFFFFFu || ( row.uvOffset & 3u ) == 0u );
-            if( !bAligned )
-            {
-                LogManager::getSingleton().logMessage(
-                    "WARNING: Mesh '" + mesh->getName() +
-                        "' has a vertex stride or element offset that is not a multiple of 4 "
-                        "bytes; the voxelizer reads vertices in 4-byte lanes and will not "
-                        "read this mesh. It will not contribute to GI.",
-                    LML_CRITICAL );
-                continue;
-            }
-
-            qsm.geomRow = uint32( mCpuGeometry.size() );
-            mCpuGeometry.push_back( row );
-
-            // The partitions. A mesh with a lot of triangles would have every voxel of
-            // the octant test every triangle; splitting the index range and giving each
-            // piece its own AABB is the broadphase. Unchanged in intent - only the
-            // offsets are now relative to the level's own index buffer instead of to a
-            // private concatenation of every mesh's.
             const uint32 firstIndex = vao->getPrimitiveStart();
             const uint32 numIndices = vao->getPrimitiveCount();
             const uint32 numPartitions =
@@ -541,7 +549,8 @@ namespace Ogre
         clearComputeJobResources( true );
     }
     //-------------------------------------------------------------------------
-    void VctVoxelizer::addItem( Item *item, uint32 indexCountSplit, uint32 lodLevel )
+    void VctVoxelizer::addItem( Item *item, uint32 indexCountSplit, uint32 lodLevel,
+                                uint32 geomRowBase )
     {
         const MeshPtr &mesh = item->getMesh();
 
@@ -593,6 +602,9 @@ namespace Ogre
         if( queuedMesh.levels.size() <= lodLevel )
             queuedMesh.levels.resize( lodLevel + 1u );
         queuedMesh.levels[lodLevel].wanted = true;
+        // THE HOST'S ROWS, recorded per (mesh, level). Every item of one mesh at one
+        // level names the same rows, so the writers agree by construction.
+        queuedMesh.levels[lodLevel].geomRowBase = geomRowBase;
 
         QueuedItem queuedItem;
         queuedItem.item = item;
@@ -633,33 +645,24 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VctVoxelizer::freeBuffers( bool bForceFree )
     {
-        // THE GEOMETRY TABLE IS THE ONLY GEOMETRY BUFFER LEFT. The four it replaces
-        // (mVertexBufferUncompressed, mVertexBufferCompressed, mIndexBuffer16,
-        // mIndexBuffer32) held a full copy of the world's triangles; this one holds 48
-        // bytes per (mesh, level, submesh) and is re-created whenever the number of rows
-        // changes, which costs nothing worth keeping.
-        if( mGeometryBuffer &&
-            ( bForceFree || mGeometryBuffer->getNumElements() != mCpuGeometry.size() ) )
-        {
-            mVaoManager->destroyUavBuffer( mGeometryBuffer );
-            mGeometryBuffer = 0;
-        }
-
+        // NO GEOMETRY BUFFER IS OWNED ANY MORE: mGeometryBuffer is the HOST's table
+        // (setGeometrySource), written once at attach and outliving every build. The four
+        // private copies of the world's triangles this class used to hold are long gone;
+        // the per-build table that replaced them belongs to whoever owns meshes.
         if( bForceFree )
             destroyAabbCalculatorMeshData();
 
         clearComputeJobResources( false );
     }
     //-------------------------------------------------------------------------
-    void VctVoxelizer::buildGeometryTable()
+    void VctVoxelizer::buildPartitionTable()
     {
-        OgreProfile( "VctVoxelizer::buildGeometryTable" );
+        OgreProfile( "VctVoxelizer::buildPartitionTable" );
 
-        mCpuGeometry.clear();
         mNumPartSubMeshes = 0u;
 
         {
-            OgreProfile( "VctVoxelizer::describeMeshLevel aggregated" );
+            OgreProfile( "VctVoxelizer::partitionMeshLevel aggregated" );
             MeshPtrMap::iterator itor = mMeshesV2.begin();
             MeshPtrMap::iterator end = mMeshesV2.end();
 
@@ -670,7 +673,10 @@ namespace Ogre
                 for( size_t level = 0u; level < numLevels; ++level )
                 {
                     if( queuedMesh.levels[level].wanted )
-                        describeMeshLevel( itor->first, queuedMesh, uint32( level ) );
+                    {
+                        partitionMeshLevel( itor->first, queuedMesh, uint32( level ),
+                                            queuedMesh.levels[level].geomRowBase );
+                    }
                 }
                 ++itor;
             }
@@ -678,20 +684,12 @@ namespace Ogre
 
         freeBuffers( false );
 
-        // THERE IS NO DOWNLOAD, NO REPACK, NO STAGING MAP AND NO INDEX copyTo. What used
-        // to be a staging buffer of `numVertices * 32` bytes, a per-vertex CPU loop over
-        // every mesh in the volume and two GPU-side index copies is one upload of
-        // `rows * 48` bytes - and the CPU never sees a vertex.
-        if( !mCpuGeometry.empty() )
-        {
-            if( !mGeometryBuffer )
-            {
-                mGeometryBuffer = mVaoManager->createUavBuffer(
-                    mCpuGeometry.size(), sizeof( GeometryRow ), BB_FLAG_READONLY, 0, false );
-            }
-            mGeometryBuffer->upload( mCpuGeometry.begin(), 0u, mCpuGeometry.size() );
-        }
-
+        // NO GEOMETRY TABLE IS BUILT HERE ANY MORE. It used to be re-described and
+        // re-uploaded on EVERY build() of EVERY cascade - a CPU walk over the scene's
+        // geometry per rebuild, for data that cannot change while a mesh lives. The host
+        // writes one row per (mesh, level, submesh) once at attach and hands the buffer
+        // over with setGeometrySource; only the PARTITIONS (which depend on the queue and
+        // touch no vertex and no address) are enumerated per build.
         prepareAabbCalculatorMeshData();
     }
     //-------------------------------------------------------------------------
@@ -1305,7 +1303,7 @@ namespace Ogre
             return;
         }
 
-        buildGeometryTable();
+        buildPartitionTable();
 
         createVoxelTextures();
 

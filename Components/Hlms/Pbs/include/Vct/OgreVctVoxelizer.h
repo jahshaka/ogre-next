@@ -147,7 +147,7 @@ namespace Ogre
     */
     class _OgreHlmsPbsExport VctVoxelizer : public VctVoxelizerSourceBase
     {
-    protected:
+    public:
         /** JAHSHAKA (ATOM P4) - ONE (mesh, LOD level, submesh)'s GEOMETRY, AS THE
             SHADER READS IT. std430, 48 bytes, three uvec4 lanes so C++ and GLSL agree
             with no padding rule to remember.
@@ -191,6 +191,39 @@ namespace Ogre
             uint32 padding[2];
         };
 
+        /** JAHSHAKA (ATOM P4b): DESCRIBE ONE (mesh, level, submesh) WITHOUT A VOXELIZER.
+
+            The row is a fact about a MESH, not about a voxelisation: the same two
+            addresses and the same layout serve every cascade that voxelises it and
+            (phase D) the raster that draws it. So the table belongs to whoever owns
+            meshes - the host's GPU scene, which writes one row per (mesh, level,
+            submesh) ONCE when the mesh is first attached - and this is the describer
+            it calls. The voxelizer used to rebuild the whole table on EVERY build()
+            of EVERY cascade, which is a CPU walk over the scene's geometry per
+            rebuild for data that never changes.
+
+            THE FORMAT STAYS OGRE'S because the shader that reads it is Ogre's.
+        @param level
+            Clamped to the levels the submesh has.
+        @return
+            False - with one log line naming the mesh and the reason - when this
+            (level, submesh) cannot be read in place: no index buffer, no float3
+            VES_POSITION, a stride or element offset that is not a multiple of 4, or
+            a device with no buffer device addresses. `out` is then untouched.
+        */
+        static bool describeGeometryRow( const MeshPtr &mesh, uint32 level, uint32 submesh,
+                                         VaoManager *vaoManager, GeometryRow &out );
+
+        /** THE GEOMETRY TABLE THIS VOXELIZER READS - the host's, bound for every
+            dispatch (the voxelise jobs and the AABB calculator).
+
+            A voxelizer with no source keeps NOTHING of its own: the per-build table it
+            used to own is deleted, not kept as a fallback. Setting it to null makes
+            every build an empty one (and says so once).
+        */
+        void setGeometrySource( UavBufferPacked *rows ) { mGeometryBuffer = rows; }
+
+    protected:
         struct PartitionedSubMesh
         {
             /// Element offset of this partition's first index INSIDE its level's index
@@ -202,8 +235,10 @@ namespace Ogre
 
         struct QueuedSubMesh
         {
-            /// Row in the geometry table. 0xFFFFFFFF = this (submesh, level) has no
-            /// usable geometry (no index buffer, or a device with no buffer addresses).
+            /// Row in the HOST's geometry table (setGeometrySource). The voxelizer no
+            /// longer describes geometry: `addItem` is told the row of this (mesh,
+            /// level, submesh 0) and the rows of one level are contiguous, so submesh s
+            /// is geomRowBase + s. 0xFFFFFFFF = the host had no row for it.
             uint32                        geomRow;
             FastArray<PartitionedSubMesh> partSubMeshes;
         };
@@ -215,8 +250,10 @@ namespace Ogre
         struct QueuedMeshLevel
         {
             bool               wanted;
+            /// The host's row for (this mesh, this level, submesh 0); 0xFFFFFFFF = none.
+            uint32             geomRowBase;
             QueuedSubMeshArray submeshes;
-            QueuedMeshLevel() : wanted( false ) {}
+            QueuedMeshLevel() : wanted( false ), geomRowBase( 0xFFFFFFFFu ) {}
         };
 
         struct QueuedMesh
@@ -282,12 +319,11 @@ namespace Ogre
         float                *mCpuInstanceBuffer;
         UavBufferPacked      *mInstanceBuffer;
         ReadOnlyBufferPacked *mInstanceBufferAsTex;
-        /// THE GEOMETRY TABLE (ATOM P4): one GeometryRow per (mesh, level, submesh).
-        /// It replaces mVertexBufferUncompressed / mVertexBufferCompressed /
-        /// mIndexBuffer16 / mIndexBuffer32 - four private copies of the world's
-        /// geometry - with a few dozen bytes per mesh that POINT at the raster's.
-        UavBufferPacked        *mGeometryBuffer;
-        FastArray<GeometryRow> mCpuGeometry;
+        /// THE HOST'S GEOMETRY TABLE (setGeometrySource) - NOT OWNED. One GeometryRow
+        /// per (mesh, level, submesh), written once at attach by whoever owns meshes.
+        /// This class used to own and rebuild it per build(); before that it owned four
+        /// private copies of the world's geometry.
+        UavBufferPacked *mGeometryBuffer;
         // Aabb Calculator
         uint32           mNumPartSubMeshes;
         TexBufferPacked *mGpuPartitionedSubMeshes;
@@ -353,18 +389,19 @@ namespace Ogre
         void createComputeJobs();
         void clearComputeJobResources( bool calculatorDataOnly );
 
-        /// Fills one (mesh, level)'s geometry rows and partitions. Replaces
-        /// countBuffersSize + convertMeshUncompressed: there is nothing to count and
-        /// nothing to convert, only addresses to read.
-        void describeMeshLevel( const MeshPtr &mesh, QueuedMesh &queuedMesh, uint32 level );
+        /// Enumerates one (mesh, level)'s PARTITIONS and records the host's row index
+        /// for each submesh. It no longer describes geometry - that is
+        /// describeGeometryRow, called once per mesh by the host at attach.
+        void partitionMeshLevel( const MeshPtr &mesh, QueuedMesh &queuedMesh, uint32 level,
+                                 uint32 geomRowBase );
         void prepareAabbCalculatorMeshData();
         void destroyAabbCalculatorMeshData();
 
         void freeBuffers( bool bForceFree );
 
-        /// Builds the geometry table (the old buildMeshBuffers, with the download, the
-        /// repack, the staging upload and the index copies DELETED).
-        void buildGeometryTable();
+        /// Enumerates the queue's partitions and the AABB calculator's inputs. It no
+        /// longer builds a geometry table: the host's is bound by setGeometrySource.
+        void buildPartitionTable();
         void createVoxelTextures();
         /// Jahshaka patch 0065: drops mMergeAccumTex too.
         void destroyVoxelTextures() override;
@@ -418,7 +455,15 @@ namespace Ogre
             through the layout in the geometry row, so "compressed" is whatever the
             mesh was baked as and is not a decision a caller can make here.
         */
-        void addItem( Item *item, uint32 indexCountSplit = 0u, uint32 lodLevel = 0u );
+        /** @param geomRowBase
+                The host's geometry-table row for (this mesh, `lodLevel`, submesh 0);
+                submesh s is geomRowBase + s. 0xFFFFFFFF means the host has no rows for
+                this mesh at this level, and the item is refused with a log line - the
+                same honest "GI is empty" path a device with no buffer device addresses
+                takes.
+        */
+        void addItem( Item *item, uint32 indexCountSplit = 0u, uint32 lodLevel = 0u,
+                      uint32 geomRowBase = 0xFFFFFFFFu );
 
         /** Removes an item added via VctVoxelizer::addItem
         @remarks
@@ -531,10 +576,6 @@ namespace Ogre
                 ++itor;
             }
         }
-
-        /// How many (mesh, level, submesh) geometry rows the table holds - the VRAM the
-        /// voxelizer spends on describing geometry, which used to be a full copy of it.
-        size_t getNumGeometryRows() const { return mCpuGeometry.size(); }
 
     public:
         /// JAHSHAKA PATCH 0081: the voxeliser's material cache, so a host can
