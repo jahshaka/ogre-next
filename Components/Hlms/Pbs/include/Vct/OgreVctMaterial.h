@@ -30,6 +30,7 @@ THE SOFTWARE.
 
 #include "OgreHlmsPbsPrerequisites.h"
 
+#include "OgreFastArray.h"
 #include "OgreId.h"
 
 #include "ogrestd/map.h"
@@ -101,6 +102,10 @@ namespace Ogre
 
         DatablockConversionResult addDatablockToBucket( HlmsDatablock  *datablock,
                                                         MaterialBucket &bucket );
+        /// The one conversion: writes `datablock`'s row at `slot` of `bucket` and fills
+        /// `out`. Used for a first conversion AND for an in-place refresh.
+        void writeRow( HlmsDatablock *datablock, MaterialBucket &bucket, uint32 slot,
+                       DatablockConversionResult &out );
 
         uint16 getPoolSliceIdxForTexture( TextureGpu *texture );
 
@@ -116,10 +121,49 @@ namespace Ogre
         void initTempResources( SceneManager *sceneManager );
         void destroyTempResources();
 
-        /// Adds a datablock, if not already cached.
-        /// If the datablock contains textures, then
-        /// initTempResources must already have been called.
-        DatablockConversionResult addDatablock( HlmsDatablock *datablock );
+        /** Converts a datablock, or - if it is already converted - RE-READS it and
+            re-writes its row in place, at the slot it already owns.
+        @remarks
+            If the datablock contains textures, initTempResources must already have
+            been called.
+
+            JAHSHAKA (ATOM P4b): a hit used to hand back the row exactly as it was first
+            written. That was harmless while every store died with its voxelizer on each
+            rebuild; a store SHARED by a chain outlives rebuilds, and a material edited
+            after its first conversion kept its first parameters for the rest of its life
+            (measured: emissive converted at 0.5 read 0.5 at 1, 3 and 12). The row is now
+            always re-read, so (bucketIdx, slotIdx) - the pair a GPU instance table names
+            a material by - stays valid AND describes the material as it is now.
+        @param outMoved
+            Set true when the datablock had to MOVE to another bucket: a bucket is
+            homogeneous in whether its materials carry an albedo and an emissive map (it
+            decides the compute job variant), so adding or removing either map changes
+            the datablock's (bucketIdx, slotIdx). Anything that recorded the old pair is
+            then wrong and must be told.
+        */
+        DatablockConversionResult addDatablock( HlmsDatablock *datablock, bool *outMoved = 0 );
+
+        /// The cached conversion, or null - a LOOKUP ONLY. Never converts, never needs the
+        /// temp resources, never re-reads the datablock: it is what a per-frame path (a
+        /// GPU scene composing an instance's material word) may ask.
+        const DatablockConversionResult *lookupDatablock( const HlmsDatablock *datablock ) const;
+
+        /** RE-READS EVERY CONVERTED DATABLOCK, in place where it can, and reports the ones
+            that had to move. The owner calls it when a material's parameters may have
+            changed; it is the store's end of the VCT lifecycle's "always from scratch"
+            rule for the one piece of state that now outlives a rebuild. Needs the temp
+            resources (a texture new to the pool is rendered into it).
+        */
+        void refreshAll( FastArray<HlmsDatablock *> *moved );
+
+        /// THE BUCKETS, which ARE the voxelize dispatches (one per bucket per octant): a
+        /// bucket is one material POOL - one const buffer of up to 1024 rows - and it is
+        /// homogeneous in whether its rows sample the albedo and emissive maps, which is
+        /// what picks the compute job variant.
+        size_t getNumBuckets() const { return mBuckets.size(); }
+        ConstBufferPacked *getBucketBuffer( size_t idx ) const { return mBuckets[idx].buffer; }
+        bool getBucketHasDiffuse( size_t idx ) const { return mBuckets[idx].hasDiffuse; }
+        bool getBucketHasEmissive( size_t idx ) const { return mBuckets[idx].hasEmissive; }
         /// JAHSHAKA PATCH 0081: FORGET A DATABLOCK THAT IS ABOUT TO DIE. The
         /// conversion cache is keyed by the raw datablock pointer across builds,
         /// so a datablock destroyed and another created at the same address
@@ -129,7 +173,9 @@ namespace Ogre
         /// in its membership set on purpose: slots are numbered by that set's
         /// size, so removing it would hand the next datablock a slot another
         /// live one already holds. One slot per death leaks until the material
-        /// object is recreated (a mode or quality change); stated, not hidden.
+        /// object is recreated (a mode or quality change); stated, not hidden. A
+        /// datablock that MOVES bucket (addDatablock's outMoved) leaks its old slot
+        /// the same way and for the same reason.
         void removeDatablock( const HlmsDatablock *datablock );
 
         TextureGpu *getTexturePool() const { return mTexturePool; }
@@ -139,11 +185,6 @@ namespace Ogre
         /// discover it as an untextured material.
         bool hasTempResources() const { return mDownsampleTex != 0; }
 
-        /// Forgets every conversion and keeps every resource - see the definition. The
-        /// owner of a store that outlives a rebuild MUST call this when a material's
-        /// parameters may have changed, because addDatablock's cache hit never re-reads
-        /// the datablock.
-        void clearConversions();
     };
 }  // namespace Ogre
 

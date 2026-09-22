@@ -105,12 +105,15 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    VctMaterial::DatablockConversionResult VctMaterial::addDatablockToBucket( HlmsDatablock *datablock,
-                                                                              MaterialBucket &bucket )
+    /// ONE ROW, WRITTEN AT A SLOT THE CALLER CHOSE. The conversion itself - the
+    /// datablock's colours, its background diffuse, its transparency and the texture
+    /// pool slices of its albedo and emissive maps - is the same whether the slot is
+    /// new or the datablock already owns it, so both the first conversion and an
+    /// in-place refresh go through here and cannot drift apart.
+    void VctMaterial::writeRow( HlmsDatablock *datablock, MaterialBucket &bucket, uint32 slot,
+                                DatablockConversionResult &out )
     {
-        const size_t usedSlots = bucket.datablocks.size();
-
-        OGRE_ASSERT_MEDIUM( usedSlots < c_numDatablocksPerConstBuffer );
+        OGRE_ASSERT_MEDIUM( slot < c_numDatablocksPerConstBuffer );
 
         ShaderVctMaterial shaderMaterial;
         memset( &shaderMaterial, 0, sizeof( shaderMaterial ) );
@@ -145,51 +148,70 @@ namespace Ogre
         TextureGpu *diffuseTex = datablock->getDiffuseTexture();
         TextureGpu *emissiveTex = datablock->getEmissiveTexture();
 
-        DatablockConversionResult conversionResult;
-        conversionResult.slotIdx = static_cast<uint32>( usedSlots );
-        conversionResult.bucketIdx = static_cast<uint32>( &bucket - &mBuckets.front() );
-        conversionResult.constBuffer = bucket.buffer;
+        out = DatablockConversionResult();
+        out.slotIdx = slot;
+        out.bucketIdx = static_cast<uint32>( &bucket - &mBuckets.front() );
+        out.constBuffer = bucket.buffer;
         if( diffuseTex )
         {
-            conversionResult.diffuseTexIdx = getPoolSliceIdxForTexture( diffuseTex );
-            shaderMaterial.diffuseTexIdx = conversionResult.diffuseTexIdx;
+            out.diffuseTexIdx = getPoolSliceIdxForTexture( diffuseTex );
+            shaderMaterial.diffuseTexIdx = out.diffuseTexIdx;
         }
         if( emissiveTex )
         {
-            conversionResult.emissiveTexIdx = getPoolSliceIdxForTexture( emissiveTex );
-            shaderMaterial.emissiveTexIdx = conversionResult.emissiveTexIdx;
+            out.emissiveTexIdx = getPoolSliceIdxForTexture( emissiveTex );
+            shaderMaterial.emissiveTexIdx = out.emissiveTexIdx;
         }
 
-        bucket.buffer->upload( &shaderMaterial, usedSlots * sizeof( ShaderVctMaterial ),
+        bucket.buffer->upload( &shaderMaterial, slot * sizeof( ShaderVctMaterial ),
                                sizeof( ShaderVctMaterial ) );
-
+    }
+    //-------------------------------------------------------------------------
+    VctMaterial::DatablockConversionResult VctMaterial::addDatablockToBucket( HlmsDatablock *datablock,
+                                                                              MaterialBucket &bucket )
+    {
+        // SLOTS ARE NUMBERED BY THE MEMBERSHIP SET'S SIZE (0081 keeps dead and moved
+        // pointers in it on purpose - see removeDatablock), so a new datablock takes
+        // the next slot and no live one's slot is ever handed out twice.
+        const uint32 slot = static_cast<uint32>( bucket.datablocks.size() );
+        DatablockConversionResult conversionResult;
+        writeRow( datablock, bucket, slot, conversionResult );
         bucket.datablocks.insert( datablock );
         mDatablockConversionResults[datablock] = conversionResult;
-
         return conversionResult;
     }
     //-------------------------------------------------------------------------
-    void VctMaterial::clearConversions()
+    const VctMaterial::DatablockConversionResult *VctMaterial::lookupDatablock(
+        const HlmsDatablock *datablock ) const
     {
-        // FORGET EVERY CONVERSION, KEEP EVERY RESOURCE. `addDatablock` returns a CACHED
-        // row on a hit and never re-reads the datablock, so a material whose parameters
-        // change after its first conversion keeps its first row for as long as this
-        // store lives. That was invisible while a store died with its voxelizer every
-        // rebuild; a store shared by a chain outlives rebuilds, so the cache needs an
-        // explicit end of life - this is it, called by the owner at every from-scratch
-        // build and whenever a live material's voxel inputs change.
-        //
-        // The const buffers and the texture pool are NOT destroyed: the next build
-        // re-converts and overwrites the slots it uses, and destroying a buffer a live
-        // voxelizer's dispatch may still name is the hazard the shared store exists to
-        // avoid. Only the memberships go, so slots are handed out from zero again.
-        mDatablockConversionResults.clear();
-        BucketVec::iterator itor = mBuckets.begin();
-        BucketVec::iterator endt = mBuckets.end();
+        DatablockConversionResultMap::const_iterator itor =
+            mDatablockConversionResults.find( const_cast<HlmsDatablock *>( datablock ) );
+        return itor != mDatablockConversionResults.end() ? &itor->second : 0;
+    }
+    //-------------------------------------------------------------------------
+    void VctMaterial::refreshAll( FastArray<HlmsDatablock *> *moved )
+    {
+        // THE KEYS FIRST: a datablock that has to MOVE is erased from the map and
+        // re-inserted while this walks, so the walk is over a copy.
+        FastArray<HlmsDatablock *> datablocks;
+        datablocks.reserve( mDatablockConversionResults.size() );
+        DatablockConversionResultMap::const_iterator itor = mDatablockConversionResults.begin();
+        DatablockConversionResultMap::const_iterator endt = mDatablockConversionResults.end();
         while( itor != endt )
         {
-            itor->datablocks.clear();
+            datablocks.push_back( itor->first );
             ++itor;
+        }
+
+        FastArray<HlmsDatablock *>::const_iterator itDb = datablocks.begin();
+        FastArray<HlmsDatablock *>::const_iterator enDb = datablocks.end();
+        while( itDb != enDb )
+        {
+            bool bMoved = false;
+            addDatablock( *itDb, &bMoved );
+            if( bMoved && moved )
+                moved->push_back( *itDb );
+            ++itDb;
         }
     }
     //-------------------------------------------------------------------------
@@ -338,32 +360,55 @@ namespace Ogre
             mDatablockConversionResults.erase( it );
     }
     //-------------------------------------------------------------------------
-    VctMaterial::DatablockConversionResult VctMaterial::addDatablock( HlmsDatablock *datablock )
+    VctMaterial::DatablockConversionResult VctMaterial::addDatablock( HlmsDatablock *datablock,
+                                                                      bool *outMoved )
     {
-        DatablockConversionResult retVal;
+        if( outMoved )
+            *outMoved = false;
 
-        DatablockConversionResultMap::const_iterator itResult =
-            mDatablockConversionResults.find( datablock );
+        DatablockConversionResultMap::iterator itResult = mDatablockConversionResults.find( datablock );
         if( itResult != mDatablockConversionResults.end() )
-            retVal = itResult->second;
-        else
         {
-            MaterialBucket *bucket = findFreeBucketFor( datablock );
-            if( !bucket )
+            // A HIT IS RE-READ, NEVER TRUSTED. The row used to be handed back as it was
+            // first written, which was harmless while every store died with its
+            // voxelizer on each rebuild; a store that outlives rebuilds would then keep
+            // a material's FIRST parameters for the rest of its life (measured: the
+            // same datablock converted at emissive 0.5 read 0.5 at 1, 3 and 12). The row
+            // is re-written in place, at the slot the datablock already owns, so every
+            // consumer that names that slot sees the material as it is now.
+            MaterialBucket &bucket = mBuckets[itResult->second.bucketIdx];
+            const bool needsDiffuse = datablock->getDiffuseTexture() != 0;
+            const bool needsEmissive = datablock->getEmissiveTexture() != 0;
+            if( bucket.hasDiffuse == needsDiffuse && bucket.hasEmissive == needsEmissive )
             {
-                // Create a new bucket
-                MaterialBucket newBucket;
-                newBucket.buffer = mVaoManager->createConstBuffer(
-                    c_numDatablocksPerConstBuffer * sizeof( ShaderVctMaterial ), BT_DEFAULT, 0, false );
-                newBucket.hasDiffuse = datablock->getDiffuseTexture() != 0;
-                newBucket.hasEmissive = datablock->getEmissiveTexture() != 0;
-                mBuckets.push_back( newBucket );
-                bucket = &mBuckets.back();
+                writeRow( datablock, bucket, itResult->second.slotIdx, itResult->second );
+                return itResult->second;
             }
 
-            retVal = addDatablockToBucket( datablock, *bucket );
+            // THE BUCKET'S CLASS NO LONGER FITS - a texture was added to or taken off the
+            // material, and a bucket is homogeneous in that (it decides the compute job
+            // variant). The datablock MOVES. Its old slot is abandoned, not freed: the
+            // membership set keeps the pointer, exactly as 0081 keeps a dead one, because
+            // slots are numbered by that set's size. The caller is told, because anything
+            // that recorded the old (bucket, slot) is now wrong.
+            mDatablockConversionResults.erase( itResult );
+            if( outMoved )
+                *outMoved = true;
         }
 
-        return retVal;
+        MaterialBucket *bucket = findFreeBucketFor( datablock );
+        if( !bucket )
+        {
+            // Create a new bucket
+            MaterialBucket newBucket;
+            newBucket.buffer = mVaoManager->createConstBuffer(
+                c_numDatablocksPerConstBuffer * sizeof( ShaderVctMaterial ), BT_DEFAULT, 0, false );
+            newBucket.hasDiffuse = datablock->getDiffuseTexture() != 0;
+            newBucket.hasEmissive = datablock->getEmissiveTexture() != 0;
+            mBuckets.push_back( newBucket );
+            bucket = &mBuckets.back();
+        }
+
+        return addDatablockToBucket( datablock, *bucket );
     }
 }  // namespace Ogre

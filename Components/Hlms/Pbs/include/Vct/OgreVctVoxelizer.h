@@ -30,14 +30,8 @@ THE SOFTWARE.
 
 #include "OgreVctVoxelizerSourceBase.h"
 
-// The download helper used to be included here and pulled these in with it.
+#include "OgreResourceTransition.h"
 #include "Vao/OgreVertexBufferPacked.h"
-
-#include "ogrestd/map.h"
-
-#ifdef OGRE_FORCE_VCT_VOXELIZER_DETERMINISTIC
-#    include "OgreMesh2.h"
-#endif
 
 #include "OgreHeaderPrefix.h"
 
@@ -54,8 +48,9 @@ namespace Ogre
         /// permutation and a bucket key. The shader now reads each instance's geometry
         /// where the raster reads it, through the buffer device addresses and the
         /// layout in its geometry row, so the width and the packing are per-MESH DATA
-        /// read at runtime and no longer split a dispatch. Sixteen job variants became
-        /// four, and two reasons for one octant to need several dispatches disappeared.
+        /// read at runtime and no longer split a dispatch. What is left is the one
+        /// thing a dispatch genuinely binds differently: whether the material pool's
+        /// rows sample an albedo and an emissive map.
         enum VoxelizerJobSetting
         {
             HasDiffuseTex = 1u << 0u,
@@ -63,87 +58,29 @@ namespace Ogre
         };
     }
 
-    struct VoxelizerBucket
-    {
-        HlmsComputeJob    *job;
-        ConstBufferPacked *materialBuffer;
-        bool               needsTexPool;
-        /// WHAT THIS BUCKET IS, said without a pointer: the compute job's VARIANT
-        /// (the VoxelizerJobSetting bits — it also decides the vertex and index
-        /// buffers) and the material POOL its const buffer is. See operator< below.
-        uint32             variant;
-        uint32             materialBucketIdx;
-
-        /// ORDERED BY WHAT A BUCKET IS, NEVER BY WHERE IT LIVES.
-        ///
-        /// This ordering is the ORDER THE DISPATCHES RUN IN (VctVoxelizer::build
-        /// iterates mBuckets). Comparing POINTERS made that order the allocator's,
-        /// and the voxelisation's per-voxel merge used to be order-dependent, so
-        /// the same scene voxelised in two processes was not the same picture and
-        /// no re-solve could correct it (the VOXELS differed). Patch 0065 made the
-        /// merge itself order-independent — the dispatches accumulate exact integer
-        /// sums and one resolve pass turns them into the voxel textures — so the
-        /// order no longer decides anything; this key stays because a stable order
-        /// is still the right thing for a renderer to have, and it costs nothing.
-        ///
-        /// A BUCKET IS A DISPATCH, AND A DISPATCH IS SIZED BY THE WHOLE OCTANT
-        /// however few instances it holds, so the key must name only what a
-        /// dispatch BINDS: the job variant (which also decides the vertex and index
-        /// buffers and the texture pool) and the material POOL's const buffer. The
-        /// material SLOT rides per instance and must NOT be here — patch 0062 put
-        /// it here to buy determinism from the pin's order-dependent merge, and it
-        /// split one whole-volume dispatch into one PER MATERIAL: on a scene whose
-        /// 8,001 primitives each own a material the outermost cascade's rebuild
-        /// went 86 -> 321 ms. The pointer comparisons remain underneath as a
-        /// total-order tie-break that nothing reaches.
-        bool operator<( const VoxelizerBucket &other ) const
-        {
-            if( this->variant != other.variant )
-                return this->variant < other.variant;
-            if( this->materialBucketIdx != other.materialBucketIdx )
-                return this->materialBucketIdx < other.materialBucketIdx;
-            if( this->needsTexPool != other.needsTexPool )
-                return this->needsTexPool < other.needsTexPool;
-            if( this->job != other.job )
-                return this->job < other.job;
-            return this->materialBuffer < other.materialBuffer;
-        }
-    };
-
-#ifdef OGRE_FORCE_VCT_VOXELIZER_DETERMINISTIC
-    struct DeterministicMeshPtrOrder
-    {
-        bool operator()( const MeshPtr &a, const MeshPtr &b ) const
-        {
-            return a->getName() < b->getName();
-        }
-    };
-#endif
-
     /**
     @class VctVoxelizer
-        The voxelizer consists in several stages. The main ones that requre explanation are:
+        THE RASTER VOXELIZER, FED BY THE GPU (Jahshaka, ATOM P4b).
 
-        1. Download the vertex buffers to CPU, then upload it again to GPU in an homogeneous
-           format our compute shader understands. We do the same with the index buffer, except
-           we perform GPU -> GPU copies. We can't use the buffers directly because in many
-           APIs we can't bind the index buffer as an UAV easily.
-           This step is handled by VctVoxelizer::buildMeshBuffers.
-           Not implemented yet: when rebuilding the voxelized scene, this step can be skipped
-           if no meshes were added since the last change (and the buffers weren't freed
-           to save memory)
+        Upstream's voxelizer was fed on the CPU: items were added one by one, and every
+        build() downloaded their geometry, bucketed them by material, culled them against
+        each octant and uploaded an instance buffer. Each of those steps is gone:
 
-        2. Iterate through every Item and convert the datablocks to the simplified version
-           our compute shader uses. VctMaterial handles this; done in
-           VctVoxelizer::placeItemsInBuckets.
+        1. GEOMETRY is read where the raster keeps it: a host-owned table of
+           GeometryRows (two device addresses and a vertex layout per (mesh, level,
+           submesh)), bound with setGeometrySource and written ONCE per mesh.
+        2. MATERIALS live in a store the voxelizer does not own (the constructor), shared
+           by a whole chain so that a material's (pool, slot) is a scene-wide fact.
+        3. INSTANCES arrive as a host-written buffer of 96-byte records, grouped by
+           (octant, bucket) with each group's (start, count) in a RANGES buffer - both
+           written by a compute job on the device (setInstanceSource). No Item* is held,
+           so the "raw Item* until removeAllItems" lifetime rule does not exist here any
+           more.
 
-        3. During step 2, we also group the items into buckets. Each bucket can be batched
-           together to dispatch a single compute shader execution; because they share all
-           the same settings (and we haven't run out of material buffer space)
-
-        4. The items grouped in buckets may be split into 8 instance buffers; in order to
-           cull each octant of the voxel; thus avoiding having all voxels try to check
-           for all instances (performance optimization).
+        What remains here is the part that was always the voxelizer's: the voxel volumes,
+        the octants, and one voxelize dispatch per (octant, bucket), each reading its
+        loop bound from the ranges buffer - the dispatch's thread count is the OCTANT's,
+        never the instance count's, so no indirect dispatch is needed.
     */
     class _OgreHlmsPbsExport VctVoxelizer : public VctVoxelizerSourceBase
     {
@@ -223,81 +160,64 @@ namespace Ogre
         */
         void setGeometrySource( UavBufferPacked *rows ) { mGeometryBuffer = rows; }
 
+        /// THE INSTANCE RECORD the voxelize shader reads (`InstanceBuffer` in
+        /// Voxelizer_piece_cs.any), 96 bytes: the world transform as three ROWS, the
+        /// record's world AABB centre, its half size with the material SLOT bit-cast into
+        /// .w, and (geometry row, first index, index count, unused). A host writing
+        /// records - the GPU gather - writes exactly this.
+        static const uint32 kInstanceRecordBytes = 96u;
+        /// The indices one record covers at most. A mesh with more triangles is split
+        /// into partitions of this many indices, each with its own AABB, so a voxel group
+        /// that misses a partition skips it whole - the broadphase that keeps a big mesh
+        /// from costing every group every triangle. The host partitions; this is the
+        /// number it partitions by.
+        static const uint32 kIndicesPerPartition = 2001u;
+
+        /// THE RANGE a (octant, bucket) dispatch reads, as an index into the ranges
+        /// buffer. The host's gather and build() must agree on it, so it is written once.
+        static uint32 rangeIndex( uint32 octant, uint32 bucket, uint32 numBuckets )
+        {
+            return octant * numBuckets + bucket;
+        }
+
+        /** THE INSTANCE SOURCE - the host's, NOT OWNED, bound for every dispatch.
+        @param records
+            96-byte records (kInstanceRecordBytes), created with BB_FLAG_UAV |
+            BB_FLAG_READONLY so this class can take its read-only view.
+        @param ranges
+            One uvec2 (start, count) per rangeIndex( octant, bucket, VctMaterial::getNumBuckets() ):
+            the records of that (octant, bucket), which the voxelize shader loops over.
+        @remarks
+            Re-bind before every build(): a host that grows its buffers destroys the old
+            ones, and a pointer taken earlier would dangle (Ogre's destroy is delayed, so
+            a dangling read is not a fault - it is a hung channel).
+        */
+        void setInstanceSource( UavBufferPacked *records, UavBufferPacked *ranges );
+
+        /** THE MESH-LOCAL AABB OF EVERY PARTITION, computed on the device by Ogre's own
+            VCT/AabbCalculator job - the job this class used to run on every build over
+            its private geometry. A partition's AABB is a fact about its MESH, so a host
+            computes it once when the mesh set changes and keeps it.
+        @param geometryRows
+            The host's geometry row table (the rows the partitions name).
+        @param partitions
+            PFG_RGBA32_UINT, one (geometry row, first index, index count, 0) per
+            partition.
+        @param outAabbs
+            Two float4 per partition: (centre, 1) and (half size, 0), mesh-local.
+        */
+        static void computePartitionAabbs( HlmsManager *hlmsManager, RenderSystem *renderSystem,
+                                           UavBufferPacked *geometryRows,
+                                           TexBufferPacked *partitions, UavBufferPacked *outAabbs,
+                                           uint32 numPartitions );
+
     protected:
-        struct PartitionedSubMesh
-        {
-            /// Element offset of this partition's first index INSIDE its level's index
-            /// buffer (the level's own primitiveStart is already folded in).
-            uint32 firstIndex;
-            uint32 numIndices;
-            uint32 aabbSubMeshIdx;
-        };
-
-        struct QueuedSubMesh
-        {
-            /// Row in the HOST's geometry table (setGeometrySource). The voxelizer no
-            /// longer describes geometry: `addItem` is told the row of this (mesh,
-            /// level, submesh 0) and the rows of one level are contiguous, so submesh s
-            /// is geomRowBase + s. 0xFFFFFFFF = the host had no row for it.
-            uint32                        geomRow;
-            FastArray<PartitionedSubMesh> partSubMeshes;
-        };
-
-        typedef FastArray<QueuedSubMesh> QueuedSubMeshArray;
-
-        /// ONE LOD LEVEL OF A QUEUED MESH. A level nobody asked for holds nothing and
-        /// costs nothing: the table only describes levels some instance is voxelized at.
-        struct QueuedMeshLevel
-        {
-            bool               wanted;
-            /// The host's row for (this mesh, this level, submesh 0); 0xFFFFFFFF = none.
-            uint32             geomRowBase;
-            QueuedSubMeshArray submeshes;
-            QueuedMeshLevel() : wanted( false ), geomRowBase( 0xFFFFFFFFu ) {}
-        };
-
-        struct QueuedMesh
-        {
-            uint32                      numItems;
-            uint32                      indexCountSplit;
-            /// Indexed by LOD level. `lodLevel` and "the finest request wins" are GONE
-            /// (patch 0064's rule): nothing is downloaded per mesh any more, so two
-            /// instances of one mesh can be voxelized at two levels and each pays for
-            /// its own.
-            FastArray<QueuedMeshLevel>  levels;
-        };
-
-        /// ONE QUEUED ITEM AND THE LEVEL IT ASKED FOR. The level is the ITEM's, not the
-        /// mesh's - see QueuedMesh::levels.
-        struct QueuedItem
-        {
-            Item  *item;
-            uint32 lodLevel;
-        };
-
-        typedef map<v1::MeshPtr, bool>::type v1MeshPtrMap;
-#ifdef OGRE_FORCE_VCT_VOXELIZER_DETERMINISTIC
-        typedef map<MeshPtr, QueuedMesh, DeterministicMeshPtrOrder>::type MeshPtrMap;
-#else
-        typedef map<MeshPtr, QueuedMesh>::type MeshPtrMap;
-#endif
-        typedef FastArray<QueuedItem> ItemArray;
-
-        v1MeshPtrMap mMeshesV1;
-        MeshPtrMap   mMeshesV2;
-
-        ItemArray mItems;
-
         /// HlmsComputeJob have internal caches, thus we could dynamically change properties
         /// and let the internal cache handle whether a compute job needs to be compiled.
         ///
         /// However the way we will be using may abuse the cache too much, thus we pre-set
         /// all variants as long as the number of variants is manageable.
         HlmsComputeJob *mComputeJobs[1u << 2u];
-        /// ONE AABB CALCULATOR, not four: its variants were the index width and the
-        /// vertex packing, both of which are now data in a geometry row.
-        HlmsComputeJob *mAabbCalculator;
-        HlmsComputeJob *mAabbWorldSpaceJob;
 
         /// Jahshaka patch 0065 — THE ORDER-INDEPENDENT MERGE'S ACCUMULATOR.
         ///
@@ -315,59 +235,22 @@ namespace Ogre
         /// site).
         TextureGpu *mMergeAccumTex;
 
-        uint32                mTotalNumInstances;
-        float                *mCpuInstanceBuffer;
-        UavBufferPacked      *mInstanceBuffer;
-        ReadOnlyBufferPacked *mInstanceBufferAsTex;
-        /// THE HOST'S GEOMETRY TABLE (setGeometrySource) - NOT OWNED. One GeometryRow
-        /// per (mesh, level, submesh), written once at attach by whoever owns meshes.
-        /// This class used to own and rebuild it per build(); before that it owned four
+        /// THE HOST'S TABLES AND BUFFERS - NOT OWNED (setGeometrySource,
+        /// setInstanceSource). This class used to own a geometry table rebuilt per
+        /// build(), an instance buffer filled per build() on the CPU, and before that four
         /// private copies of the world's geometry.
-        UavBufferPacked *mGeometryBuffer;
-        // Aabb Calculator
-        uint32           mNumPartSubMeshes;
-        TexBufferPacked *mGpuPartitionedSubMeshes;
-        UavBufferPacked *mMeshAabb;
+        UavBufferPacked      *mGeometryBuffer;
+        UavBufferPacked      *mRecords;
+        ReadOnlyBufferPacked *mRecordsAsTex;
+        UavBufferPacked      *mRanges;
+        uint32                mLastDispatchCount;
 
         bool mNeedsAlbedoMipmaps;
         bool mNeedsAllMipmaps;
 
-        uint32 mDefaultIndexCountSplit;
-
         ComputeTools *mComputeTools;
 
-        struct QueuedInstance
-        {
-            MovableObject *movableObject;
-            /// Row in the geometry table - which (mesh, LEVEL, submesh) this instance
-            /// draws. `vertexBufferStart` is gone: the row's address already points at
-            /// this submesh's own vertex buffer.
-            uint32         geomRow;
-            uint32         firstIndex;
-            uint32         numIndices;
-            uint32         aabbSubMeshIdx;
-            uint32         materialIdx;
-            /// The LOD level this instance is voxelized at - a reading, for the
-            /// (mesh, level) histogram AT-A10 asks for.
-            uint32         lodLevel;
-            bool           needsAabbUpdate;
-        };
-        struct BucketData
-        {
-            typedef map<uint32, uint32>::type InstancesPerOctantIdxMap;
-
-            FastArray<QueuedInstance> queuedInst;
-            InstancesPerOctantIdxMap  numInstancesAfterCulling;
-        };
-        typedef map<VoxelizerBucket, BucketData>::type VoxelizerBucketMap;
-        VoxelizerBucketMap                             mBuckets;
-
         VctMaterial *mVctMaterial;
-
-        /// Whether mRegionToVoxelize is manually set or autocalculated
-        bool mAutoRegion;
-        /// Limit to mRegionToVoxelize in case mAutoRegion is true
-        Aabb mMaxRegion;
 
         struct Octant
         {
@@ -387,32 +270,14 @@ namespace Ogre
         ResourceTransitionArray mResourceTransitions;
 
         void createComputeJobs();
-        void clearComputeJobResources( bool calculatorDataOnly );
+        /// Unbinds every host buffer from the shared compute jobs - they live in
+        /// HlmsCompute and outlive this build and this object, and their descriptor
+        /// sets hold raw pointers.
+        void clearComputeJobResources();
 
-        /// Enumerates one (mesh, level)'s PARTITIONS and records the host's row index
-        /// for each submesh. It no longer describes geometry - that is
-        /// describeGeometryRow, called once per mesh by the host at attach.
-        void partitionMeshLevel( const MeshPtr &mesh, QueuedMesh &queuedMesh, uint32 level,
-                                 uint32 geomRowBase );
-        void prepareAabbCalculatorMeshData();
-        void destroyAabbCalculatorMeshData();
-
-        void freeBuffers( bool bForceFree );
-
-        /// Enumerates the queue's partitions and the AABB calculator's inputs. It no
-        /// longer builds a geometry table: the host's is bound by setGeometrySource.
-        void buildPartitionTable();
         void createVoxelTextures();
         /// Jahshaka patch 0065: drops mMergeAccumTex too.
         void destroyVoxelTextures() override;
-
-        void   placeItemsInBuckets();
-        size_t countSubMeshPartitionsIn( const QueuedItem &queuedItem ) const;
-        void   createInstanceBuffers();
-        void   destroyInstanceBuffers();
-        void   fillInstanceBuffers();
-
-        void computeMeshAabbs();
 
         void clearVoxels();
 
@@ -436,8 +301,8 @@ namespace Ogre
                 voxelizer dispatched it. With one store there is one pool.
 
                 The owner creates it before any voxelizer and destroys it after all of
-                them, and brackets a whole chain's builds with ONE
-                initTempResources/destroyTempResources pair.
+                them. build() converts nothing - the owner does, before it gathers - so
+                build() needs none of the store's temp resources.
         */
         VctVoxelizer( IdType id, RenderSystem *renderSystem, HlmsManager *hlmsManager,
                       bool correctAreaLightShadows, VctMaterial *materialStore );
@@ -445,78 +310,11 @@ namespace Ogre
 
         void _setNeedsAllMipmaps( bool bNeedsAllMipmaps ) { mNeedsAllMipmaps = bNeedsAllMipmaps; }
 
-        /**
-        @param item
-            The item to voxelize.
-        @param indexCountSplit
-            0 to use mDefaultIndexCountSplit. Use a different value to override.
-            This value is ignored if the mesh had already been added.
-
-            Use std::numeric_limits<uint32>::max to avoid partitioning at all.
-        @param lodLevel
-            Which LOD level of the item's mesh to voxelize. 0 (the default) is the
-            finest level. Higher levels are clamped to the levels the mesh actually
-            has, so a mesh with no LOD chain is voxelized exactly as before.
-
-            THE LEVEL IS THE ITEM'S (Jahshaka, ATOM P4 / AT-A10). It used to be the
-            MESH's inside this voxelizer, and the FINEST request won, because the
-            mesh's geometry was downloaded and converted once per mesh: one mesh
-            instanced at 1x near the eye and 10x far away paid the near level for all
-            eleven. Nothing is downloaded now - the shader reads each instance's own
-            level through its geometry row - so each instance gets the level it asked
-            for and a volume's cost follows its own error rule.
-
-            A voxel grid cannot represent detail finer than its own cell, so a coarse
-            volume voxelizing a simplified level produces the same voxels for a
-            fraction of the raster cost. The caller decides which level that is; this
-            class only spends it.
-
-        @remarks
-            The `bCompressed` argument is GONE. It chose between two PRIVATE vertex
-            formats this class no longer has: the shader reads the pool's own vertices
-            through the layout in the geometry row, so "compressed" is whatever the
-            mesh was baked as and is not a decision a caller can make here.
+        /** THE REGION, always explicit. The automatic region (fit to the added items) is
+            GONE with the items: this class holds none, and the host - which fits the
+            region to what it wants voxelised - always passed one anyway.
         */
-        /** @param geomRowBase
-                The host's geometry-table row for (this mesh, `lodLevel`, submesh 0);
-                submesh s is geomRowBase + s. 0xFFFFFFFF means the host has no rows for
-                this mesh at this level, and the item is refused with a log line - the
-                same honest "GI is empty" path a device with no buffer device addresses
-                takes.
-        */
-        void addItem( Item *item, uint32 indexCountSplit = 0u, uint32 lodLevel = 0u,
-                      uint32 geomRowBase = 0xFFFFFFFFu );
-
-        /** Removes an item added via VctVoxelizer::addItem
-        @remarks
-            Once the last item that shares the same mesh is removed, the entry about
-            that mesh is also removed.
-            That means informations such as 'compressed' setting is forgot.
-
-            Will throw if Item is not found.
-        @param item
-            Item to remove
-        */
-        void removeItem( Item *item );
-
-        /// Removes all items added via VctVoxelizer::addItem
-        void removeAllItems();
-
-        /** Call this function before VctVoxelizer::autoCalculateRegion
-        @param autoRegion
-            True to autocalculate region to cover all the added items
-            False to use 'regionToVoxelize' instead
-        @param regionToVoxelize
-            When autoRegion = false, use this to manually provide the region
-            When autoRegion = true, it is ignored as it will be overwritten by autoCalculateRegion
-        @param maxRegion
-            Maximum size of the regions are allowed to cover (mostly useful when autoRegion = true)
-        */
-        void setRegionToVoxelize( bool autoRegion, const Aabb &regionToVoxelize,
-                                  const Aabb &maxRegion = Aabb::BOX_INFINITE );
-
-        /// Does nothing if VctVoxelizer::setRegionToVoxelize( false, ... ) was called.
-        void autoCalculateRegion();
+        void setRegionToVoxelize( const Aabb &regionToVoxelize );
 
         void dividideOctants( uint32 numOctantsX, uint32 numOctantsY, uint32 numOctantsZ );
 
@@ -530,82 +328,21 @@ namespace Ogre
 
         void build( SceneManager *sceneManager );
 
-        /// Jahshaka patch 0065 — HOW MANY DISPATCHES THE LAST build() ISSUED.
-        ///
-        /// A bucket IS a dispatch, and a dispatch is sized by the whole OCTANT
-        /// however few instances the bucket holds, so `getNumBuckets() *
-        /// getNumOctants()` is the number that says whether a scene is paying
-        /// for its material count rather than for its geometry. It is the
-        /// reading patch 0062's 3.6x had no name for; exposed so the host can
-        /// report it (Jahshaka: GiStatus::CascadeStatus::voxelDispatches).
-        size_t getNumBuckets() const { return mBuckets.size(); }
+        /// Jahshaka patch 0065 — HOW MANY DISPATCHES THE LAST build() ISSUED: one per
+        /// material bucket per octant, the buckets being the STORE's (so the scene's
+        /// pool count, not this volume's: the gather writes zero records to a bucket
+        /// this volume does not hold, and that dispatch loops over none), and 0 when
+        /// the build had no instance source and only cleared the volume.
+        uint32 getLastDispatchCount() const { return mLastDispatchCount; }
         size_t getNumOctants() const { return mOctants.size(); }
+        /// The octant's world box - what a host's gather culls records against.
+        const Aabb &getOctantRegion( size_t idx ) const { return mOctants[idx].region; }
 
-        /// JAHSHAKA - HOW MANY INDICES THE LAST build() ACTUALLY BOUND.
-        ///
-        /// `QueuedInstance::numIndices` is what sizes each raster dispatch, and it is
-        /// filled in `placeItemsInBuckets` from the LEVEL THAT INSTANCE ASKED FOR,
-        /// clamped here to the levels the mesh has. Summing it is therefore a READING
-        /// of the geometry the volume holds, where a host walking the mesh's VAOs from
-        /// outside can only ever produce a prediction that re-implements the clamp and
-        /// drifts from it. Since the level is per instance, this number now also
-        /// reflects that a mesh instanced at two distances pays two different costs.
-        ///
-        /// Counted over the buckets and not over `mItems`, because the buckets are
-        /// what the dispatches iterate: an item the region declined contributes
-        /// nothing here, which is the honest answer.
-        size_t getQueuedIndexCount() const
-        {
-            size_t total = 0u;
-            VoxelizerBucketMap::const_iterator itor = mBuckets.begin();
-            VoxelizerBucketMap::const_iterator endt = mBuckets.end();
-            while( itor != endt )
-            {
-                FastArray<QueuedInstance>::const_iterator itInst = itor->second.queuedInst.begin();
-                FastArray<QueuedInstance>::const_iterator enInst = itor->second.queuedInst.end();
-                while( itInst != enInst )
-                {
-                    total += itInst->numIndices;
-                    ++itInst;
-                }
-                ++itor;
-            }
-            return total;
-        }
-        /// JAHSHAKA (ATOM P4 / AT-A10) - THE (mesh, LEVEL) HISTOGRAM, MEASURED.
-        ///
-        /// `out[level]` = how many queued instances the last build() voxelized at that
-        /// LOD level. On a mesh instanced at 1x and 10x this reads two non-zero entries;
-        /// under the old rule (the finest request winning for the whole mesh) it could
-        /// only ever read one, which is why a host-side histogram of what it ASKED for
-        /// was not evidence of what happened.
-        void getLevelHistogram( FastArray<uint32> &out ) const
-        {
-            out.clear();
-            VoxelizerBucketMap::const_iterator itor = mBuckets.begin();
-            VoxelizerBucketMap::const_iterator endt = mBuckets.end();
-            while( itor != endt )
-            {
-                FastArray<QueuedInstance>::const_iterator itInst = itor->second.queuedInst.begin();
-                FastArray<QueuedInstance>::const_iterator enInst = itor->second.queuedInst.end();
-                while( itInst != enInst )
-                {
-                    if( out.size() <= itInst->lodLevel )
-                        out.resize( itInst->lodLevel + 1u, 0u );
-                    ++out[itInst->lodLevel];
-                    ++itInst;
-                }
-                ++itor;
-            }
-        }
-
-    public:
         /// JAHSHAKA PATCH 0081: the material store, so a host can evict a dying
         /// datablock (VctMaterial::removeDatablock) instead of re-voxelising every
         /// volume. NOT OWNED - see the constructor. The host that owns the store
         /// should evict on the STORE, once, rather than through each voxelizer.
         VctMaterial *getVctMaterial() const { return mVctMaterial; }
-
     };
 }  // namespace Ogre
 
