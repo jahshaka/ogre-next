@@ -33,5 +33,5 @@ void main()
 	longlat.x = atan2( cameraDir.x, -cameraDir.z ) + PI;
 	longlat.y = acos( cameraDir.y );
 	float2 uv = longlat / float2( 2.0f * PI, PI );
-	fragColour = texture( vkSampler2DArray( skyEquirectangular, samplerState ), vec3( uv.xy, 0 ) );
+	fragColour = texture( vkSampler2DArray( skyEquirectangular, samplerState ), vec3( uv.xy, sliceIdx ) );
 }
