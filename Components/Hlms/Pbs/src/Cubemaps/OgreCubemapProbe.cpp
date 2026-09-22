@@ -451,7 +451,8 @@ namespace Ogre
     bool CubemapProbe::isInitialized() const { return mWorkspace != 0; }
     //-----------------------------------------------------------------------------------
     void CubemapProbe::set( const Vector3 &cameraPos, const Aabb &area, const Vector3 &areaInnerRegion,
-                            const Matrix3 &orientation, const Aabb &probeShape )
+                            const Matrix3 &orientation, const Aabb &probeShape,
+                            bool bValuesAlreadyPadded )
     {
         mProbeCameraPos = cameraPos;
         mArea = area;
@@ -461,9 +462,19 @@ namespace Ogre
         mProbeShape = probeShape;
 
         // Add some padding.
-        Real padding = 1.005f;
-        mArea.mHalfSize *= padding;
-        mProbeShape.mHalfSize *= padding;
+        //
+        // Jahshaka patch 0049: ONCE. The padding exists so that adjacent probe
+        // areas overlap instead of leaving a crack between them, and so that a
+        // shape fitted to its area still contains it — both properties of the
+        // boxes the CALLER authored. A caller re-publishing boxes this probe
+        // already returned is not authoring them again, and compounding the
+        // padding there grows the parallax box half a percent per call.
+        if( !bValuesAlreadyPadded )
+        {
+            Real padding = 1.005f;
+            mArea.mHalfSize *= padding;
+            mProbeShape.mHalfSize *= padding;
+        }
 
         mAreaInnerRegion.makeCeil( Vector3::ZERO );
         mAreaInnerRegion.makeFloor( Vector3::UNIT_SCALE );

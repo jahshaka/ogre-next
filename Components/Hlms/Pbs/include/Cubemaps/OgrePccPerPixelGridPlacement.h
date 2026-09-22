@@ -82,6 +82,18 @@ namespace Ogre
         /// We store everything (mip N of all probes) contiguously in mDownloadedImages
         uint8 *mDownloadedImages;
 
+        /// WHAT EACH PROBE'S SIX FACES MEASURED, kept instead of thrown away
+        /// (Jahshaka patch 0047). Six entries per probe, in CubemapSide order
+        /// (PX, NX, PY, NY, PZ, NZ), each one the averaged distance that face
+        /// saw expressed as a MULTIPLE of the distance from the probe's camera
+        /// to mFullRegion's own face along that direction:
+        ///     0     the face is looking at something at the camera itself
+        ///     1     what it sees sits exactly on the region's face
+        ///     2     nothing it can see is within twice that distance
+        ///           (the encoding saturates there -- see processProbeDepth)
+        /// Empty until buildEnd has run; sized getMaxNumProbes() * 6 after it.
+        FastArray<float> mProbeDepthRatios;
+
         void allocateImages();
         void deallocateImages();
 
@@ -131,6 +143,23 @@ namespace Ogre
         */
         void          setNumProbes( uint32 numProbes[3] );
         const uint32 *getNumProbes() const { return mNumProbes; }
+
+        /** What every probe's six faces MEASURED during buildEnd, as a multiple of
+            the distance to mFullRegion's own faces (see mProbeDepthRatios).
+
+            The placement uses these ratios to fit each probe's shape and then
+            discards them, and the fitted shape cannot be read backwards into them:
+            it is padded (1%), snapped to the full region, snapped to the grid's
+            sides, and finally saturates at the region for anything the probe could
+            not see. A caller that needs to know whether a probe saw ANYTHING --
+            e.g. to drop probes that photographed nothing but sky rather than pay
+            for and shade through them -- needs the measurement itself.
+
+            Six floats per probe, probeIdx * 6u + CubemapSide, in the same probe
+            order as ParallaxCorrectedCubemapBase::getProbes(). Empty before
+            buildEnd.
+        */
+        const FastArray<float> &getProbeDepthRatios() const { return mProbeDepthRatios; }
 
         /** PccPerPixelGridPlacement needs, as guidance, the maximum region it will be occupying.
 
@@ -282,7 +311,25 @@ namespace Ogre
 
             See PccPerPixelGridPlacement::buildStart
          */
-        void buildEnd();
+        /** @param refreshProbes
+            When false, the probes are NOT re-rendered after their shapes have been
+            fitted (Jahshaka patch 0047).
+
+            FOR A MEASURING CALLER ONLY — one that reads getProbeDepthRatios() and
+            the fitted shapes and then DESTROYS the probes. A caller that keeps them
+            must let this run, or run updateAllDirtyProbes() itself afterwards, for
+            two reasons: processProbeDepth re-publishes every probe through
+            CubemapProbe::set, which raises mDirty unconditionally (so the
+            ParallaxCorrectedCubemapAuto would collect them all in frameStarted and
+            render them, unbudgeted, on the next frame), and the packed depth each
+            probe holds was encoded against mFullRegion while the shader decodes it
+            against the probe's FITTED shape — the closing render is that re-encode.
+
+            Deferring it is legitimate and is what Jahshaka does: destroy or clamp
+            the probes first, then call updateAllDirtyProbes() once over the ones
+            that survived, with their final shapes.
+        */
+        void buildEnd( bool refreshProbes = true );
 
         /// ParallaxCorrectedCubemapAutoListener overloads
         void preCopyRenderTargetToCubemap( TextureGpu *renderTarget, uint32 cubemapArrayIdx ) override;

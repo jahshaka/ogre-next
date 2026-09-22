@@ -205,6 +205,17 @@ namespace Ogre
         for( size_t i = 0u; i < 6u; ++i )
             colourVal[i] = box.getColourAt( 0u, 0u, sliceIdx + i, pixelFormat );
 
+        // Jahshaka patch 0047: keep what was measured. alpha is 0.5 * fDist /
+        // fApproxDist saturated at 1 (PccDepthCompressor_ps), averaged over the
+        // face by the 1x1 mip, so 2 * alpha is that face's distance in units of
+        // the distance to the region's own face -- and 2.0 means "nothing within
+        // twice it", which is what a face full of sky returns.
+        if( mProbeDepthRatios.size() >= ( probeIdx + 1u ) * 6u )
+        {
+            for( size_t i = 0u; i < 6u; ++i )
+                mProbeDepthRatios[probeIdx * 6u + i] = (float)colourVal[i].a * 2.0f;
+        }
+
         const Vector3 probeAreaHalfSize(
             mOverlap * mFullRegion.mHalfSize /
             Vector3( (Real)mNumProbes[0], (Real)mNumProbes[1], (Real)mNumProbes[2] ) );
@@ -260,6 +271,10 @@ namespace Ogre
 
         const uint32 maxNumProbes = getMaxNumProbes();
 
+        // Jahshaka patch 0047: the depth readings this build is about to take.
+        mProbeDepthRatios.clear();
+        mProbeDepthRatios.resize( maxNumProbes * 6u, 0.0f );
+
         mPcc->setEnabled( false, resolution, resolution, maxNumProbes, pixelFormat );
         mPcc->setEnabled( true, resolution, resolution, maxNumProbes, pixelFormat );
         mPcc->setUpdatedTrackedDataFromCamera( camera );
@@ -286,7 +301,7 @@ namespace Ogre
         mPcc->setListener( 0 );
     }
     //-------------------------------------------------------------------------
-    void PccPerPixelGridPlacement::buildEnd()
+    void PccPerPixelGridPlacement::buildEnd( bool refreshProbes )
     {
         OGRE_ASSERT_LOW( mPcc && "Call setParallaxCorrectedCubemapAuto first!" );
         OGRE_ASSERT_LOW( !mAsyncTicket.empty() && "Call buildStart first!" );
@@ -370,7 +385,8 @@ namespace Ogre
         }
 
         mAsyncTicket.clear();
-        mPcc->updateAllDirtyProbes();
+        if( refreshProbes )
+            mPcc->updateAllDirtyProbes();
     }
     //-------------------------------------------------------------------------
     void PccPerPixelGridPlacement::preCopyRenderTargetToCubemap( TextureGpu *renderTarget,

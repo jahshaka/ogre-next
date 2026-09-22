@@ -188,9 +188,26 @@ namespace Ogre
             Note AABB is actually an OBB (Oriented Bounding Box). See orientation parameter.
             The OBB should closely match the shape of the environment around it. The better it fits,
             the more accurate the reflections.
+        @param bValuesAlreadyPadded
+            Jahshaka patch 0049. False (the default, and every existing caller)
+            means `area` and `probeShape` are the caller's own boxes and this
+            function applies its 1.005 padding to them, exactly as before.
+
+            True means they are boxes this probe previously handed BACK through
+            getArea()/getProbeShape(), i.e. boxes that already carry that
+            padding, and it is then not applied a second time. Without it, set()
+            is not idempotent: re-publishing a probe unchanged grows both boxes
+            half a percent per call, which moves the parallax reprojection and
+            (for a grid fitted to a region) pushes the shape outside it.
+
+            It matters because a probe may need to be re-published without being
+            re-authored — after the cubemap array it lives in has been
+            re-created, for instance, which drops the internal probe holding the
+            GPU-side copy of these very values.
         */
         void set( const Vector3 &cameraPos, const Aabb &area, const Vector3 &areaInnerRegion,
-                  const Matrix3 &orientation, const Aabb &probeShape );
+                  const Matrix3 &orientation, const Aabb &probeShape,
+                  bool bValuesAlreadyPadded = false );
 
         /** Set to False if it should be updated every frame. True if only updated when dirty
         @remarks

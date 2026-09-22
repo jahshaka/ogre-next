@@ -210,6 +210,24 @@ namespace Ogre
         void setSky( Ogre::SceneManager *sceneManager, bool bEnabled );
         void destroySky( Ogre::SceneManager *sceneManager );
 
+        /** The sky quad this component created for that SceneManager, or null if it has
+            none (setSky was never called for it, or destroySky was).
+
+            setSky() creates a Rectangle2D per SceneManager and keeps it in a private
+            map, which leaves a caller that must adjust the quad -- its render queue
+            (upstream parks it where SceneManager's own sky goes, which is AFTER
+            anything a host draws on top), its visibility flags, its static-ness -- with
+            nothing to adjust: the only way to find it was to diff the SceneManager's
+            Rectangle2D set before and after setSky() and take the one that appeared.
+            The quad stays owned by this component (the destructor destroys it).
+        */
+        Rectangle2D *ogre_nullable getSky( Ogre::SceneManager *sceneManager ) const
+        {
+            std::map<Ogre::SceneManager *, Rectangle2D *>::const_iterator itor =
+                mSkies.find( sceneManager );
+            return itor != mSkies.end() ? itor->second : 0;
+        }
+
         /** Links an existing directional to be updated using the Atmosphere's parameters
         @param light
             Light to associate with.

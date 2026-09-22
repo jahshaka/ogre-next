@@ -252,6 +252,30 @@ namespace Ogre
 
         uint8 getMaxActiveActors() const { return mMaxActiveActors; }
 
+        /** The ACTIVE ACTOR SLOTS: how many the component is currently rendering
+            through, and the private CompositorWorkspace each one renders with.
+
+            `update()` assigns the closest actors to the slots and gives each slot its
+            own reflection camera, texture and workspace (an instance of
+            mWorkspaceName, so each one instantiates its own shadow node, its own
+            compositor nodes and its own pass list). Those workspaces are per-slot
+            state with no public name and no other way in, so anything that has to
+            reach a mirror's actual passes — a shadow-map cache that must know which
+            workspaces hold a light fixed into a cached slot, a frame monitor that
+            times every pass the frame executed, a debug inspector — had no choice but
+            to derive from this class to read mActiveActorData. Reading the slot's
+            workspace changes nothing and owns nothing; the slot count is <=
+            getMaxActiveActors().
+        @remarks
+            The slots are re-assigned on every update( camera, aspectRatio ), so a
+            returned pointer is valid for the frame it was asked in.
+        */
+        size_t               getNumActiveActorSlots() const { return mActiveActorData.size(); }
+        CompositorWorkspace *getActiveActorWorkspace( size_t slot ) const
+        {
+            return slot < mActiveActorData.size() ? mActiveActorData[slot].workspace : 0;
+        }
+
         /// Returns the amount of bytes that fillConstBufferData is going to fill.
         size_t getConstBufferSize() const;
 
