@@ -68,6 +68,13 @@ namespace Ogre
         mCustomProjMatrix( false ),
         mFrustumExtentsManuallySet( false ),
         mFrustrumExtentsType( FET_PROJ_PLANE_POS ),
+        // Jahshaka patch 0078: the four extents were the only members of this
+        // class left indeterminate by the constructor, and they are readable
+        // from outside (getFrustumExtents) before anything writes them.
+        mLeft( 0 ),
+        mRight( 0 ),
+        mTop( 0 ),
+        mBottom( 0 ),
         mOrientationMode( OR_DEGREE_0 ),
         mVertexData( NULL ),
         mReflect( false ),
@@ -341,6 +348,21 @@ namespace Ogre
             top = topLeft.y / topLeft.w;
             right = bottomRight.x / bottomRight.w;
             bottom = bottomRight.y / bottomRight.w;
+
+            // ...AND PUBLISH THEM, exactly as the two branches below do
+            // (Jahshaka patch 0078). Without this, mLeft/mRight/mTop/mBottom —
+            // which is what getFrustumExtents() returns and the only route any
+            // caller has to this frustum's shape — keep whatever they held
+            // before the custom matrix was set: the values of the AUTO frustum
+            // if one was ever computed, and INDETERMINATE otherwise (they are
+            // not initialised by the constructor either; see it). A camera that
+            // is given a custom projection before its first updateFrustum —
+            // which is the normal way to use one — therefore reported garbage
+            // extents, with no warning of any kind.
+            mLeft = left;
+            mRight = right;
+            mTop = top;
+            mBottom = bottom;
         }
         else
         {

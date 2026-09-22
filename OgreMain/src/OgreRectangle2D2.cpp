@@ -44,8 +44,25 @@ namespace Ogre
         MovableObject( id, objectMemoryManager, manager, 10u ),
         Renderable(),
         mChanged( true ),
-        mGeometryFlags( 0 )
+        mGeometryFlags( 0 ),
+        // A FULL-SCREEN QUAD, because initialize() fills the vertex buffer from these
+        // two members and they used to be uninitialised: setGeometry() only raises
+        // mChanged, and the only thing in the engine that ever calls update() is
+        // SceneManager::_renderPhase02 on its OWN sky quad -- so any other Rectangle2D
+        // (a second sky, a sun disc, a debug quad) drew from whatever the stack held,
+        // silently, unless its creator knew to call update() by hand. This is the
+        // geometry SceneManager's sky sets, i.e. the one every user of this class has
+        // wanted so far.
+        mPosition( -1.0f, -1.0f ),
+        mSize( 2.0f, 2.0f )
     {
+        // The corner rays are zeroed rather than guessed: they are only meaningful
+        // under GeometryFlagNormals, whose only fillers are setNormals() and update(),
+        // and a quad that draws with four uninitialised rays draws NOTHING -- which is
+        // the same trap one level down.
+        for( size_t i = 0u; i < NumCorners; ++i )
+            mNormals[i] = Vector3::ZERO;
+
         // Always visible
         Aabb aabb( Aabb::BOX_INFINITE );
         mObjectData.mLocalAabb->setFromAabb( aabb, mObjectData.mIndex );

@@ -616,20 +616,28 @@ namespace Ogre
                 break;
             }
 
-            OverlayElement::_update();
-
-            if( mColoursChanged && mInitialised )
-            {
-                updateColours();
-                mColoursChanged = false;
-            }
-
+            // Jahshaka patch 0014: the font must be LOADED before
+            // OverlayElement::_update() runs updatePositionGeometry() —
+            // otherwise the one and only geometry build (for a caption set
+            // once) uses getGlyphAspectRatio()==1.0 for every missing
+            // codepoint and mGeomPositionsOutOfDate is cleared with no way
+            // to ever re-flag it: a static caption renders NOTHING, forever,
+            // silently. (Upstream samples never see it because they call
+            // setCaption() every frame.)
             if( !mHlmsDatablock || !mFont->isLoaded() ||
                 mHlmsDatablock->getName() != mFont->getHlmsDatablock()->getName() )
             {
                 mFont->load();
                 this->setDatablock( mFont->getHlmsDatablock() );
                 mMaterialName = *mFont->getHlmsDatablock()->getNameStr();
+            }
+
+            OverlayElement::_update();
+
+            if( mColoursChanged && mInitialised )
+            {
+                updateColours();
+                mColoursChanged = false;
             }
         }
         //---------------------------------------------------------------------------------------------

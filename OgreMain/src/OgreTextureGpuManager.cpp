@@ -362,6 +362,16 @@ namespace Ogre
 
         mTexturePool.push_back( newPool );
 
+        // The pool master is RESIDENT from here on and it has no file to load, so
+        // getNextResidencyStatus() must say so too. _transitionTo() only keeps the
+        // two in step for a ManualTexture (TextureGpu::_transitionTo's
+        // isManualTexture() tail), and a pool owner carries TextureFlags::PoolOwner
+        // alone — so without this the master read Resident with next = OnStorage, and
+        // the next scheduleTransitionTo( Resident ) on it (which happens as soon as
+        // something binds the pool as a shader texture) queued a FILE LOAD for a
+        // texture that has no file: the streaming worker then memcpy's from a null
+        // mip pointer in processQueuedImage.
+        newPool.masterTexture->_setNextResidencyStatus( GpuResidency::Resident );
         newPool.masterTexture->_transitionTo( GpuResidency::Resident, 0 );
         newPool.masterTexture->notifyDataIsReady();
 
@@ -2742,7 +2752,20 @@ namespace Ogre
 
                 DataStreamPtr data;
                 if( !loadRequest.archive )
-                    data = loadRequest.loadingListener->grouplessResourceLoading( loadRequest.name );
+                {
+                    // ...and NOT on a null listener: the error above was logged and then
+                    // the listener was called anyway, so a texture created with no
+                    // resource group took the process down from a worker thread instead
+                    // of failing the load. With no stream the request travels on to the
+                    // streaming thread exactly as it does when an archive open throws
+                    // ("as if multiload was turned off"), and that thread's own path
+                    // substitutes the error fallback image.
+                    if( loadRequest.loadingListener )
+                    {
+                        data =
+                            loadRequest.loadingListener->grouplessResourceLoading( loadRequest.name );
+                    }
+                }
                 else
                 {
                     try
@@ -2862,7 +2885,15 @@ namespace Ogre
 
         DataStreamPtr data;
         if( !loadRequest.archive && !loadRequest.image )
-            data = loadRequest.loadingListener->grouplessResourceLoading( loadRequest.name );
+        {
+            // The error above was logged and then this line called
+            // grouplessResourceLoading() on the null listener regardless, killing the
+            // process from the streaming thread. Leaving `data` null instead takes the
+            // no-stream path below, which loads mErrorFallbackTexData -- the behaviour
+            // this function already has for a file that fails to open or to parse.
+            if( loadRequest.loadingListener )
+                data = loadRequest.loadingListener->grouplessResourceLoading( loadRequest.name );
+        }
         else if( !loadRequest.image )
         {
             try

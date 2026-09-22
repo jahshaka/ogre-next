@@ -924,6 +924,20 @@ namespace Ogre
         mShadowMapCastingLights[lightIdx].light = light;
         mShadowMapCastingLights[lightIdx].isStatic = light != 0;
         mShadowMapCastingLights[lightIdx].isDirty = true;
+
+        // THE CACHED BUILD NO LONGER DESCRIBES THIS NODE (Jahshaka).
+        // buildClosestLightList rebuilds at most once per (camera, compositor
+        // frame) and it is what computes mNumActiveShadowMapCastingLights.
+        // Hlms declares hlms_num_shadow_map_lights from that COUNT
+        // (OgreHlms.cpp:3269) but counts the pass's shadow-casting lights from
+        // THIS ARRAY (OgreHlms.cpp:3493-3505), so a light fixed after the node
+        // has already built for the current frame makes the two disagree: the
+        // generated PBS shader then references hlms_shadowmap<N> beyond what it
+        // declared and fails to compile. Dropping the cached camera forces the
+        // next build, which is the only place the count can be brought back in
+        // step.
+        mLastCamera = 0;
+        mLastFrame = std::numeric_limits<size_t>::max();
     }
     //-----------------------------------------------------------------------------------
     void CompositorShadowNode::setStaticShadowMapDirty( size_t shadowMapIdx, bool includeLinked )
