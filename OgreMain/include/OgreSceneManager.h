@@ -143,13 +143,18 @@ namespace Ogre
     struct UpdateLodRequest : public CullFrustumRequest
     {
         Real lodBias;
+        /// JAHSHAKA (ogre-patch 0075): the requesting PASS's switch band.
+        /// @see LodStrategy::lodSet.
+        Real lodHysteresis;
 
-        UpdateLodRequest() : CullFrustumRequest(), lodBias( 0 ) {}
+        UpdateLodRequest() : CullFrustumRequest(), lodBias( 0 ), lodHysteresis( 0 ) {}
         UpdateLodRequest( uint8 _firstRq, uint8 _lastRq, const ObjectMemoryManagerVec *_objectMemManager,
-                          const Camera *_camera, const Camera *_lodCamera, Real _lodBias ) :
+                          const Camera *_camera, const Camera *_lodCamera, Real _lodBias,
+                          Real _lodHysteresis ) :
             CullFrustumRequest( _firstRq, _lastRq, false, false, false, _objectMemManager, _camera,
                                 _lodCamera ),
-            lodBias( _lodBias )
+            lodBias( _lodBias ),
+            lodHysteresis( _lodHysteresis )
         {
         }
     };
@@ -1927,8 +1932,14 @@ namespace Ogre
         void updateAllBounds( const ObjectMemoryManagerVec &objectMemManager );
 
         /** Updates the Lod values of all objects relative to the given camera.
+        @param lodHysteresis
+            JAHSHAKA (ogre-patch 0075): the calling PASS's switch band, as a
+            fraction of the threshold being crossed. 0 — the default, and what
+            every caller but Jahshaka's watched views passes — is upstream's
+            behaviour to the bit. @see LodStrategy::lodSet.
          */
-        void updateAllLods( const Camera *lodCamera, Real lodBias, uint8 firstRq, uint8 lastRq );
+        void updateAllLods( const Camera *lodCamera, Real lodBias, uint8 firstRq, uint8 lastRq,
+                            Real lodHysteresis = 0 );
 
         /** Updates the scene: Perform high level culling, Node transforms and entity animations.
          */

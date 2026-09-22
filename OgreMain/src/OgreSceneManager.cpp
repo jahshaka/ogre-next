@@ -1081,6 +1081,13 @@ namespace Ogre
 
         if( bEnabled )
         {
+            // The method the sky is actually using. getSkyMethod() used to report the
+            // constructor's SkyCubemap for the life of the SceneManager no matter what
+            // was set here, so it could not be used for anything -- including the
+            // round trip setSky( false, getSkyMethod(), ... ) that turning the sky off
+            // reads as.
+            mSkyMethod = skyMethod;
+
             if( !mSky )
             {
                 mSky = createRectangle2D( SCENE_STATIC );
@@ -1620,6 +1627,19 @@ namespace Ogre
         const bool casterPass = mIlluminationStage == IRS_RENDER_TO_TEXTURE;
 
         mRenderQueue->clear();
+
+        // Forward+ must collect the lights before renderPassPrepare, exactly as
+        // _cullPhase01 does a few hundred lines above: HlmsPbs::preparePassHash
+        // calls ForwardPlusBase::getGridBuffer(), which looks the camera's light
+        // grid up in a cache that collectLights() is the only thing that fills.
+        // Without this the lookup misses, outCachedGrid stays null and
+        // getGridBuffer dereferences it -- a null deref in every build where the
+        // "You must call ForwardPlusBase::collectLights first!" assert is
+        // compiled out. CompositorPassWarmUp is therefore unusable on any scene
+        // manager with Forward+ enabled, which is every one that lights anything.
+        if( mIlluminationStage != IRS_RENDER_TO_TEXTURE && mForwardPlusImpl )
+            mForwardPlusImpl->collectLights( camera );
+
         mRenderQueue->renderPassPrepare( casterPass, false );
 
         // Quick way of reducing overhead/stress on  calculations (lastRq can be up to 255)
@@ -2106,7 +2126,8 @@ namespace Ogre
                 numObjs = std::min( numObjs, totalObjs - toAdvance );
                 objData.advancePack( toAdvance / ARRAY_PACKED_REALS );
 
-                lodStrategy->lodUpdateImpl( numObjs, objData, lodCamera, request.lodBias );
+                lodStrategy->lodUpdateImpl( numObjs, objData, lodCamera, request.lodBias,
+                                            request.lodHysteresis );
             }
 
             ++it;
@@ -2114,11 +2135,11 @@ namespace Ogre
     }
     //-----------------------------------------------------------------------
     void SceneManager::updateAllLods( const Camera *lodCamera, Real lodBias, uint8 firstRq,
-                                      uint8 lastRq )
+                                      uint8 lastRq, Real lodHysteresis )
     {
         mRequestType = UPDATE_ALL_LODS;
         mUpdateLodRequest = UpdateLodRequest( firstRq, lastRq, &mEntitiesMemoryManagerCulledList,
-                                              lodCamera, lodCamera, lodBias );
+                                              lodCamera, lodCamera, lodBias, lodHysteresis );
 
         mUpdateLodRequest.camera->getFrustumPlanes();
         mUpdateLodRequest.lodCamera->getFrustumPlanes();
