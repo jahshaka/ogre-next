@@ -52,11 +52,30 @@ THE SOFTWARE.
 #define OGRE_VK_KHR_WIN32_SURFACE_EXTENSION_NAME "VK_KHR_win32_surface"
 #define OGRE_VK_KHR_XCB_SURFACE_EXTENSION_NAME "VK_KHR_xcb_surface"
 #define OGRE_VK_KHR_ANDROID_SURFACE_EXTENSION_NAME "VK_KHR_android_surface"
+#define OGRE_VK_EXT_METAL_SURFACE_EXTENSION_NAME "VK_EXT_metal_surface"
 
 #define TODO_findRealPresentQueue
 
 namespace Ogre
 {
+    /// Jahshaka (ogre-patch 0038): THE NO-RAYS SWITCH, honoured at the DEVICE.
+    /// With it in force nothing this patch adds happens at all - the instance
+    /// stays at 1.0.2, not one ray extension is requested and not one feature
+    /// bit is set - so the process runs on EXACTLY the device it would have had
+    /// if this patch did not exist. That is what makes the switch a real
+    /// fallback picture rather than a cosmetic one (Jahshaka reads the same
+    /// variable to decide whether to build acceleration structures at all).
+    ///
+    /// It is also the escape hatch for a driver that cannot build a ray-tracing
+    /// device in a particular process: MEASURED on NVIDIA 595.84, vkCreateDevice
+    /// returns VK_ERROR_INITIALIZATION_FAILED with these features enabled under
+    /// AddressSanitizer, on the very GPU where the same call succeeds without it.
+    static bool jahNoRayQuery()
+    {
+        static const bool noRays = getenv( "JAHSHAKA_NO_RAY_QUERY" ) != 0;
+        return noRays;
+    }
+
     FastArray<const char *> VulkanInstance::enabledExtensions;  // sorted
     FastArray<const char *> VulkanInstance::enabledLayers;      // sorted
 #if OGRE_DEBUG_MODE >= OGRE_DEBUG_HIGH
@@ -90,6 +109,14 @@ namespace Ogre
         LogManager::getSingleton().logMessage( externalInstance == nullptr
                                                    ? "Vulkan: Initializing"
                                                    : "Vulkan: Initializing with external VkInstance" );
+
+        // Jahshaka local patch (upstream-reportable): these are static and were never
+        // cleared, so a second RenderSystem in the same process (Root destroyed and
+        // re-created) accumulated the previous run's entries. Their pointers referenced
+        // the host string that sortAndRelocate() resets, so the names were garbage and
+        // vkCreateInstance failed with VK_ERROR_EXTENSION_NOT_PRESENT.
+        enabledExtensions.clear();
+        enabledLayers.clear();
 
         // Enumerate supported extensions
         FastArray<VkExtensionProperties> availableExtensions;
@@ -141,6 +168,13 @@ namespace Ogre
                 if( extensionName == OGRE_VK_KHR_ANDROID_SURFACE_EXTENSION_NAME )
                     enabledExtensions.push_back( OGRE_VK_KHR_ANDROID_SURFACE_EXTENSION_NAME );
 #endif
+#ifdef OGRE_VULKAN_WINDOW_METAL
+                // MoltenVK's surface extension (VulkanMetalWindow). Availability-gated
+                // like every other platform surface: the support object is only marked
+                // usable when this made it into the enabled list.
+                if( extensionName == OGRE_VK_EXT_METAL_SURFACE_EXTENSION_NAME )
+                    enabledExtensions.push_back( OGRE_VK_EXT_METAL_SURFACE_EXTENSION_NAME );
+#endif
 #if OGRE_DEBUG_MODE >= OGRE_DEBUG_HIGH
                 if( extensionName == VK_EXT_DEBUG_REPORT_EXTENSION_NAME )
                     enabledExtensions.push_back( VK_EXT_DEBUG_REPORT_EXTENSION_NAME );
@@ -152,6 +186,14 @@ namespace Ogre
                 if( extensionName == VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME )
                     enabledExtensions.push_back(
                         VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME );
+#ifdef VK_KHR_portability_enumeration
+                // Portability drivers (MoltenVK on macOS) are hidden by the loader
+                // unless this extension + the matching create flag are used;
+                // vkCreateInstance otherwise fails with VK_ERROR_INCOMPATIBLE_DRIVER.
+                // Availability-gated: no-op on conformant desktop drivers.
+                if( extensionName == VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME )
+                    enabledExtensions.push_back( VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME );
+#endif
             }
 
             // Enable supported layers we may want
@@ -264,7 +306,31 @@ namespace Ogre
                 appInfo.pApplicationName = appName.c_str();
             appInfo.pEngineName = "Ogre3D Vulkan Engine";
             appInfo.engineVersion = OGRE_VERSION;
+            // Jahshaka (ogre-patch 0038): ask for Vulkan 1.2 when the LOADER can give
+            // it. VK_KHR_acceleration_structure and VK_KHR_ray_query are only usable
+            // above 1.0, and the instance's apiVersion is the ceiling for the whole
+            // process. vkEnumerateInstanceVersion is itself a 1.1 entry point, so a
+            // 1.0 loader (or a null return) keeps the historical 1.0.2 exactly.
             appInfo.apiVersion = VK_MAKE_VERSION( 1, 0, 2 );
+            if( !jahNoRayQuery() )
+            {
+                PFN_vkEnumerateInstanceVersion enumerateInstanceVersion =
+                    (PFN_vkEnumerateInstanceVersion)vkGetInstanceProcAddr(
+                        VK_NULL_HANDLE, "vkEnumerateInstanceVersion" );
+                if( enumerateInstanceVersion )
+                {
+                    uint32_t loaderVersion = 0u;
+                    if( enumerateInstanceVersion( &loaderVersion ) == VK_SUCCESS &&
+                        loaderVersion >= VK_API_VERSION_1_2 )
+                    {
+                        appInfo.apiVersion = VK_API_VERSION_1_2;
+                    }
+                }
+            }
+            LogManager::getSingleton().logMessage(
+                "Vulkan: Instance apiVersion " +
+                StringConverter::toString( VK_VERSION_MAJOR( appInfo.apiVersion ) ) + "." +
+                StringConverter::toString( VK_VERSION_MINOR( appInfo.apiVersion ) ) );
 
             VkInstanceCreateInfo createInfo;
             makeVkStruct( createInfo, VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO );
@@ -273,6 +339,14 @@ namespace Ogre
             createInfo.ppEnabledLayerNames = enabledLayers.begin();
             createInfo.enabledExtensionCount = static_cast<uint32>( enabledExtensions.size() );
             createInfo.ppEnabledExtensionNames = enabledExtensions.begin();
+#ifdef VK_KHR_portability_enumeration
+            // Must accompany VK_KHR_portability_enumeration (see extension loop above).
+            for( const char *ext : enabledExtensions )
+            {
+                if( !strcmp( ext, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME ) )
+                    createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+            }
+#endif
 
             // Workaround: skip following code on Android as it causes crash in vkCreateInstance() on
             // Android Emulator 35.1.4, macOS 14.4.1, M1 Pro, despite declared support for rev.10
@@ -506,7 +580,13 @@ namespace Ogre
     {
         if( mDevice )
         {
-            vkDeviceWaitIdle( mDevice );  // intentionally ignore result in destroy()
+            // NOT ON A LOST DEVICE (Jahshaka patch 0072). The spec says this
+            // returns VK_ERROR_DEVICE_LOST; this driver may instead block until a
+            // hung channel is reclaimed, which after an Xid 109 is not bounded.
+            // Everything submitted is finished by definition once the device is
+            // lost, so there is nothing to wait for.
+            if( !isDeviceLost() )
+                vkDeviceWaitIdle( mDevice );  // intentionally ignore result in destroy()
 
             mGraphicsQueue.destroy();
             destroyQueues( mComputeQueues );
@@ -530,15 +610,23 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanDevice::fillDeviceFeatures()
     {
+        // Jahshaka (ogre-patch 0068): one implementation, shared with the exported
+        // creation request - see fillDeviceFeaturesFor below.
+        fillDeviceFeaturesFor( mPhysicalDevice, mDeviceFeatures );
+    }
+    //-------------------------------------------------------------------------
+    void VulkanDevice::fillDeviceFeaturesFor( VkPhysicalDevice physicalDevice,
+                                              VkPhysicalDeviceFeatures &outFeatures )
+    {
 #define VK_DEVICEFEATURE_ENABLE_IF( x ) \
     if( features.x ) \
-    mDeviceFeatures.x = features.x
+    outFeatures.x = features.x
 
         VkPhysicalDeviceFeatures features;
-        vkGetPhysicalDeviceFeatures( mPhysicalDevice, &features );
+        vkGetPhysicalDeviceFeatures( physicalDevice, &features );
 
         // Don't opt in to features we don't want / need.
-        memset( &mDeviceFeatures, 0, sizeof( mDeviceFeatures ) );
+        memset( &outFeatures, 0, sizeof( outFeatures ) );
         // VK_DEVICEFEATURE_ENABLE_IF( robustBufferAccess );
         VK_DEVICEFEATURE_ENABLE_IF( fullDrawIndexUint32 );
         VK_DEVICEFEATURE_ENABLE_IF( imageCubeArray );
@@ -596,14 +684,28 @@ namespace Ogre
         // VK_DEVICEFEATURE_ENABLE_IF( inheritedQueries );
     }
     //-------------------------------------------------------------------------
-    bool VulkanDevice::fillDeviceFeatures2(
+    bool VulkanDevice::buildFeatureChain(
+        VkInstance instance, VkPhysicalDevice physicalDevice,
+        const FastArray<IdString> &sortedDeviceExtensions,
         VkPhysicalDeviceFeatures2 &deviceFeatures2,
         VkPhysicalDevice16BitStorageFeatures &device16BitStorageFeatures,
         VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
-        VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures )
+        VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures,
+        RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures )
     {
+        // Jahshaka (ogre-patch 0068): this WAS fillDeviceFeatures2()'s body. It is a
+        // static now, over an explicitly given extension list, because the OpenXR route
+        // must build the very same chain BEFORE any VulkanDevice exists - and because a
+        // second, hand-copied chain would be a workaround with a shelf life.
         if( !VulkanInstance::hasExtension( VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME ) )
             return false;
+
+        // The member hasDeviceExtension() over a list we were handed.
+        auto hasExt = [&sortedDeviceExtensions]( const IdString extension ) {
+            FastArray<IdString>::const_iterator itor = std::lower_bound(
+                sortedDeviceExtensions.begin(), sortedDeviceExtensions.end(), extension );
+            return itor != sortedDeviceExtensions.end() && *itor == extension;
+        };
 
         makeVkStruct( deviceFeatures2, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 );
         makeVkStruct( device16BitStorageFeatures,
@@ -615,32 +717,187 @@ namespace Ogre
 
         PFN_vkGetPhysicalDeviceFeatures2KHR GetPhysicalDeviceFeatures2KHR =
             (PFN_vkGetPhysicalDeviceFeatures2KHR)vkGetInstanceProcAddr(
-                mInstance->mVkInstance, "vkGetPhysicalDeviceFeatures2KHR" );
+                instance, "vkGetPhysicalDeviceFeatures2KHR" );
 
         void **lastNext = &deviceFeatures2.pNext;
-        if( hasDeviceExtension( VK_KHR_16BIT_STORAGE_EXTENSION_NAME ) )
+        if( hasExt( VK_KHR_16BIT_STORAGE_EXTENSION_NAME ) )
         {
             *lastNext = &device16BitStorageFeatures;
             lastNext = &device16BitStorageFeatures.pNext;
         }
-        if( hasDeviceExtension( VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME ) )
+        if( hasExt( VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME ) )
         {
             *lastNext = &deviceShaderFloat16Int8Features;
             lastNext = &deviceShaderFloat16Int8Features.pNext;
         }
-        if( hasDeviceExtension( VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME ) )
+        if( hasExt( VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME ) )
         {
             *lastNext = &deviceCacheControlFeatures;
             lastNext = &deviceCacheControlFeatures.pNext;
         }
 
-        GetPhysicalDeviceFeatures2KHR( mPhysicalDevice, &deviceFeatures2 );
-        mDeviceExtraFeatures.storageInputOutput16 = device16BitStorageFeatures.storageInputOutput16;
-        mDeviceExtraFeatures.shaderFloat16 = deviceShaderFloat16Int8Features.shaderFloat16;
-        mDeviceExtraFeatures.shaderInt8 = deviceShaderFloat16Int8Features.shaderInt8;
-        mDeviceExtraFeatures.pipelineCreationCacheControl =
+        // Jahshaka (ogre-patch 0038): the ray-query feature structs. Chained only
+        // when every extension they belong to was requested; the structs live on the
+        // device object so the chain survives until vkCreateDevice reads it.
+        memset( &rayQueryFeatures, 0, sizeof( rayQueryFeatures ) );
+        makeVkStruct( rayQueryFeatures.accelStruct,
+                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR );
+        makeVkStruct( rayQueryFeatures.rayQuery,
+                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR );
+        makeVkStruct( rayQueryFeatures.bufferDeviceAddress,
+                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES );
+        makeVkStruct( rayQueryFeatures.descriptorIndexing,
+                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES );
+        const bool bWantRayQuery =
+            !jahNoRayQuery() &&
+            hasExt( VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME ) &&
+            hasExt( VK_KHR_RAY_QUERY_EXTENSION_NAME ) &&
+            hasExt( VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME ) &&
+            hasExt( VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME ) &&
+            hasExt( VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME );
+        if( bWantRayQuery )
+        {
+            *lastNext = &rayQueryFeatures.accelStruct;
+            lastNext = &rayQueryFeatures.accelStruct.pNext;
+            *lastNext = &rayQueryFeatures.rayQuery;
+            lastNext = &rayQueryFeatures.rayQuery.pNext;
+            *lastNext = &rayQueryFeatures.bufferDeviceAddress;
+            lastNext = &rayQueryFeatures.bufferDeviceAddress.pNext;
+            *lastNext = &rayQueryFeatures.descriptorIndexing;
+            lastNext = &rayQueryFeatures.descriptorIndexing.pNext;
+        }
+
+        GetPhysicalDeviceFeatures2KHR( physicalDevice, &deviceFeatures2 );
+        outExtraFeatures.storageInputOutput16 = device16BitStorageFeatures.storageInputOutput16;
+        outExtraFeatures.shaderFloat16 = deviceShaderFloat16Int8Features.shaderFloat16;
+        outExtraFeatures.shaderInt8 = deviceShaderFloat16Int8Features.shaderInt8;
+        outExtraFeatures.pipelineCreationCacheControl =
             deviceCacheControlFeatures.pipelineCreationCacheControl;
+
+        // Jahshaka (ogre-patch 0038): the query above FILLED these structs with
+        // everything the driver can do, and this same chain is handed straight to
+        // vkCreateDevice - so anything left set here is ENABLED. Keep exactly the
+        // four bits a ray-query tier needs and clear the rest, so enabling the tier
+        // cannot quietly change driver behaviour for the rest of the engine. The
+        // descriptor-indexing struct is chained but left entirely off: the extension
+        // is a dependency of VK_KHR_acceleration_structure, none of its features are.
+        rayQueryFeatures.enabled =
+            bWantRayQuery && rayQueryFeatures.accelStruct.accelerationStructure &&
+            rayQueryFeatures.rayQuery.rayQuery &&
+            rayQueryFeatures.bufferDeviceAddress.bufferDeviceAddress;
+        {
+            // Clear every reported bit, then put back only the ones we use. sType and
+            // pNext are restored so the chain vkCreateDevice is about to walk survives.
+            auto clearBody = []( auto &featureStruct ) {
+                const VkStructureType sType = featureStruct.sType;
+                void *const pNext = featureStruct.pNext;
+                memset( &featureStruct, 0, sizeof( featureStruct ) );
+                featureStruct.sType = sType;
+                featureStruct.pNext = pNext;
+            };
+            clearBody( rayQueryFeatures.accelStruct );
+            clearBody( rayQueryFeatures.rayQuery );
+            clearBody( rayQueryFeatures.bufferDeviceAddress );
+            clearBody( rayQueryFeatures.descriptorIndexing );
+            if( rayQueryFeatures.enabled )
+            {
+                rayQueryFeatures.accelStruct.accelerationStructure = VK_TRUE;
+                rayQueryFeatures.rayQuery.rayQuery = VK_TRUE;
+                rayQueryFeatures.bufferDeviceAddress.bufferDeviceAddress = VK_TRUE;
+            }
+            LogManager::getSingleton().logMessage(
+                String( "Vulkan: hardware ray query " ) +
+                ( rayQueryFeatures.enabled
+                      ? "AVAILABLE (VK_KHR_acceleration_structure + VK_KHR_ray_query enabled)"
+                      : "not available" ) );
+        }
         return true;
+    }
+    //-------------------------------------------------------------------------
+    bool VulkanDevice::fillDeviceFeatures2(
+        VkPhysicalDeviceFeatures2 &deviceFeatures2,
+        VkPhysicalDevice16BitStorageFeatures &device16BitStorageFeatures,
+        VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
+        VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures )
+    {
+        // Jahshaka (ogre-patch 0068): the chain is built by the shared builder above.
+        return buildFeatureChain( mInstance->mVkInstance, mPhysicalDevice, mDeviceExtensions,
+                                  deviceFeatures2, device16BitStorageFeatures,
+                                  deviceShaderFloat16Int8Features, deviceCacheControlFeatures,
+                                  mRayQueryFeatures, mDeviceExtraFeatures );
+    }
+    //-------------------------------------------------------------------------
+    VulkanDeviceCreationRequest::VulkanDeviceCreationRequest()
+    {
+        memset( &features, 0, sizeof( features ) );
+        memset( &features2, 0, sizeof( features2 ) );
+        memset( &storage16Bit, 0, sizeof( storage16Bit ) );
+        memset( &shaderFloat16Int8, 0, sizeof( shaderFloat16Int8 ) );
+        memset( &cacheControl, 0, sizeof( cacheControl ) );
+        memset( &rayQuery, 0, sizeof( rayQuery ) );
+        memset( &extraFeatures, 0, sizeof( extraFeatures ) );
+#ifdef VK_KHR_present_mode_fifo_latest_ready
+        memset( &fifoLatestReady, 0, sizeof( fifoLatestReady ) );
+#endif
+        hasFeatures2 = false;
+    }
+    //-------------------------------------------------------------------------
+    void VulkanDevice::buildDeviceCreationRequest(
+        VkInstance instance, VkPhysicalDevice physicalDevice,
+        const FastArray<VkExtensionProperties> &availableExtensions,
+        VulkanDeviceCreationRequest &outRequest )
+    {
+        // Jahshaka (ogre-patch 0068): createDevice() for a device we are NOT the ones
+        // creating. Same extension list, same base features, same feature chain, same
+        // order - the only difference is that the result is handed back to the caller
+        // instead of to vkCreateDevice.
+        fillDeviceExtensionRequest( physicalDevice, availableExtensions, outRequest.extensions );
+
+        outRequest.sortedExtensions.clear();
+        outRequest.sortedExtensions.reserve( outRequest.extensions.size() );
+        for( const char *ext : outRequest.extensions )
+        {
+            LogManager::getSingleton().logMessage(
+                "Vulkan: External device creation requests device extension: " + String( ext ) );
+            outRequest.sortedExtensions.push_back( ext );
+        }
+        std::sort( outRequest.sortedExtensions.begin(), outRequest.sortedExtensions.end() );
+
+        fillDeviceFeaturesFor( physicalDevice, outRequest.features );
+
+#ifdef VK_KHR_present_mode_fifo_latest_ready
+        makeVkStruct( outRequest.fifoLatestReady,
+                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR );
+        outRequest.fifoLatestReady.presentModeFifoLatestReady = VK_TRUE;
+#endif
+
+        outRequest.hasFeatures2 = buildFeatureChain(
+            instance, physicalDevice, outRequest.sortedExtensions, outRequest.features2,
+            outRequest.storage16Bit, outRequest.shaderFloat16Int8, outRequest.cacheControl,
+            outRequest.rayQuery, outRequest.extraFeatures );
+
+        if( outRequest.hasFeatures2 )
+        {
+            outRequest.features2.features = outRequest.features;
+#ifdef VK_KHR_present_mode_fifo_latest_ready
+            // createDevice()'s own ordering: this one goes on AFTER the query, at the
+            // head of the chain (patch 0013).
+            bool bHasFifoLatestReady = false;
+            for( const char *ext : outRequest.extensions )
+            {
+                if( strcmp( ext, "VK_KHR_present_mode_fifo_latest_ready" ) == 0 ||
+                    strcmp( ext, "VK_EXT_present_mode_fifo_latest_ready" ) == 0 )
+                {
+                    bHasFifoLatestReady = true;
+                }
+            }
+            if( bHasFifoLatestReady )
+            {
+                outRequest.fifoLatestReady.pNext = outRequest.features2.pNext;
+                outRequest.features2.pNext = &outRequest.fifoLatestReady;
+            }
+#endif
+        }
     }
     //-------------------------------------------------------------------------
     void VulkanDevice::destroyQueues( FastArray<VulkanQueue> &queueArray )
@@ -736,14 +993,14 @@ namespace Ogre
                                              externalDevice->graphicsQueue );
 
             // Filter wrongly-provided extensions
+            //
+            // Jahshaka (ogre-patch 0068): the per-extension "Found device extension"
+            // line is NOT repeated here. On the OpenXR route the caller has already
+            // enumerated and logged the very same list to build the creation request,
+            // so this loop printed every name on this device a second time.
             std::set<String> extensions;
             for( auto &ext : availableExtensions )
-            {
-                const String extensionName = ext.extensionName;
-                LogManager::getSingleton().logMessage( "Vulkan: Found device extension: " +
-                                                       extensionName );
-                extensions.insert( extensionName );
-            }
+                extensions.insert( ext.extensionName );
             auto extFilter = [&extensions]( const VkExtensionProperties &elem ) {
                 if( extensions.find( elem.extensionName ) != extensions.end() )
                     return false;
@@ -771,6 +1028,61 @@ namespace Ogre
             VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT deviceCacheControlFeatures;
             fillDeviceFeatures2( deviceFeatures2, device16BitStorageFeatures,
                                  deviceShaderFloat16Int8Features, deviceCacheControlFeatures );
+
+            // Jahshaka (ogre-patch 0068): the call above asked the PHYSICAL DEVICE what
+            // it SUPPORTS. On an external device that is not what was ENABLED: the
+            // device belongs to somebody else (an OpenXR runtime), and believing the
+            // hardware makes Ogre compile shaders against features - shaderFloat16 and
+            // 16-bit storage decide RSC_SHADER_FLOAT16, which changes both the Hlms
+            // variants and the shader-cache fingerprint - the device never enabled.
+            // When the caller built that device from OUR creation request (the only way
+            // to get this right), the request IS the enabled set.
+            if( externalDevice->creationRequest )
+            {
+                const VulkanDeviceCreationRequest &req = *externalDevice->creationRequest;
+                // The BASE VkPhysicalDeviceFeatures as well: setPhysicalDevice() filled
+                // mDeviceFeatures from fillDeviceFeatures(), i.e. from what the GPU
+                // supports, and on an external device that is again not what was
+                // enabled. Today the two agree (the request is built by the same
+                // function on the same physical device), but only by construction - a
+                // caller that trims the request would leave Ogre believing in geometry
+                // or tessellation shaders that were never enabled, and mSupportedStages
+                // is derived from exactly those two bits.
+                mDeviceFeatures = req.features;
+                mSupportedStages = 0xFFFFFFFF;
+                if( !mDeviceFeatures.geometryShader )
+                    mSupportedStages ^= VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
+                if( !mDeviceFeatures.tessellationShader )
+                {
+                    mSupportedStages ^= VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT |
+                                        VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT;
+                }
+
+                mDeviceExtraFeatures = req.extraFeatures;
+                mRayQueryFeatures = req.rayQuery;
+                // The copied chain pointed into the caller's request; nothing walks it
+                // after vkCreateDevice, so do not keep the dangling links.
+                mRayQueryFeatures.accelStruct.pNext = 0;
+                mRayQueryFeatures.rayQuery.pNext = 0;
+                mRayQueryFeatures.bufferDeviceAddress.pNext = 0;
+                mRayQueryFeatures.descriptorIndexing.pNext = 0;
+                LogManager::getSingleton().logMessage(
+                    "Vulkan: External device features taken from the caller's creation "
+                    "request (what was enabled), not from what the GPU supports." );
+                LogManager::getSingleton().logMessage(
+                    String( "Vulkan: hardware ray query " ) +
+                    ( mRayQueryFeatures.enabled ? "AVAILABLE (as enabled on the external device)"
+                                                : "not available (not enabled on the external "
+                                                  "device)" ) );
+            }
+            else
+            {
+                LogManager::getSingleton().logMessage(
+                    "Vulkan: [WARNING] External device supplied with no creation request. "
+                    "Ogre will assume every feature the physical device SUPPORTS was "
+                    "enabled on it - see VulkanDevice::buildDeviceCreationRequest.",
+                    LML_CRITICAL );
+            }
         }
 
         vkGetPhysicalDeviceProperties( mPhysicalDevice, &mDeviceProperties );
@@ -904,48 +1216,100 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    void VulkanDevice::createDevice( const FastArray<VkExtensionProperties> &availableExtensions,
-                                     uint32 maxComputeQueues, uint32 maxTransferQueues )
+    void VulkanDevice::fillDeviceExtensionRequest(
+        VkPhysicalDevice physicalDevice, const FastArray<VkExtensionProperties> &availableExtensions,
+        FastArray<const char *> &outExtensions )
     {
-        FastArray<const char *> deviceExtensions;
+        // Jahshaka (ogre-patch 0068): lifted verbatim out of createDevice() so that an
+        // EXTERNAL device creator (OpenXR's xrCreateVulkanDeviceKHR) asks for exactly
+        // what Ogre would have asked for. createDevice() is now its only other caller,
+        // which is what keeps the two lists from drifting apart.
+        outExtensions.clear();
         for( const VkExtensionProperties &ext : availableExtensions )
         {
             const String extensionName = ext.extensionName;
             LogManager::getSingleton().logMessage( "Vulkan: Found device extension: " + extensionName );
 
             if( extensionName == VK_KHR_MAINTENANCE2_EXTENSION_NAME )
-                deviceExtensions.push_back( VK_KHR_MAINTENANCE2_EXTENSION_NAME );
+                outExtensions.push_back( VK_KHR_MAINTENANCE2_EXTENSION_NAME );
             else if( extensionName == VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME )
-                deviceExtensions.push_back( VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME );
+                outExtensions.push_back( VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME );
             else if( extensionName == VK_EXT_SHADER_SUBGROUP_VOTE_EXTENSION_NAME )
-                deviceExtensions.push_back( VK_EXT_SHADER_SUBGROUP_VOTE_EXTENSION_NAME );
+                outExtensions.push_back( VK_EXT_SHADER_SUBGROUP_VOTE_EXTENSION_NAME );
             else if( extensionName == VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME )
-                deviceExtensions.push_back( VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME );
+                outExtensions.push_back( VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME );
             else if( extensionName == VK_KHR_STORAGE_BUFFER_STORAGE_CLASS_EXTENSION_NAME )
             {
                 // Required by VK_KHR_16bit_storage
-                deviceExtensions.push_back( VK_KHR_STORAGE_BUFFER_STORAGE_CLASS_EXTENSION_NAME );
+                outExtensions.push_back( VK_KHR_STORAGE_BUFFER_STORAGE_CLASS_EXTENSION_NAME );
             }
             else if( extensionName == VK_KHR_16BIT_STORAGE_EXTENSION_NAME )
-                deviceExtensions.push_back( VK_KHR_16BIT_STORAGE_EXTENSION_NAME );
+                outExtensions.push_back( VK_KHR_16BIT_STORAGE_EXTENSION_NAME );
             else if( extensionName == VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME )
-                deviceExtensions.push_back( VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME );
+                outExtensions.push_back( VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME );
             else if( extensionName == VK_AMD_SHADER_TRINARY_MINMAX_EXTENSION_NAME )
-                deviceExtensions.push_back( VK_AMD_SHADER_TRINARY_MINMAX_EXTENSION_NAME );
+                outExtensions.push_back( VK_AMD_SHADER_TRINARY_MINMAX_EXTENSION_NAME );
+            // Portability drivers (MoltenVK): the spec REQUIRES enabling this
+            // extension when the physical device advertises it
+            // (VUID-VkDeviceCreateInfo-pProperties-04451). String literal on
+            // purpose: the name macro lives behind VK_ENABLE_BETA_EXTENSIONS.
+            else if( extensionName == "VK_KHR_portability_subset" )
+                outExtensions.push_back( "VK_KHR_portability_subset" );
+            // Jahshaka (ogre-patch 0038): the hardware ray-query set. Every one of
+            // these is requested ONLY if the driver advertises it, exactly like the
+            // names above; on a device without them nothing changes. Ogre itself uses
+            // none of them - they exist so a Jahshaka-owned compute pass can build
+            // acceleration structures and run inline ray queries.
+            // Each arm pushes the MACRO, which is a string literal with static
+            // storage - never extensionName.c_str(), which dies with this loop
+            // iteration while the list keeps the pointer.
+            else if( !jahNoRayQuery() &&
+                     extensionName == VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME )
+                outExtensions.push_back( VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME );
+            else if( !jahNoRayQuery() && extensionName == VK_KHR_RAY_QUERY_EXTENSION_NAME )
+                outExtensions.push_back( VK_KHR_RAY_QUERY_EXTENSION_NAME );
+            else if( !jahNoRayQuery() &&
+                     extensionName == VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME )
+                outExtensions.push_back( VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME );
+            else if( !jahNoRayQuery() &&
+                     extensionName == VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME )
+                outExtensions.push_back( VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME );
+            else if( !jahNoRayQuery() &&
+                     extensionName == VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME )
+                outExtensions.push_back( VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME );
+            else if( !jahNoRayQuery() && extensionName == VK_KHR_SPIRV_1_4_EXTENSION_NAME )
+                outExtensions.push_back( VK_KHR_SPIRV_1_4_EXTENSION_NAME );
+            else if( !jahNoRayQuery() &&
+                     extensionName == VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME )
+                outExtensions.push_back( VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME );
         }
 
-        deviceExtensions.push_back( VK_KHR_SWAPCHAIN_EXTENSION_NAME );
+        outExtensions.push_back( VK_KHR_SWAPCHAIN_EXTENSION_NAME );
+
+        // Jahshaka patch 0013: fifo_latest_ready = vsync without the FIFO
+        // queue backlog (NVIDIA xcb has no MAILBOX). A separate pass on
+        // purpose — this block must stay clear of patch 0006's context.
+        // String literals like portability_subset: the name macros need a
+        // recent SDK and the KHR/EXT spellings alias the same enum value.
+        for( const VkExtensionProperties &ext : availableExtensions )
+        {
+            const String extensionName = ext.extensionName;
+            if( extensionName == "VK_KHR_present_mode_fifo_latest_ready" )
+                outExtensions.push_back( "VK_KHR_present_mode_fifo_latest_ready" );
+            else if( extensionName == "VK_EXT_present_mode_fifo_latest_ready" )
+                outExtensions.push_back( "VK_EXT_present_mode_fifo_latest_ready" );
+        }
 
 #if OGRE_DEBUG_MODE >= OGRE_DEBUG_HIGH
         if( VulkanInstance::hasValidationLayers )
-            deviceExtensions.push_back( VK_EXT_DEBUG_MARKER_EXTENSION_NAME );
+            outExtensions.push_back( VK_EXT_DEBUG_MARKER_EXTENSION_NAME );
 #endif
 
 #ifdef OGRE_VULKAN_USE_SWAPPY
         // Add any extensions that SwappyVk requires:
         uint32_t numSwappyRequiredExtensions = 0u;
         SwappyVk_determineDeviceExtensions(
-            mPhysicalDevice, static_cast<uint32_t>( availableExtensions.size() ),
+            physicalDevice, static_cast<uint32_t>( availableExtensions.size() ),
             const_cast<VkExtensionProperties *>( availableExtensions.begin() ),  // swappy API flaw
             &numSwappyRequiredExtensions, 0 );
 
@@ -962,14 +1326,14 @@ namespace Ogre
             swappyRequiredExtensionNamesTmp.push_back( extName.name );
 
         SwappyVk_determineDeviceExtensions(
-            mPhysicalDevice, static_cast<uint32_t>( availableExtensions.size() ),
+            physicalDevice, static_cast<uint32_t>( availableExtensions.size() ),
             const_cast<VkExtensionProperties *>( availableExtensions.begin() ),  // swappy API flaw
             &numSwappyRequiredExtensions, swappyRequiredExtensionNamesTmp.begin() );
 
         for( const char *swappyReqExtension : swappyRequiredExtensionNamesTmp )
         {
             bool bAlreadyAdded = false;
-            for( const char *alreadyAdded : deviceExtensions )
+            for( const char *alreadyAdded : outExtensions )
             {
                 if( strncmp( alreadyAdded, swappyReqExtension, VK_MAX_EXTENSION_NAME_SIZE ) == 0 )
                 {
@@ -978,9 +1342,18 @@ namespace Ogre
                 }
             }
             if( !bAlreadyAdded )
-                deviceExtensions.push_back( swappyReqExtension );
+                outExtensions.push_back( swappyReqExtension );
         }
 #endif
+
+    }
+    //-------------------------------------------------------------------------
+    void VulkanDevice::createDevice( const FastArray<VkExtensionProperties> &availableExtensions,
+                                     uint32 maxComputeQueues, uint32 maxTransferQueues )
+    {
+        // Jahshaka (ogre-patch 0068): the list itself lives in fillDeviceExtensionRequest().
+        FastArray<const char *> deviceExtensions;
+        fillDeviceExtensionRequest( mPhysicalDevice, availableExtensions, deviceExtensions );
 
         mDeviceExtensions.clear();
         mDeviceExtensions.reserve( deviceExtensions.size() );
@@ -1018,11 +1391,29 @@ namespace Ogre
         VkPhysicalDevice16BitStorageFeatures device16BitStorageFeatures;
         VkPhysicalDeviceShaderFloat16Int8Features deviceShaderFloat16Int8Features;
         VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT deviceCacheControlFeatures;
+#ifdef VK_KHR_present_mode_fifo_latest_ready
+        // Jahshaka patch 0013: the present mode is legal only when its feature
+        // was enabled at device creation. Guarded on the SDK macro so an older
+        // SDK compiles this patch to nothing (and the window side then never
+        // selects the mode, because the extension was never requested).
+        VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR fifoLatestReadyFeature;
+        makeVkStruct( fifoLatestReadyFeature,
+                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR );
+        fifoLatestReadyFeature.presentModeFifoLatestReady = VK_TRUE;
+#endif
         if( fillDeviceFeatures2( deviceFeatures2, device16BitStorageFeatures,
                                  deviceShaderFloat16Int8Features, deviceCacheControlFeatures ) )
         {
             createInfo.pNext = &deviceFeatures2;
             deviceFeatures2.features = mDeviceFeatures;
+#ifdef VK_KHR_present_mode_fifo_latest_ready
+            if( hasDeviceExtension( "VK_KHR_present_mode_fifo_latest_ready" ) ||
+                hasDeviceExtension( "VK_EXT_present_mode_fifo_latest_ready" ) )
+            {
+                fifoLatestReadyFeature.pNext = deviceFeatures2.pNext;
+                deviceFeatures2.pNext = &fifoLatestReadyFeature;
+            }
+#endif
         }
         else
             createInfo.pEnabledFeatures = &mDeviceFeatures;

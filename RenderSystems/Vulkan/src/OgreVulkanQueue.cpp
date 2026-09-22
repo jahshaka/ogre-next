@@ -74,7 +74,9 @@ namespace Ogre
     {
         if( mDevice )
         {
-            vkDeviceWaitIdle( mDevice );  // intentionally ignore result in destroy()
+            // NOT ON A LOST DEVICE (Jahshaka patch 0072) -- see VulkanDevice::destroy.
+            if( !mOwnerDevice || !mOwnerDevice->isDeviceLost() )
+                vkDeviceWaitIdle( mDevice );  // intentionally ignore result in destroy()
 
             mWindowsPendingSwap.clear();
 
