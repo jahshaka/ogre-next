@@ -345,11 +345,25 @@ namespace Ogre
                                                                      mSurfaceKHR, &surfaceCaps );
         checkVkResult( mDevice, result, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR" );
 
-        // Swapchain may be smaller/bigger than requested
-        setFinalResolution( Math::Clamp( getWidth(), surfaceCaps.minImageExtent.width,
-                                         surfaceCaps.maxImageExtent.width ),
-                            Math::Clamp( getHeight(), surfaceCaps.minImageExtent.height,
-                                         surfaceCaps.maxImageExtent.height ) );
+        if( surfaceCaps.currentExtent.width != 0xFFFFFFFFu )
+        {
+            // The window system defines the surface size; the swapchain must match it
+            // exactly. On MoltenVK minImageExtent/maxImageExtent are 1x1 / 16384x16384,
+            // so the clamp below cannot correct a stale size: a swapchain created at any
+            // other size makes every vkAcquireNextImageKHR return VK_ERROR_OUT_OF_DATE_KHR,
+            // and the recreation is then guarded out by mRebuildingSwapchain -> the window
+            // presents nothing, forever, with no error logged.
+            setFinalResolution( surfaceCaps.currentExtent.width, surfaceCaps.currentExtent.height );
+        }
+        else
+        {
+            // Surface size is defined by the swapchain (e.g. Wayland):
+            // it may be smaller/bigger than requested.
+            setFinalResolution( Math::Clamp( getWidth(), surfaceCaps.minImageExtent.width,
+                                             surfaceCaps.maxImageExtent.width ),
+                                Math::Clamp( getHeight(), surfaceCaps.minImageExtent.height,
+                                             surfaceCaps.maxImageExtent.height ) );
+        }
 
         VkBool32 supported;
         result = vkGetPhysicalDeviceSurfaceSupportKHR(
@@ -404,23 +418,54 @@ namespace Ogre
                                              "SHARED_DEMAND_REFRESH_KHR",
                                              "SHARED_CONTINUOUS_REFRESH_KHR" };
 
-        for( size_t i = 0u; i < 2u; ++i )
+        // Jahshaka patch 0013 (rev 2): FIFO_LATEST_READY = vsync pacing
+        // without the FIFO queue backlog, ONLY AS A FALLBACK when the surface
+        // does not expose the REQUESTED mode (MAILBOX under Lowest Latency —
+        // NVIDIA xcb never offers it). Rev 1 pre-empted MAILBOX everywhere it
+        // existed and quantized a 100 Hz panel to 25/20 fps (2026-09-05).
+        // Only with vsync on, only when the device extension was enabled
+        // (the device side of this patch), only when enumerated. NOTE the
+        // mode's enum value is 1000361000 — it must never index
+        // c_presentModeStrs (that read would be wild).
+        bool useFifoLatestReady = false;
+#ifdef VK_KHR_present_mode_fifo_latest_ready
+        if( mVSync && !presentModesFound[0] &&
+            ( mDevice->hasDeviceExtension( "VK_KHR_present_mode_fifo_latest_ready" ) ||
+              mDevice->hasDeviceExtension( "VK_EXT_present_mode_fifo_latest_ready" ) ) )
         {
-            LogManager::getSingleton().logMessage( "Trying presentMode = " +
-                                                   c_presentModeStrs[targetPresentModes[i]] );
-            if( presentModesFound[i] )
+            for( size_t i = 0u; i < numPresentModes; ++i )
             {
-                presentMode = targetPresentModes[i];
-                break;
+                if( presentModes[i] == VK_PRESENT_MODE_FIFO_LATEST_READY_KHR )
+                {
+                    presentMode = VK_PRESENT_MODE_FIFO_LATEST_READY_KHR;
+                    useFifoLatestReady = true;
+                    break;
+                }
             }
-            else
+        }
+#endif
+
+        if( !useFifoLatestReady )
+        {
+            for( size_t i = 0u; i < 2u; ++i )
             {
-                LogManager::getSingleton().logMessage( "PresentMode not available" );
+                LogManager::getSingleton().logMessage( "Trying presentMode = " +
+                                                       c_presentModeStrs[targetPresentModes[i]] );
+                if( presentModesFound[i] )
+                {
+                    presentMode = targetPresentModes[i];
+                    break;
+                }
+                else
+                {
+                    LogManager::getSingleton().logMessage( "PresentMode not available" );
+                }
             }
         }
 
-        LogManager::getSingleton().logMessage( "Chosen presentMode = " +
-                                               c_presentModeStrs[presentMode] );
+        LogManager::getSingleton().logMessage(
+            "Chosen presentMode = " + ( useFifoLatestReady ? String( "FIFO_LATEST_READY_KHR" )
+                                                           : c_presentModeStrs[presentMode] ) );
 
         //-----------------------------
         // Create swapchain
@@ -562,13 +607,67 @@ namespace Ogre
     void VulkanWindowSwapChainBased::destroySwapchain( bool finalDestruction )
     {
         OGRE_ANDROID_SURFACE_LOCK;
-        mDevice->mRenderSystem->notifySwapchainDestroyed( this );
 
         if( mSwapchainSemaphore )
         {
-            mDevice->mVaoManager->notifySemaphoreUnused( mSwapchainSemaphore );
+            // JAHSHAKA PATCH 0073: a swapchain's acquire semaphore may not be
+            // DESTROYED while it still carries an unconsumed signal (or a wait
+            // that has been recorded but not yet submitted). vkAcquireNextImageKHR
+            // signals this semaphore; only a queue submit that WAITS on it
+            // consumes that signal, and vkDeviceWaitIdle does not. Destroying it
+            // here, as this function used to unconditionally do, leaves the
+            // signal pending on a freed handle: the driver hands the same handle
+            // back from the next vkCreateSemaphore, the next acquire is given a
+            // semaphore with pending operations (VUID-vkAcquireNextImageKHR-
+            // semaphore-01779, measured twice per VR session start), and the next
+            // vkQueueSubmit can be rejected outright with VK_ERROR_DEVICE_LOST —
+            // with no GPU fault at all, which is what made it look like a driver
+            // flake. So: submit the wait, then RETIRE the semaphore through the
+            // manager's deferred path (notifyWaitSemaphoreSubmitted), which is
+            // the same route swapBuffers() uses for the ordinary case.
+            //
+            // Only from a state that can hold a pending operation, and never on
+            // the final teardown or a lost device, where no submit is possible —
+            // those keep the old immediate destroy. The re-entrant call
+            // (acquireNextSwapchain -> windowMovedOrResized -> destroySwapchain)
+            // arrives in SwapchainAcquired when the acquire returned an image
+            // (SUBOPTIMAL, or SUCCESS with mSuboptimal set from the last present)
+            // and in SwapchainReleased when it did not (OUT_OF_DATE) -- see
+            // acquireNextSwapchain. A nested FlushOnly submit from inside the
+            // queue's own commit tail is legal there: the new command buffer is
+            // already open and the pending list cleared, and the xcb resize path
+            // already stalls from that very spot.
+            //
+            // This block runs BEFORE notifySwapchainDestroyed releases the
+            // framebuffers, so a submitted wait never references a released one;
+            // and the Acquired branch STALLS after its submit so the swapchain
+            // that owns the pending signal is not destroyed while the wait that
+            // consumes it is still queued (the WSI spec's grey area; a driver that
+            // rejects submissions over semaphore state is what this patch is for).
+            // The stall is a device idle on an operation that happens on a pacing
+            // change and at a VR session's start and end -- never per frame.
+            const bool canSubmit = !finalDestruction && !mDevice->isDeviceLost();
+            if( canSubmit && ( mSwapchainStatus == SwapchainAcquired ||
+                               mSwapchainStatus == SwapchainUsedInRendering ) )
+            {
+                if( mSwapchainStatus == SwapchainAcquired )
+                {
+                    // Acquired but never rendered into: nothing waits on the
+                    // acquire's signal yet, so this batch is what consumes it.
+                    mDevice->mGraphicsQueue.addWindowToWaitFor( mSwapchainSemaphore );
+                }
+                mDevice->mGraphicsQueue.commitAndNextCommandBuffer( SubmissionType::FlushOnly );
+                mDevice->stallIgnoringDeviceLost();
+                mDevice->mVaoManager->notifyWaitSemaphoreSubmitted( mSwapchainSemaphore );
+            }
+            else
+            {
+                mDevice->mVaoManager->notifySemaphoreUnused( mSwapchainSemaphore );
+            }
             mSwapchainSemaphore = 0;
         }
+
+        mDevice->mRenderSystem->notifySwapchainDestroyed( this );
 
         if( mSwapchain )
         {
@@ -639,6 +738,13 @@ namespace Ogre
                   ( result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ) ) &&
                 !mRebuildingSwapchain )
             {
+                // JAHSHAKA PATCH 0073: if the acquire RETURNED AN IMAGE (SUCCESS
+                // with mSuboptimal from the last present, or SUBOPTIMAL), the
+                // semaphore WILL be signalled, and the rebuild's destroySwapchain
+                // must retire it through a submitted wait, not destroy it. Say so
+                // in the status; OUT_OF_DATE acquired nothing and stays Released.
+                if( result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR )
+                    mSwapchainStatus = SwapchainAcquired;
                 mRebuildingSwapchain = true;
                 windowMovedOrResized();
                 mRebuildingSwapchain = false;
@@ -715,6 +821,13 @@ namespace Ogre
         // Don't do it right now because we need to recreate the surface as well.
         OGRE_ANDROID_SURFACE_PREVENT_USE;
 
+        // JAHSHAKA PATCH 0073: the presentable images of the swapchain about to
+        // be destroyed may still be in flight in a submitted frame
+        // (VUID-vkDestroySwapchainKHR-swapchain-01282). Every other rebuild site
+        // knows this — VulkanXcbWindow::windowMovedOrResized stalls before its
+        // own destroySwapchain() — and a VSync change is the same rebuild.
+        mDevice->stallIgnoringDeviceLost();
+
         destroySwapchain();
         createSwapchain();
     }
@@ -729,6 +842,10 @@ namespace Ogre
         // If mWindowReleaseRequested = true, then the swapchain will soon be recreated.
         // Don't do it right now because we need to recreate the surface as well.
         OGRE_ANDROID_SURFACE_PREVENT_USE;
+
+        // JAHSHAKA PATCH 0073, as in setVSync above: a rebuild waits for the
+        // frames that are still using the old swapchain's images.
+        mDevice->stallIgnoringDeviceLost();
 
         destroySwapchain();
         createSwapchain();
