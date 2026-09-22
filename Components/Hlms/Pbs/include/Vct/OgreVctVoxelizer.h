@@ -60,18 +60,49 @@ namespace Ogre
         UavBufferPacked   *vertexBuffer;
         UavBufferPacked   *indexBuffer;
         bool               needsTexPool;
+        /// WHAT THIS BUCKET IS, said without a pointer: the compute job's VARIANT
+        /// (the VoxelizerJobSetting bits — it also decides the vertex and index
+        /// buffers) and the material POOL its const buffer is. See operator< below.
+        uint32             variant;
+        uint32             materialBucketIdx;
 
+        /// ORDERED BY WHAT A BUCKET IS, NEVER BY WHERE IT LIVES.
+        ///
+        /// This ordering is the ORDER THE DISPATCHES RUN IN (VctVoxelizer::build
+        /// iterates mBuckets). Comparing POINTERS made that order the allocator's,
+        /// and the voxelisation's per-voxel merge used to be order-dependent, so
+        /// the same scene voxelised in two processes was not the same picture and
+        /// no re-solve could correct it (the VOXELS differed). Patch 0065 made the
+        /// merge itself order-independent — the dispatches accumulate exact integer
+        /// sums and one resolve pass turns them into the voxel textures — so the
+        /// order no longer decides anything; this key stays because a stable order
+        /// is still the right thing for a renderer to have, and it costs nothing.
+        ///
+        /// A BUCKET IS A DISPATCH, AND A DISPATCH IS SIZED BY THE WHOLE OCTANT
+        /// however few instances it holds, so the key must name only what a
+        /// dispatch BINDS: the job variant (which also decides the vertex and index
+        /// buffers and the texture pool) and the material POOL's const buffer. The
+        /// material SLOT rides per instance and must NOT be here — patch 0062 put
+        /// it here to buy determinism from the pin's order-dependent merge, and it
+        /// split one whole-volume dispatch into one PER MATERIAL: on a scene whose
+        /// 8,001 primitives each own a material the outermost cascade's rebuild
+        /// went 86 -> 321 ms. The pointer comparisons remain underneath as a
+        /// total-order tie-break that nothing reaches.
         bool operator<( const VoxelizerBucket &other ) const
         {
+            if( this->variant != other.variant )
+                return this->variant < other.variant;
+            if( this->materialBucketIdx != other.materialBucketIdx )
+                return this->materialBucketIdx < other.materialBucketIdx;
+            if( this->needsTexPool != other.needsTexPool )
+                return this->needsTexPool < other.needsTexPool;
             if( this->job != other.job )
                 return this->job < other.job;
             if( this->materialBuffer != other.materialBuffer )
                 return this->materialBuffer < other.materialBuffer;
             if( this->vertexBuffer != other.vertexBuffer )
                 return this->vertexBuffer < other.vertexBuffer;
-            if( this->indexBuffer != other.indexBuffer )
-                return this->indexBuffer < other.indexBuffer;
-            return this->needsTexPool < other.needsTexPool;
+            return this->indexBuffer < other.indexBuffer;
         }
     };
 
@@ -155,6 +186,18 @@ namespace Ogre
             bool               bCompressed;
             uint32             numItems;
             uint32             indexCountSplit;
+            /// WHICH MESH LOD OF THIS MESH IS VOXELIZED (Jahshaka patch 0064).
+            /// 0 = the finest level, which is what every caller that does not ask
+            /// gets and is exactly the behaviour this class always had. Clamped
+            /// per SubMesh to the levels that exist, so a mesh with no LOD chain
+            /// ignores it entirely.
+            ///
+            /// It is a property of the MESH inside THIS voxelizer and not of the
+            /// item, because the buffers are downloaded, converted and indexed
+            /// once per mesh: two items of one mesh in one voxelizer share the
+            /// level, and the FINEST request wins (the same precedence rule
+            /// `bCompressed` uses).
+            uint32             lodLevel;
             QueuedSubMeshArray submeshes;
         };
 
@@ -179,6 +222,22 @@ namespace Ogre
         HlmsComputeJob *mComputeJobs[1u << 4u];
         HlmsComputeJob *mAabbCalculator[1u << 2u];
         HlmsComputeJob *mAabbWorldSpaceJob;
+
+        /// Jahshaka patch 0065 — THE ORDER-INDEPENDENT MERGE'S ACCUMULATOR.
+        ///
+        /// PFG_R32_UINT, (mWidth, mHeight, mDepth * 13): thirteen texels per voxel,
+        /// interleaved in Z (albedo sum rgba, raw normal sum xyz, emissive sum
+        /// rgb, folded normal sum xyz), all in the fixed-point integers
+        /// Samples/Media/VCT/VoxelMerge_piece_cs.any defines — which also says
+        /// why it is thirteen R32 texels and not four RGBA32 ones: MEASURED, the
+        /// four-texel layout costs the same GPU time and 12 MB more per 64^3
+        /// volume (VOXMERGE-2; the earlier reason, a device loss from the
+        /// 128-bit clear, was patch 0067's hazard seen from here).
+        /// 52 bytes per voxel, which is 13.6 MB at 64^3 and 109 MB at 128^3, and
+        /// RESIDENT for the voxeliser's life since patch 0071 (the per-build
+        /// residency round trip of an image this size was the second Xid 109
+        /// site).
+        TextureGpu *mMergeAccumTex;
 
         uint32                mTotalNumInstances;
         float                *mCpuInstanceBuffer;
@@ -243,6 +302,12 @@ namespace Ogre
         };
 
         FastArray<Octant> mOctants;
+        /// The division `dividideOctants` was last called with, so that moving the
+        /// region can re-derive the octants from the SAME division instead of
+        /// leaving them describing the box that has just been replaced.
+        /// 0 = never divided, which is the only state in which a move has nothing
+        /// to re-derive.
+        uint32 mNumOctantsX, mNumOctantsY, mNumOctantsZ;
 
         ResourceTransitionArray mResourceTransitions;
 
@@ -267,6 +332,8 @@ namespace Ogre
 
         void buildMeshBuffers();
         void createVoxelTextures();
+        /// Jahshaka patch 0065: drops mMergeAccumTex too.
+        void destroyVoxelTextures() override;
 
         void   placeItemsInBuckets();
         size_t countSubMeshPartitionsIn( Item *item ) const;
@@ -300,8 +367,23 @@ namespace Ogre
             This value is ignored if the mesh had already been added.
 
             Use std::numeric_limits<uint32>::max to avoid partitioning at all.
+        @param lodLevel
+            Which LOD level of the item's mesh to voxelize. 0 (the default) is the
+            finest level and is what this class always did. Higher levels are
+            clamped to the levels the mesh actually has, so a mesh with no LOD
+            chain is voxelized exactly as before.
+
+            The level belongs to the MESH within this voxelizer: if several Items
+            share a mesh and ask for different levels, the FINEST (lowest) wins,
+            because the mesh's vertex/index data is downloaded and converted once.
+
+            A voxel grid cannot represent detail finer than its own cell, so a
+            coarse volume voxelizing a simplified level produces the same voxels
+            for a fraction of the raster cost. The caller decides which level that
+            is; this class only spends it.
         */
-        void addItem( Item *item, bool bCompressed, uint32 indexCountSplit = 0u );
+        void addItem( Item *item, bool bCompressed, uint32 indexCountSplit = 0u,
+                      uint32 lodLevel = 0u );
 
         /** Removes an item added via VctVoxelizer::addItem
         @remarks
@@ -345,6 +427,56 @@ namespace Ogre
         void setResolution( uint32 width, uint32 height, uint32 depth );
 
         void build( SceneManager *sceneManager );
+
+        /// Jahshaka patch 0065 — HOW MANY DISPATCHES THE LAST build() ISSUED.
+        ///
+        /// A bucket IS a dispatch, and a dispatch is sized by the whole OCTANT
+        /// however few instances the bucket holds, so `getNumBuckets() *
+        /// getNumOctants()` is the number that says whether a scene is paying
+        /// for its material count rather than for its geometry. It is the
+        /// reading patch 0062's 3.6x had no name for; exposed so the host can
+        /// report it (Jahshaka: GiStatus::CascadeStatus::voxelDispatches).
+        size_t getNumBuckets() const { return mBuckets.size(); }
+        size_t getNumOctants() const { return mOctants.size(); }
+
+        /// JAHSHAKA PATCH 0089 - HOW MANY INDICES THE LAST build() ACTUALLY BOUND.
+        ///
+        /// `QueuedInstance::numIndices` is what sizes each raster dispatch, and it
+        /// is filled in `placeItemsInBuckets` from `getLodVao( subMesh, lodLevel )`
+        /// (patch 0064) - i.e. from the LOD LEVEL this voxelizer resolved and
+        /// CLAMPED for itself. Summing it is therefore a READING of the geometry
+        /// the volume holds, where a host walking the mesh's VAOs from outside can
+        /// only ever produce a prediction that re-implements the clamp and drifts
+        /// from it (Jahshaka: GiStatus::CascadeStatus::voxelTriangles used to be
+        /// exactly that prediction).
+        ///
+        /// Counted over the buckets and not over `mItems`, because the buckets are
+        /// what the dispatches iterate: an item the region declined contributes
+        /// nothing here, which is the honest answer.
+        size_t getQueuedIndexCount() const
+        {
+            size_t total = 0u;
+            VoxelizerBucketMap::const_iterator itor = mBuckets.begin();
+            VoxelizerBucketMap::const_iterator endt = mBuckets.end();
+            while( itor != endt )
+            {
+                FastArray<QueuedInstance>::const_iterator itInst = itor->second.queuedInst.begin();
+                FastArray<QueuedInstance>::const_iterator enInst = itor->second.queuedInst.end();
+                while( itInst != enInst )
+                {
+                    total += itInst->numIndices;
+                    ++itInst;
+                }
+                ++itor;
+            }
+            return total;
+        }
+    public:
+        /// JAHSHAKA PATCH 0081: the voxeliser's material cache, so a host can
+        /// evict a dying datablock (VctMaterial::removeDatablock) instead of
+        /// re-voxelising every volume.
+        VctMaterial *getVctMaterial() const { return mVctMaterial; }
+
     };
 }  // namespace Ogre
 

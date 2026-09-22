@@ -147,6 +147,7 @@ namespace Ogre
 
         DatablockConversionResult conversionResult;
         conversionResult.slotIdx = static_cast<uint32>( usedSlots );
+        conversionResult.bucketIdx = static_cast<uint32>( &bucket - &mBuckets.front() );
         conversionResult.constBuffer = bucket.buffer;
         if( diffuseTex )
         {
@@ -289,6 +290,17 @@ namespace Ogre
 
         mCompositorManager->removeWorkspace( mDownsampleWorkspace2D );
         mDownsampleWorkspace2D = 0;
+    }
+    //-------------------------------------------------------------------------
+    //-------------------------------------------------------------------------
+    void VctMaterial::removeDatablock( const HlmsDatablock *datablock )
+    {
+        // JAHSHAKA PATCH 0081 -- see the header. The map is keyed by a non-const
+        // pointer; the lookup does not write through it.
+        DatablockConversionResultMap::iterator it =
+            mDatablockConversionResults.find( const_cast<HlmsDatablock *>( datablock ) );
+        if( it != mDatablockConversionResults.end() )
+            mDatablockConversionResults.erase( it );
     }
     //-------------------------------------------------------------------------
     VctMaterial::DatablockConversionResult VctMaterial::addDatablock( HlmsDatablock *datablock )

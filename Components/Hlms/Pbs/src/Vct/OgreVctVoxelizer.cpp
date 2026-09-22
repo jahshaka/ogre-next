@@ -90,6 +90,7 @@ namespace Ogre
                                 bool correctAreaLightShadows ) :
         VctVoxelizerSourceBase( id, renderSystem, hlmsManager ),
         mAabbWorldSpaceJob( 0 ),
+        mMergeAccumTex( 0 ),
         mTotalNumInstances( 0 ),
         mCpuInstanceBuffer( 0 ),
         mInstanceBuffer( 0 ),
@@ -117,7 +118,10 @@ namespace Ogre
                                        Root::getSingleton().getCompositorManager2(),
                                        renderSystem->getTextureGpuManager() ) ),
         mAutoRegion( true ),
-        mMaxRegion( Aabb::BOX_INFINITE )
+        mMaxRegion( Aabb::BOX_INFINITE ),
+        mNumOctantsX( 0u ),
+        mNumOctantsY( 0u ),
+        mNumOctantsZ( 0u )
     {
         memset( mComputeJobs, 0, sizeof( mComputeJobs ) );
         memset( mAabbCalculator, 0, sizeof( mAabbCalculator ) );
@@ -149,6 +153,22 @@ namespace Ogre
         }
         numIndices = alignToNextMultiple( numIndices, 2u );
         return adjustedIndexStart;
+    }
+    //-------------------------------------------------------------------------
+    /// THE VAO OF ONE LOD LEVEL (Jahshaka patch 0064), and the ONE place this
+    /// file decides which one a SubMesh is voxelized from.
+    ///
+    /// `mVao[VpNormal]` is the mesh's LOD chain, finest first, and it always has
+    /// at least one entry: a mesh with no chain has exactly one and every level
+    /// clamps back onto it, which is why this is a drop-in for the
+    /// `.front()` this class used everywhere.
+    static VertexArrayObject *getLodVao( const SubMesh *subMesh, uint32 lodLevel )
+    {
+        const VertexArrayObjectArray &vaos = subMesh->mVao[VpNormal];
+        if( vaos.empty() )
+            return 0;
+        const size_t idx = std::min<size_t>( lodLevel, vaos.size() - 1u );
+        return vaos[idx];
     }
     //-------------------------------------------------------------------------
     void VctVoxelizer::createComputeJobs()
@@ -281,7 +301,7 @@ namespace Ogre
         for( unsigned subMeshIdx = 0; subMeshIdx < numSubmeshes; ++subMeshIdx )
         {
             SubMesh *subMesh = mesh->getSubMesh( subMeshIdx );
-            VertexArrayObject *vao = subMesh->mVao[VpNormal].front();
+            VertexArrayObject *vao = getLodVao( subMesh, queuedMesh.lodLevel );
 
             // Count the total number of indices and vertices
             size_t vertexStart = 0u;
@@ -412,7 +432,8 @@ namespace Ogre
             const size_t numSubMeshes = queuedMesh.submeshes.size();
             for( size_t i = 0u; i < numSubMeshes; ++i )
             {
-                VertexArrayObject *vao = mesh->getSubMesh( (uint16)( i ) )->mVao[VpNormal].front();
+                VertexArrayObject *vao =
+                    getLodVao( mesh->getSubMesh( (uint16)( i ) ), queuedMesh.lodLevel );
                 IndexBufferPacked *indexBuffer = vao->getIndexBuffer();
                 const bool is16bit = indexBuffer->getIndexType() == IndexBufferPacked::IT_16BIT;
 
@@ -491,7 +512,7 @@ namespace Ogre
         for( unsigned subMeshIdx = 0; subMeshIdx < numSubmeshes; ++subMeshIdx )
         {
             SubMesh *subMesh = mesh->getSubMesh( subMeshIdx );
-            VertexArrayObject *vao = subMesh->mVao[VpNormal].front();
+            VertexArrayObject *vao = getLodVao( subMesh, queuedMesh.lodLevel );
 
             size_t numVertices = vao->getBaseVertexBuffer()->getNumElements();
 
@@ -591,7 +612,8 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    void VctVoxelizer::addItem( Item *item, bool bCompressed, uint32 indexCountSplit )
+    void VctVoxelizer::addItem( Item *item, bool bCompressed, uint32 indexCountSplit,
+                                uint32 lodLevel )
     {
         const MeshPtr &mesh = item->getMesh();
 
@@ -606,13 +628,20 @@ namespace Ogre
 
         const bool isNewEntry = itor == mMeshesV2.end();
 
+        // THE FINEST REQUEST WINS (patch 0064), for the same reason 'no
+        // compression' does below: the mesh's buffers are downloaded and
+        // converted ONCE for every item that shares it, so the entry can only
+        // hold one level and it must be one no caller asked to be finer than.
+        if( !isNewEntry )
+            lodLevel = std::min( lodLevel, itor->second.lodLevel );
+
         if( isNewEntry )
         {
             const unsigned numSubMeshes = mesh->getNumSubMeshes();
             for( unsigned i = 0u; i < numSubMeshes && bCanAdd; ++i )
             {
-                VertexArrayObject *vao = mesh->getSubMesh( i )->mVao[VpNormal].front();
-                if( !vao->getIndexBuffer() )
+                VertexArrayObject *vao = getLodVao( mesh->getSubMesh( i ), lodLevel );
+                if( !vao || !vao->getIndexBuffer() )
                 {
                     bCanAdd = false;
                     LogManager::getSingleton().logMessage(
@@ -633,6 +662,7 @@ namespace Ogre
                 QueuedMesh &queuedMesh = mMeshesV2[mesh];
                 // const bool wasCompressed = queuedMesh.bCompressed;
                 queuedMesh.bCompressed = false;
+                queuedMesh.lodLevel = lodLevel;
 
                 if( isNewEntry )
                 {
@@ -652,12 +682,14 @@ namespace Ogre
                     queuedMesh.numItems = 0u;
                     queuedMesh.bCompressed = true;
                     queuedMesh.indexCountSplit = indexCountSplit;
+                    queuedMesh.lodLevel = lodLevel;
                     queuedMesh.submeshes.resize( mesh->getNumSubMeshes() );
 
                     mMeshesV2[mesh] = queuedMesh;
                 }
                 else
                 {
+                    itor->second.lodLevel = lodLevel;
                     ++itor->second.numItems;
                 }
             }
@@ -809,12 +841,26 @@ namespace Ogre
         prepareAabbCalculatorMeshData();
     }
     //-------------------------------------------------------------------------
+    /// Jahshaka patch 0065: the merge accumulator dies with the voxel textures.
+    void VctVoxelizer::destroyVoxelTextures()
+    {
+        if( mMergeAccumTex )
+        {
+            mTextureGpuManager->destroyTexture( mMergeAccumTex );
+            mMergeAccumTex = 0;
+        }
+        VctVoxelizerSourceBase::destroyVoxelTextures();
+    }
+    //-------------------------------------------------------------------------
     void VctVoxelizer::createVoxelTextures()
     {
         if( mAlbedoVox && mAlbedoVox->getWidth() == mWidth && mAlbedoVox->getHeight() == mHeight &&
             mAlbedoVox->getDepth() == mDepth )
         {
             mAccumValVox->scheduleTransitionTo( GpuResidency::Resident );
+            // Jahshaka patch 0071: the merge accumulator is NOT transient. It is
+            // created once with the voxel textures and stays Resident until they
+            // are destroyed -- see the note at the end of build().
             return;
         }
 
@@ -848,6 +894,12 @@ namespace Ogre
             mAccumValVox = mTextureGpuManager->createTexture(
                 "VctVoxelizer" + StringConverter::toString( getId() ) + "/AccumVal",
                 GpuPageOutStrategy::Discard, TextureFlags::NotTexture | texFlags, TextureTypes::Type3D );
+
+            // Jahshaka patch 0065 — the order-independent merge's accumulator.
+            mMergeAccumTex = mTextureGpuManager->createTexture(
+                "VctVoxelizer" + StringConverter::toString( getId() ) + "/MergeAccum",
+                GpuPageOutStrategy::Discard,
+                TextureFlags::NotTexture | TextureFlags::Uav, TextureTypes::Type3D );
         }
 
         TextureGpu *textures[4] = { mAlbedoVox, mEmissiveVox, mNormalVox, mAccumValVox };
@@ -855,12 +907,51 @@ namespace Ogre
             textures[i]->scheduleTransitionTo( GpuResidency::OnStorage );
 
         mAlbedoVox->setPixelFormat( PFG_RGBA8_UNORM );
-        mEmissiveVox->setPixelFormat( PFG_RGBA8_UNORM );
+        // JAHSHAKA PATCH 0087: THE EMISSIVE VOXEL IS A FLOAT.
+        //
+        // Albedo is a RATIO and lives in [0, 1] by definition, so its UNORM store
+        // above is exact. EMISSIVE is a RADIANCE -- W/(m^2 sr), no upper bound
+        // worth naming -- and this store was the one place it was clipped: the
+        // material store carries it as four honest floats (VctMaterial:
+        // shaderMaterial.emissive[i] = emissiveCol[i]) and the merge accumulates
+        // it on a fixed-point grid clamped at 16.0 per contribution (patch 0065),
+        // but the final imageWrite went into a UNORM8 texel, so an emitter
+        // authored at 3.0 was stored as exactly 1.0 and the light injection seeded
+        // the radiance volume from that (LightInjection_piece_cs.any:
+        // blockColour = emissiveVal.xyz) -- a third of the energy, entering the
+        // bounces, the irradiance field, the cones and the ray hits, with nothing
+        // in any log and a picture that merely looks dimmer.
+        //
+        // RGBA16_FLOAT and not 32: half carries 65504 with 11 bits of mantissa,
+        // which is finer than the merge's own 1/4096 grid everywhere in [0, 16] --
+        // the grid's clamp, not the format, is now the documented ceiling.
+        //
+        // NOTHING ELSE MOVES. The GLSL image declaration carries no hard-coded
+        // format: HlmsComputeJob generates the layout qualifier from the bound
+        // texture (uav4_pf_type, OgreHlmsComputeJob.cpp), the typed-UAV write is a
+        // float4 either way, ComputeTools::clearUavFloat clears any non-integer
+        // format, and every reader loads through a sampled texture3D. The one
+        // backend that cannot follow is D3D11 WITHOUT typed UAV loads, whose
+        // branch packs the texel into a single uint -- see the note beside it in
+        // Voxelizer_piece_cs.any.
+        mEmissiveVox->setPixelFormat( PFG_RGBA16_FLOAT );
         mNormalVox->setPixelFormat( PFG_R10G10B10A2_UNORM );
         if( hasTypedUavs )
             mAccumValVox->setPixelFormat( PFG_R16_UINT );
         else
             mAccumValVox->setPixelFormat( PFG_R32_UINT );
+
+        // Jahshaka patch 0065: thirteen texels per voxel, interleaved in Z — the
+        // shader derives their coordinates from the voxel's own, so a dispatch
+        // that covers one OCTANT needs to know nothing about the volume's depth.
+        // R32_UINT rather than RGBA32_UINT because ComputeTools' clear of a
+        // 128-bit 3D uav loses the device on this driver (VoxelMerge_piece_cs),
+        // and thirteen rather than sixteen because only thirteen carry anything.
+        mMergeAccumTex->scheduleTransitionTo( GpuResidency::OnStorage );
+        mMergeAccumTex->setPixelFormat( PFG_R32_UINT );
+        mMergeAccumTex->setResolution( mWidth, mHeight, mDepth * 13u );
+        mMergeAccumTex->setNumMipmaps( 1u );
+        mMergeAccumTex->scheduleTransitionTo( GpuResidency::Resident );
 
         const uint8 numMipmaps = PixelFormatGpuUtils::getMaxMipmapCount( mWidth, mHeight, mDepth );
 
@@ -890,6 +981,25 @@ namespace Ogre
         mAutoRegion = autoRegion;
         mRegionToVoxelize = regionToVoxelize;
         mMaxRegion = maxRegion;
+
+        // THE OCTANTS DESCRIBE THE REGION, so a region that moves takes them with it.
+        // dividideOctants() COPIES mRegionToVoxelize into every octant's own Aabb, and
+        // build() then uses that copy twice: placeItemsInBuckets() culls the items
+        // against it, and the dispatch passes its minimum as `voxelOrigin` — the world
+        // point the voxelisation shader writes from. Leave them behind and the next
+        // build() voxelises the geometry of the OLD box, at the OLD origin, into a
+        // texture that VctLighting maps onto the NEW one (fillConstBufferData reads
+        // getVoxelOrigin() live): a wrong bounce, permanently, with no log line, no
+        // validation error and no cost difference.
+        //
+        // VctImageVoxelizer::setRegionToVoxelize already ends with mOctants.clear() for
+        // exactly this reason, and its caller re-divides before building — so this class
+        // was the one of the two that did not keep the invariant. Re-deriving (rather
+        // than clearing) keeps every existing caller working: a clear would leave
+        // build() with an empty octant list, which is an assert in debug and a silently
+        // BLACK volume in release.
+        if( mNumOctantsX )
+            dividideOctants( mNumOctantsX, mNumOctantsY, mNumOctantsZ );
     }
     //-------------------------------------------------------------------------
     void VctVoxelizer::autoCalculateRegion()
@@ -953,7 +1063,8 @@ namespace Ogre
 
                 SubItem *subItem = item->getSubItem( i );
 
-                VertexArrayObject *vao = subItem->getSubMesh()->mVao[VpNormal].front();
+                VertexArrayObject *vao =
+                    getLodVao( subItem->getSubMesh(), itMesh->second.lodLevel );
                 if( vao->getIndexBuffer() )
                 {
                     if( vao->getIndexBuffer()->getIndexType() == IndexBufferPacked::IT_32BIT )
@@ -976,6 +1087,9 @@ namespace Ogre
                 bucket.job = mComputeJobs[variant];
                 bucket.materialBuffer = convResult.constBuffer;
                 bucket.needsTexPool = convResult.hasDiffuseTex() || convResult.hasEmissiveTex();
+                // The pointer-free identity the bucket is ORDERED by (see operator<).
+                bucket.variant = variant;
+                bucket.materialBucketIdx = convResult.bucketIdx;
                 bucket.vertexBuffer =
                     itMesh->second.bCompressed ? mVertexBufferCompressed : mVertexBufferUncompressed;
                 bucket.indexBuffer =
@@ -1248,6 +1362,12 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VctVoxelizer::dividideOctants( uint32 numOctantsX, uint32 numOctantsY, uint32 numOctantsZ )
     {
+        // Remembered so that setRegionToVoxelize can re-derive them when the region
+        // moves (see the note there).
+        mNumOctantsX = numOctantsX;
+        mNumOctantsY = numOctantsY;
+        mNumOctantsZ = numOctantsZ;
+
         mOctants.clear();
         mOctants.reserve( numOctantsX * numOctantsY * numOctantsZ );
 
@@ -1301,12 +1421,15 @@ namespace Ogre
         mComputeTools->prepareForUavClear( mResourceTransitions, mEmissiveVox );
         mComputeTools->prepareForUavClear( mResourceTransitions, mNormalVox );
         mComputeTools->prepareForUavClear( mResourceTransitions, mAccumValVox );
+        // Jahshaka patch 0065: the sums start at zero, every build.
+        mComputeTools->prepareForUavClear( mResourceTransitions, mMergeAccumTex );
         mRenderSystem->executeResourceTransition( mResourceTransitions );
 
         mComputeTools->clearUavFloat( mAlbedoVox, fClearValue );
         mComputeTools->clearUavFloat( mEmissiveVox, fClearValue );
         mComputeTools->clearUavFloat( mNormalVox, fClearNormals );
         mComputeTools->clearUavUint( mAccumValVox, uClearValue );
+        mComputeTools->clearUavUint( mMergeAccumTex, uClearValue );
         OgreProfileGpuEnd( "VCT Voxelization Clear" );
     }
     //-------------------------------------------------------------------------
@@ -1388,10 +1511,26 @@ namespace Ogre
             uavSlot.access = ResourceAccess::ReadWrite;
             mComputeJobs[i]->_setUavTexture( 4, uavSlot );
 
+            // Jahshaka patch 0065: SLOT 5 WAS THE TRIANGLE COUNTER and is now the
+            // per-voxel INTEGER ACCUMULATOR the merge sums into (the count rides in
+            // it). Same slot, same uimage3D, so this job's binding shape — and the
+            // Vulkan root layout Ogre derives from it — is exactly the pin's. That
+            // is not cosmetic: a separate VCT/VoxelResolve compute job was tried
+            // first and corrupted the descriptor set of the job dispatched after it
+            // (VUID-VkWriteDescriptorSet-descriptorType-00319 on LightInjection's
+            // `lightVoxel`, then VK_ERROR_DEVICE_LOST on the Showroom samples).
             uavSlot.texture = mAccumValVox;
             uavSlot.pixelFormat = mAccumValVox->getPixelFormat();
             uavSlot.access = ResourceAccess::ReadWrite;
             mComputeJobs[i]->_setUavTexture( 5, uavSlot );
+
+            // Jahshaka patch 0065: the per-voxel INTEGER ACCUMULATOR the merge
+            // sums into (R32_UINT, thirteen texels per voxel — see
+            // VoxelMerge_piece_cs.any for why it is not RGBA32_UINT).
+            uavSlot.texture = mMergeAccumTex;
+            uavSlot.pixelFormat = mMergeAccumTex->getPixelFormat();
+            uavSlot.access = ResourceAccess::ReadWrite;
+            mComputeJobs[i]->_setUavTexture( 6, uavSlot );
 
             DescriptorSetTexture2::BufferSlot texBufSlot(
                 DescriptorSetTexture2::BufferSlot::makeEmpty() );
@@ -1490,8 +1629,32 @@ namespace Ogre
 
         OgreProfileGpuEnd( "VCT Voxelization Jobs" );
 
-        // This texture is no longer needed, it's not used for the injection phase. Save memory.
+        // These textures are no longer needed, they're not used for the injection
+        // phase. Save memory.
         mAccumValVox->scheduleTransitionTo( GpuResidency::OnStorage );
+
+        // THE MERGE ACCUMULATOR STAYS RESIDENT (Jahshaka patch 0071). Patch 0065
+        // gave it upstream's transient treatment: OnStorage at the end of every
+        // build(), Resident at the start of the next one. On NVIDIA 595.84 that
+        // per-build create/destroy of a large 3D storage image, while the
+        // dispatches that wrote the previous one may still be executing, HANGS
+        // THE CHANNEL: NVRM Xid 109 CTX SWITCH TIMEOUT -> VK_ERROR_DEVICE_LOST.
+        // Measured (lane XID-2, the owner's own sequence scripted -- hide and
+        // show a plane in an Epic scene, 100 cycles a run): 4/4 and 6/6 runs
+        // lost the device with the round trip, 0/6 and 0/6 without it, every
+        // failure carrying a kernel Xid line from that pid and no passing run
+        // ever carrying one. It is NOT the delayed-block reuse window (patch
+        // 0067's subject: a 16-frame window still hangs 4/6), NOT the 512 MB
+        // force-flush (disabled: 6/6), NOT the cached image views (purged on
+        // residency loss: 6/6) and NOT the ray-query tier (rays off: 6/6).
+        // Keeping the image alive is the only arm that cures it, and it is also
+        // the right design: under a cascade chain a build happens every frame or
+        // two, so the residency round trip never actually saves anything -- it
+        // only returns memory the next build immediately asks for again.
+        // THE COST is one accumulator per voxeliser held for its lifetime:
+        // width * height * depth * 13 * 4 bytes (13.6 MB at 64^3, 109 MB at
+        // 128^3). A future lane may share ONE scratch volume across a chain's
+        // cascades; that is an optimisation, not a correctness matter.
 
         if( mNeedsAlbedoMipmaps || mNeedsAllMipmaps )
             mAlbedoVox->_autogenerateMipmaps();

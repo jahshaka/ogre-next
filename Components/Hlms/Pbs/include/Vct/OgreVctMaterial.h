@@ -46,11 +46,17 @@ namespace Ogre
         struct DatablockConversionResult
         {
             uint32             slotIdx;
+            /// Which material POOL the slot is in, as an index into VctMaterial's own
+            /// bucket list. Together with slotIdx it names the material without naming
+            /// a pointer, which is what lets VctVoxelizer order its dispatches the same
+            /// way in every process (see VoxelizerBucket::operator<).
+            uint32             bucketIdx;
             ConstBufferPacked *constBuffer;
             uint16             diffuseTexIdx;
             uint16             emissiveTexIdx;
             DatablockConversionResult() :
                 slotIdx( (uint32)-1 ),
+                bucketIdx( (uint32)-1 ),
                 constBuffer( 0 ),
                 diffuseTexIdx( std::numeric_limits<uint16>::max() ),
                 emissiveTexIdx( std::numeric_limits<uint16>::max() )
@@ -114,6 +120,17 @@ namespace Ogre
         /// If the datablock contains textures, then
         /// initTempResources must already have been called.
         DatablockConversionResult addDatablock( HlmsDatablock *datablock );
+        /// JAHSHAKA PATCH 0081: FORGET A DATABLOCK THAT IS ABOUT TO DIE. The
+        /// conversion cache is keyed by the raw datablock pointer across builds,
+        /// so a datablock destroyed and another created at the same address
+        /// would ALIAS the dead one's slot. The host's only answer used to be a
+        /// from-scratch re-voxelisation of every volume on every material death;
+        /// this erases the cache entry instead. The bucket keeps the dead pointer
+        /// in its membership set on purpose: slots are numbered by that set's
+        /// size, so removing it would hand the next datablock a slot another
+        /// live one already holds. One slot per death leaks until the material
+        /// object is recreated (a mode or quality change); stated, not hidden.
+        void removeDatablock( const HlmsDatablock *datablock );
 
         TextureGpu *getTexturePool() const { return mTexturePool; }
     };
