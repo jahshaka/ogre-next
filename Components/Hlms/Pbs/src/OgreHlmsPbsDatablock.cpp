@@ -506,18 +506,84 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void HlmsPbsDatablock::setSpecular( const Vector3 &specularColour )
     {
+        // JAHSHAKA PATCH 0028: kS is the term the reflection-probe gate is
+        // decided on, so an edit that CROSSES it has to rebuild the shader, not
+        // just the const buffer. Same shape as setClearCoat below: evaluate
+        // before and after, flush only on a crossing, so the common case (an
+        // ordinary colour tweak on a material that reflects either way) still
+        // costs nothing.
+        const bool bWasZeroSpecularResponse = hasZeroSpecularResponse();
+
         const float invPI = getBrdf() == PbsBrdf::BlinnPhongLegacyMath ? 0.318309886f : 1.0f;
 
         mkSr = specularColour.x * invPI;
         mkSg = specularColour.y * invPI;
         mkSb = specularColour.z * invPI;
         scheduleConstBufferUpdate();
+
+        if( bWasZeroSpecularResponse != hasZeroSpecularResponse() )
+            flushRenderables();
     }
     //-----------------------------------------------------------------------------------
     Vector3 HlmsPbsDatablock::getSpecular() const
     {
         const Real pi = getBrdf() == PbsBrdf::BlinnPhongLegacyMath ? Math::PI : 1.0f;
         return Vector3( mkSr, mkSg, mkSb ) * pi;
+    }
+    //-----------------------------------------------------------------------------------
+    bool HlmsPbsDatablock::hasZeroSpecularResponse() const
+    {
+        // JAHSHAKA PATCH 0028 — see the header's @remarks. This is the ONLY
+        // place the rule is written down: HlmsPbs::calculateHashForPreCreate
+        // and the three setters that can cross it all call this.
+        const Real kEps = Real( 1e-4 );
+
+        const Vector3 kS = getSpecular();
+        if( kS.x > kEps || kS.y > kEps || kS.z > kEps )
+            return false;
+
+        // ...and F0: authored directly in the Fresnel workflows, driven by
+        // metalness in the metallic one (where the shader's dielectric floor of
+        // 0.04 is not reachable from any setter, so "no authored F0" is
+        // metalness 0).
+        //
+        // READ THROUGH THE SAME SWIZZLE THE SHADER USES. setFresnel writes
+        // mFresnelG/mFresnelB only in the SEPARATE form and leaves them at
+        // whatever the datablock was born with otherwise, while getFresnel()
+        // always returns all three; the shader reads material.F0.x alone unless
+        // fresnel_scalar is set (500.Structs_piece_vs_piece_ps.any:283-287,
+        // from hasSeparateFresnel() || metallicWorkflow). Reading all three
+        // unconditionally therefore answered "reflective" for every
+        // zero-reflectance material in the non-separate Fresnel workflow,
+        // because the default datablock's stale G/B are 0.818 — the gate never
+        // fired there at all. Measured, round 3.
+        if( mWorkflow == MetallicWorkflow )
+        {
+            if( getMetalness() > kEps )
+                return false;
+        }
+        else if( hasSeparateFresnel() )
+        {
+            const Vector3 f0 = getFresnel();
+            if( f0.x > kEps || f0.y > kEps || f0.z > kEps )
+                return false;
+        }
+        else
+        {
+            if( mFresnelR > kEps )
+                return false;
+        }
+
+        // CLEAR COAT IS INSIDE THE PREDICATE, not an exclusion. Its environment
+        // term is scaled by kS like every other one:
+        //   Rs += clearCoatEnvColourS * pixelData.specular.xyz *
+        //         ( 0.04 * clearCoatEnvBRDF.x + clearCoatEnvBRDF.y ) * clearCoat
+        // (200.BRDFs_piece_ps.any:334, this pin), and clearCoatEnvColourS is
+        // declared and zeroed under needs_env_brdf, which the gate does not
+        // touch. The coat's DIRECT lobe is in the light loop and the
+        // attenuation it applies to Rd/Rs lives in BRDF_EnvMap, so neither
+        // moves either.
+        return true;
     }
     //-----------------------------------------------------------------------------------
     void HlmsPbsDatablock::setRoughness( float roughness )
@@ -579,8 +645,14 @@ namespace Ogre
     void HlmsPbsDatablock::setMetalness( float metalness )
     {
         assert( mWorkflow == MetallicWorkflow );
+        // JAHSHAKA PATCH 0028: metalness IS the authored F0 in this workflow,
+        // i.e. half of the probe gate's predicate — see setSpecular.
+        const bool bWasZeroSpecularResponse = hasZeroSpecularResponse();
         mFresnelR = metalness;
         scheduleConstBufferUpdate();
+
+        if( bWasZeroSpecularResponse != hasZeroSpecularResponse() )
+            flushRenderables();
     }
     //-----------------------------------------------------------------------------------
     float HlmsPbsDatablock::getMetalness() const { return mFresnelR; }
@@ -596,6 +668,11 @@ namespace Ogre
     void HlmsPbsDatablock::setFresnel( const Vector3 &fresnel, bool separateFresnel )
     {
         assert( mWorkflow != MetallicWorkflow );
+        // JAHSHAKA PATCH 0028: the authored F0 — the other half of the probe
+        // gate's predicate. See setSpecular. Folded into the flush this
+        // function already owns, so a call can never flush twice.
+        const bool bWasZeroSpecularResponse = hasZeroSpecularResponse();
+
         uint8 fresnelBytes = 4;
         mFresnelR = fresnel.x;
 
@@ -607,13 +684,17 @@ namespace Ogre
             fresnelBytes = 12;
         }
 
+        bool bMustFlush = false;
         if( fresnelBytes != mFresnelTypeSizeBytes )
         {
             mFresnelTypeSizeBytes = fresnelBytes;
-            flushRenderables();
+            bMustFlush = true;
         }
 
         scheduleConstBufferUpdate();
+
+        if( bMustFlush || bWasZeroSpecularResponse != hasZeroSpecularResponse() )
+            flushRenderables();
     }
     //-----------------------------------------------------------------------------------
     Vector3 HlmsPbsDatablock::getFresnel() const { return Vector3( mFresnelR, mFresnelG, mFresnelB ); }

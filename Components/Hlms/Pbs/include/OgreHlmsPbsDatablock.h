@@ -402,6 +402,31 @@ namespace Ogre
         void    setSpecular( const Vector3 &specularColour );
         Vector3 getSpecular() const;
 
+        /** JAHSHAKA PATCH 0028 — THE ONE DEFINITION of "this material cannot
+            reflect anything", shared by the three setters that can cross it
+            and by HlmsPbs::calculateHashForPreCreate, which turns it into the
+            zero_specular_response shader property.
+        @remarks
+            True when the specular colour is black AND no F0 is authored
+            (metalness 0 in the metallic workflow; the fresnel components the
+            SHADER reads otherwise — .x alone unless hasSeparateFresnel()).
+            The PBS environment term is
+                Rs = envColourS * kS * (F0 * envBRDF.x + envBRDF.y)
+            so such a datablock multiplies every reflection probe / env map
+            contribution by zero: skipping the lookup is arithmetically
+            identical, not an approximation. CLEAR COAT IS INCLUDED: its own
+            environment term is scaled by kS too
+            (200.BRDFs_piece_ps.any:334), so a zero-kS clear-coated material
+            reflects nothing either.
+        @par
+            The three setters flush the renderables when this value CHANGES, so
+            that raising a black material's specular colour at runtime rebuilds
+            the shader instead of leaving it gated (setClearCoat's idiom).
+        @return
+            True if no environment lookup can affect this material's pixels.
+        */
+        bool hasZeroSpecularResponse() const;
+
         /// Sets the roughness
         void  setRoughness( float roughness );
         float getRoughness() const;

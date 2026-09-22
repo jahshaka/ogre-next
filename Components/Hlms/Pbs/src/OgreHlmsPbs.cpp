@@ -191,6 +191,7 @@ namespace Ogre
     const IdString PbsProperty::EnableCubemapsAuto = IdString( "hlms_enable_cubemaps_auto" );
     const IdString PbsProperty::CubemapsUseDpm = IdString( "hlms_cubemaps_use_dpm" );
     const IdString PbsProperty::CubemapsAsDiffuseGi = IdString( "cubemaps_as_diffuse_gi" );
+    const IdString PbsProperty::ZeroSpecularResponse = IdString( "zero_specular_response" );
     const IdString PbsProperty::IrradianceVolumes = IdString( "irradiance_volumes" );
     const IdString PbsProperty::VctNumProbes = IdString( "vct_num_probes" );
     const IdString PbsProperty::VctConeDirs = IdString( "vct_cone_dirs" );
@@ -217,6 +218,7 @@ namespace Ogre
 
     const IdString PbsProperty::UseEnvProbeMap = IdString( "use_envprobe_map" );
     const IdString PbsProperty::NeedsViewDir = IdString( "needs_view_dir" );
+    const IdString PbsProperty::OrthoCamera = IdString( "hlms_ortho_camera" );
     const IdString PbsProperty::NeedsReflDir = IdString( "needs_refl_dir" );
     const IdString PbsProperty::NeedsEnvBrdf = IdString( "needs_env_brdf" );
 
@@ -762,6 +764,36 @@ namespace Ogre
         const bool fresnelWorkflow =
             datablock->getWorkflow() == HlmsPbsDatablock::SpecularAsFresnelWorkflow;
 
+        // JAHSHAKA PATCH 0028 — A MATERIAL WITH NO SPECULAR RESPONSE SAMPLES NO
+        // REFLECTION PROBE.
+        //
+        // Owner, 2026-09-13: "[reflection probes] should only affect reflective
+        // objects in a scene." Upstream has no material-side gate at all: once
+        // the pass sets parallax_correct_cubemaps, EVERY datablock gets
+        // use_envprobe_map and every lit pixel of every object runs the
+        // per-pixel probe loop, however matte it is.
+        //
+        // The gate is the material's OWN reflectance, not a roughness guess
+        // (roughness blurs a reflection, it never removes one). The PBS
+        // specular term ends as
+        //     Rs = envColourS * pixelData.specular * (F0*envBRDF.x + envBRDF.y)
+        // with pixelData.specular = material.kS (200.BRDFs_piece_ps.any /
+        // Main/800.PixelShader_piece_ps.any:307), so a datablock whose SPECULAR
+        // COLOUR is black multiplies every environment term by zero: skipping
+        // the lookup is arithmetically identical, not an approximation.
+        //
+        // THE RULE ITSELF LIVES ON THE DATABLOCK — hasZeroSpecularResponse(),
+        // one definition — because the three setters that can cross it
+        // (setSpecular, setMetalness, setFresnel) flush the renderables on a
+        // crossing so that a runtime edit rebuilds this shader instead of
+        // leaving it gated. Two copies of the predicate would drift apart, and
+        // the drift would show up as a material that silently stops reflecting.
+        //
+        // cubemaps_as_diffuse_gi is checked at the USE site below rather than
+        // here: it is a pass property, not the material's business.
+        if( datablock->hasZeroSpecularResponse() )
+            setProperty( kNoTid, PbsProperty::ZeroSpecularResponse, 1 );
+
         setProperty( kNoTid, PbsProperty::FresnelScalar,
                      datablock->hasSeparateFresnel() || metallicWorkflow );
         setProperty( kNoTid, PbsProperty::FresnelWorkflow, fresnelWorkflow );
@@ -1198,7 +1230,37 @@ namespace Ogre
             setProperty( tid, PbsProperty::EnvProbeMap, 1 );
         setProperty( tid, PbsProperty::TargetEnvprobeMap, envProbeMap == targetEnvProbeMap );
 
-        if( canUseManualProbe || getProperty( tid, PbsProperty::ParallaxCorrectCubemaps ) )
+        // JAHSHAKA PATCH 0028: ...and here is where the gate bites. A
+        // zero-specular-response datablock (set in calculateHashForPreCreate)
+        // takes neither use_envprobe_map nor use_parallax_correct_cubemaps, and
+        // the pixel shader's probe loop is inserted under the latter, so the
+        // whole per-pixel probe cost disappears from every matte material in
+        // the scene. `needs_env_brdf` is unaffected — it is also raised by
+        // hlms_enable_cubemaps_auto — so diffuse GI, which kS does not scale,
+        // is untouched.
+        //
+        // TWO PASS-SIDE EXCLUSIONS, and both are "something else writes kS
+        // after the material does":
+        //   cubemaps_as_diffuse_gi -- a probe then also carries DIFFUSE light,
+        //     which kS does not scale.
+        //   hlms_decals_diffuse    -- a DIFFUSE DECAL REWRITES pixelData.specular
+        //     and pixelData.F0 downstream of material.kS
+        //     (ForwardPlus_DecalsCubemaps_piece_ps.any:92-100:
+        //      `pixelData.specular = lerp( pixelData.specular.xyz, decalF0,
+        //      decalMask )`), so the "kS multiplies every environment term by
+        //      zero" proof does not hold for a pixel under a decal: a decal on
+        //      a matte floor is a reflective patch and must see the room. The
+        //      gate is per DATABLOCK and the decal is per PIXEL, so there is
+        //      nothing finer to test here -- a scene that feeds diffuse decals
+        //      (Jahshaka does, OgreDecals.cpp) keeps the probe loop on every
+        //      material. Found by the clean-2 lane, 2026-09-13.
+        const bool bZeroSpecularResponse =
+            getProperty( tid, PbsProperty::ZeroSpecularResponse ) != 0 &&
+            getProperty( tid, PbsProperty::CubemapsAsDiffuseGi ) == 0 &&
+            getProperty( tid, HlmsBaseProp::DecalsDiffuse ) == 0;
+
+        if( !bZeroSpecularResponse &&
+            ( canUseManualProbe || getProperty( tid, PbsProperty::ParallaxCorrectCubemaps ) ) )
         {
             setProperty( tid, PbsProperty::UseEnvProbeMap, 1 );
 
@@ -1848,6 +1910,22 @@ namespace Ogre
 
         if( mOptimizationStrategy == LowerGpuOverhead )
             setProperty( kNoTid, PbsProperty::LowerGpuOverhead, 1 );
+
+        // Jahshaka patch 0024: an ORTHOGRAPHIC rendering camera gets its own pass
+        // property, so 800.PixelShader_piece_ps.any can take viewDir = +Z instead
+        // of normalize( -inPs.pos ) (which assumes a pinhole at the origin and
+        // makes every view-dependent term slide with the fragment's screen
+        // position under an ortho pan). Set BEFORE preparePassHashBase so it is
+        // part of the pass hash, like every property above it. Caster passes are
+        // left alone: a directional shadow camera is orthographic too, but the
+        // caster shader never computes viewDir, and doubling the caster
+        // permutation space for a property nothing reads would be pure cost.
+        if( !casterPass )
+        {
+            const Camera *renderingCamera = sceneManager->getCamerasInProgress().renderingCamera;
+            if( renderingCamera && renderingCamera->getProjectionType() == PT_ORTHOGRAPHIC )
+                setProperty( kNoTid, PbsProperty::OrthoCamera, 1 );
+        }
 
         HlmsCache retVal =
             Hlms::preparePassHashBase( shadowNode, casterPass, dualParaboloid, sceneManager );
@@ -2592,7 +2670,13 @@ namespace Ogre
                     *light0BufferPtr++ = attenRange;
                     *light0BufferPtr++ = attenLinear;
                     *light0BufferPtr++ = attenQuadratic;
-                    ++light0BufferPtr;
+                    // Jahshaka patch 0018: .w = 1 / range, exactly as
+                    // ForwardPlusBase::collectLights
+                    // writes it (OgreForwardPlusBase.cpp), so pass-buffer lights
+                    // can apply the same range fade the Forward+ ones do and a
+                    // light does not change brightness when it wins a shadow map.
+                    // It was padding before; nothing else reads light0Buf's .w.
+                    *light0BufferPtr++ = attenRange > Real( 0.0 ) ? 1.0f / attenRange : 0.0f;
 
                     const uint16 lightProfileIdx = light->getLightProfileIdx();
 

@@ -674,6 +674,10 @@ namespace Ogre
         static const IdString EnableCubemapsAuto;
         static const IdString CubemapsUseDpm;
         static const IdString CubemapsAsDiffuseGi;
+        /// Jahshaka patch 0028: the datablock has no specular response at all
+        /// (specular colour black AND no authored F0), so it samples no
+        /// reflection probe. Set in calculateHashForPreCreate.
+        static const IdString ZeroSpecularResponse;
         static const IdString IrradianceVolumes;
         static const IdString VctNumProbes;
         static const IdString VctConeDirs;
@@ -698,6 +702,9 @@ namespace Ogre
 
         static const IdString UseEnvProbeMap;
         static const IdString NeedsViewDir;
+        /// Jahshaka patch 0024: the rendering camera is orthographic (see
+        /// preparePassHash); the pixel shader then takes viewDir = +Z.
+        static const IdString OrthoCamera;
         static const IdString NeedsReflDir;
         static const IdString NeedsEnvBrdf;
 
