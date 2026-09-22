@@ -87,8 +87,8 @@ namespace Ogre
 
         Real getValueImpl( const MovableObject *movableObject, const Camera *camera ) const override;
 
-        void lodUpdateImpl( const size_t numNodes, ObjectData t, const Camera *camera,
-                            Real bias ) const override;
+        void lodUpdateImpl( const size_t numNodes, ObjectData t, const Camera *camera, Real bias,
+                            Real hysteresis ) const override;
 
         /** Override standard Singleton retrieval.
         @remarks
@@ -144,8 +144,8 @@ namespace Ogre
 
         Real getValueImpl( const MovableObject *movableObject, const Camera *camera ) const override;
 
-        void lodUpdateImpl( const size_t numNodes, ObjectData t, const Camera *camera,
-                            Real bias ) const override;
+        void lodUpdateImpl( const size_t numNodes, ObjectData t, const Camera *camera, Real bias,
+                            Real hysteresis ) const override;
 
         /** Override standard Singleton retrieval.
         @remarks

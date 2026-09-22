@@ -121,6 +121,13 @@ namespace Ogre
         // One for each submesh/Renderable
         FastArray<Real> const *mLodMesh;
         unsigned char          mCurrentMeshLod;
+        /// JAHSHAKA (ogre-patch 0075): the LAST LEVEL A BANDED PASS CHOSE for
+        /// this object — the direction state of the hysteresis band, and only
+        /// that (what is DRAWN is `mCurrentMeshLod`, which every pass writes).
+        /// 0xFF = no banded pass has seen this object yet. Costs nothing: it
+        /// lands in the padding between `mCurrentMeshLod` and `mMinPixelSize`.
+        /// @see LodStrategy::lodSet.
+        unsigned char          mHysteresisLod;
 
         /// Minimum pixel size to still render
         Real mMinPixelSize;
@@ -241,6 +248,29 @@ namespace Ogre
 
         unsigned char getCurrentMeshLod() const { return mCurrentMeshLod; }
 
+        /** JAHSHAKA (ogre-patch 0085): sets the mesh LOD level this object is
+            DRAWN at, for a pass that chooses the level itself instead of
+            deriving it from a camera.
+        @remarks
+            Upstream writes mCurrentMeshLod from LodStrategy::lodUpdateImpl via
+            SceneManager::updateAllLods, which answers "how big is this object
+            on that camera's screen". A SURFACE-CACHE card capture is not that
+            question: its camera is an orthographic box around one card and the
+            level it wants is the coarsest whose baked simplifier error is below
+            the CARD's own texel (the ATOM rule, spent at a texel instead of at
+            a pixel). The only doors upstream offers are resetMeshLod(), which
+            writes 0, and the read-only getter above -- so the alternative to
+            this line is a derived-class reach-in at a protected member, which
+            is a workaround that lives only while the pin's internals stay put.
+        @par
+            It is a plain store, exactly like resetMeshLod()'s, and it affects
+            the NEXT pass that draws the object. A pass whose mUpdateLodLists is
+            true recomputes the level and overwrites it, which is what restores
+            the view's own level on the same frame a capture borrowed the
+            object.
+        */
+        void _setCurrentMeshLod( unsigned char lod ) { mCurrentMeshLod = lod; }
+
         /// Checks whether this MovableObject is static. @see setStatic
         bool isStatic() const;
 
@@ -352,8 +382,10 @@ namespace Ogre
                                          uint32 sceneVisibilityFlags, AxisAlignedBox *outBox );
 
         friend void LodStrategy::lodUpdateImpl( const size_t numNodes, ObjectData t,
-                                                const Camera *camera, Real bias ) const;
-        friend void LodStrategy::lodSet( ObjectData &t, Real lodValues[ARRAY_PACKED_REALS] );
+                                                const Camera *camera, Real bias,
+                                                Real hysteresis ) const;
+        friend void LodStrategy::lodSet( ObjectData &t, Real lodValues[ARRAY_PACKED_REALS],
+                                         Real hysteresis );
 
         /** Tells this object whether to be visible or not, if it has a renderable component.
         @note An alternative approach of making an object invisible is to detach it

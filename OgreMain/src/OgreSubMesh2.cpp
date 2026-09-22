@@ -1535,8 +1535,35 @@ namespace Ogre
     //---------------------------------------------------------------------
     void SubMesh::destroyShadowMappingVaos()
     {
-        if( mVao[VpNormal].empty() || mVao[VpShadow].empty() || mVao[VpNormal][0] == mVao[VpShadow][0] )
-            mVao[VpShadow].clear();  // Using the same Vaos for both shadow mapping and regular rendering
+        // JAHSHAKA PATCH 0088: THE ALIAS TEST IS PER ENTRY, NOT PER LIST.
+        //
+        // The test this replaced read `mVao[VpNormal][0] == mVao[VpShadow][0]` and
+        // decided for the WHOLE list from it, so only two shapes were legal: every
+        // entry an alias of the normal VAO, or every entry independent. A MIXED
+        // list — which is what a per-LOD-level shadow list wants to be, with an
+        // optimized (shrunk, position-only) VAO at level 0 and the normal VAOs
+        // aliased for the coarse levels — read as fully independent: the aliased
+        // entries were destroyed here and destroyed a second time by ~SubMesh
+        // through mVao[VpNormal], throwing "Vertex Buffer has already been
+        // destroyed or doesn't belong to this VaoManager".
+        //
+        // Erasing every entry that IS an entry of the normal list, and destroying
+        // only what is left, is the same answer for both pure shapes (all-aliased
+        // erases everything, all-independent erases nothing) and the correct one
+        // for a mixed list. The lists are a handful of entries long (one per LOD
+        // level), so the linear search costs nothing measurable and needs no extra
+        // state to keep in sync.
+        {
+            VertexArrayObjectArray::iterator itor = mVao[VpShadow].begin();
+            while( itor != mVao[VpShadow].end() )
+            {
+                if( std::find( mVao[VpNormal].begin(), mVao[VpNormal].end(), *itor ) !=
+                    mVao[VpNormal].end() )
+                    itor = mVao[VpShadow].erase( itor );
+                else
+                    ++itor;
+            }
+        }
 
         destroyVaos( mVao[VpShadow], mParent->mVaoManager );
 

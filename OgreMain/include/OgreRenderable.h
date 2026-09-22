@@ -448,7 +448,8 @@ namespace Ogre
 
         uint8 getCurrentMaterialLod() const { return mCurrentMaterialLod; }
 
-        friend void LodStrategy::lodSet( ObjectData &t, Real lodValues[ARRAY_PACKED_REALS] );
+        friend void LodStrategy::lodSet( ObjectData &t, Real lodValues[ARRAY_PACKED_REALS],
+                                         Real hysteresis );
 
         /** Sets the render queue sub group.
         @remarks

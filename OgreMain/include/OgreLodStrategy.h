@@ -70,11 +70,22 @@ namespace Ogre
         /** Transform LOD bias so it only needs to be multiplied by the LOD value. */
         virtual Real transformBias( Real factor ) const = 0;
 
+        /** JAHSHAKA (ogre-patch 0075): `hysteresis` is THE PASS'S SWITCH BAND, as a
+            fraction of the threshold being crossed, and it comes from the pass
+            definition that asked for this update
+            (`CompositorPassSceneDef::mLodHysteresis`, default 0 = upstream to the
+            bit). It is a PARAMETER and not state on the strategy because a
+            strategy instance is shared by every pass in the process: the view,
+            a planar reflector's mirrored camera, a picture-in-picture inset, a
+            probe cube face and a thumbnail all run this function on the same
+            objects in the same frame, and only the pass a person watches over
+            time wants a band. @see lodSet. */
         virtual void lodUpdateImpl( const size_t numNodes, ObjectData t, const Camera *camera,
-                                    Real bias ) const = 0;
+                                    Real bias, Real hysteresis ) const = 0;
 
         // Include OgreLodStrategyPrivate.inl in the CPP files that use this function.
-        inline static void lodSet( ObjectData &t, Real lodValues[ARRAY_PACKED_REALS] );
+        inline static void lodSet( ObjectData &t, Real lodValues[ARRAY_PACKED_REALS],
+                                   Real hysteresis );
 
         /** Transform user supplied value to internal value.
         @remarks
@@ -108,6 +119,7 @@ namespace Ogre
 
         /** Get the name of this strategy. */
         const String &getName() const { return mName; }
+
     };
     /** @} */
     /** @} */

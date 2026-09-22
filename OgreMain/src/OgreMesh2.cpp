@@ -372,6 +372,13 @@ namespace Ogre
         */
     }
     //---------------------------------------------------------------------
+    void Mesh::_setLodValues( const LodValueArray &lodValues )
+    {
+        OGRE_ASSERT_LOW( !lodValues.empty() &&
+                         "A mesh must have at least the base LOD value (level 0)" );
+        mLodValues = lodValues;
+    }
+    //---------------------------------------------------------------------
     /*void Mesh::_setSubMeshLodFaceList(unsigned short subIdx, unsigned short level,
         IndexData* facedata)
     {

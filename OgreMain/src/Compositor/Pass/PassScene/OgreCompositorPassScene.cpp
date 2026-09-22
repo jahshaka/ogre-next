@@ -218,8 +218,11 @@ namespace Ogre
             setViewportSizeToViewport( 0u, &localVp );
             mLodCamera->_notifyViewport( &localVp );
 
+            // JAHSHAKA (ogre-patch 0075): ...and THIS pass's switch band, which
+            // is 0 for every pass that has not asked for one.
             sceneManager->updateAllLods( usedLodCamera, mDefinition->mLodBias,  //
-                                         mDefinition->mFirstRQ, mDefinition->mLastRQ );
+                                         mDefinition->mFirstRQ, mDefinition->mLastRQ,
+                                         mDefinition->mLodHysteresis );
 
             // Restore viewport
             mLodCamera->_notifyViewport( viewport );

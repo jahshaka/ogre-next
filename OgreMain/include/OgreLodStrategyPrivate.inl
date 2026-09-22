@@ -28,7 +28,8 @@ THE SOFTWARE.
 
 namespace Ogre
 {
-    inline void LodStrategy::lodSet( ObjectData &objData, Real lodValues[ARRAY_PACKED_REALS] )
+    inline void LodStrategy::lodSet( ObjectData &objData, Real lodValues[ARRAY_PACKED_REALS],
+                                     Real hysteresis )
     {
         for( size_t j = 0; j < ARRAY_PACKED_REALS; ++j )
         {
@@ -39,8 +40,59 @@ namespace Ogre
             {
                 FastArray<Real>::const_iterator it =
                     std::lower_bound( owner->mLodMesh->begin(), owner->mLodMesh->end(), lodValues[j] );
-                owner->mCurrentMeshLod =
-                    static_cast<uint8>( std::max<ptrdiff_t>( it - owner->mLodMesh->begin() - 1, 0 ) );
+                ptrdiff_t newLod = std::max<ptrdiff_t>( it - owner->mLodMesh->begin() - 1, 0 );
+
+                // JAHSHAKA (ogre-patch 0075): THE HYSTERESIS BAND, PER PASS.
+                // Without it this comparison is a step in both directions, so
+                // an object parked on a threshold — a camera breathing at a
+                // switch distance, a dolly crawling past one — changes level
+                // every frame. The band is measured on the threshold actually
+                // being crossed, which is the only one that matters here, and it
+                // can only ever hold the BANDED PASS'S OWN last level: a value
+                // past the band moves, and a several-level jump moves all the
+                // way.
+                //
+                // `mHysteresisLod` AND NOT `mCurrentMeshLod` IS THE DIRECTION
+                // STATE, which is the whole of this amendment. `mCurrentMeshLod`
+                // is written by EVERY pass that updates LOD lists — a planar
+                // reflector's mirrored camera, a PiP inset, a probe cube face,
+                // a thumbnail — so a band that read it would compare the
+                // watched view's value against another camera's level: it would
+                // hold a level the view never chose whenever the two cameras sit
+                // within a band of one threshold, and its memory of the
+                // direction of travel would be erased by every sibling pass, so
+                // the band stopped suppressing pops in any scene that has a
+                // mirror or an inset (measured: spikes/atom-3/FINDINGS.md §7).
+                // A pass with no band (hysteresis == 0) leaves this slot alone
+                // and writes only `mCurrentMeshLod`, exactly as upstream does.
+                //
+                // 0xFF = "no state yet" (a fresh object, or one whose mesh was
+                // swapped under it): out of range for any real mesh, so the
+                // guard below declines the band and the pass takes the exact
+                // level — which is what makes the first frame of a capture, and
+                // every one-shot offscreen render, upstream's answer to the bit.
+                if( hysteresis > 0 )
+                {
+                    const ptrdiff_t heldLod = static_cast<ptrdiff_t>( owner->mHysteresisLod );
+                    if( newLod != heldLod &&
+                        heldLod < static_cast<ptrdiff_t>( owner->mLodMesh->size() ) )
+                    {
+                        // newLod > heldLod implies heldLod + 1 <= newLod <= size - 1,
+                        // so both reads are inside the array.
+                        const Real threshold = newLod > heldLod
+                                                   ? ( *owner->mLodMesh )[size_t( heldLod + 1 )]
+                                                   : ( *owner->mLodMesh )[size_t( heldLod )];
+                        const Real band = Math::Abs( threshold ) * hysteresis;
+                        if( newLod > heldLod ? ( lodValues[j] < threshold + band )
+                                             : ( lodValues[j] > threshold - band ) )
+                        {
+                            newLod = heldLod;
+                        }
+                    }
+                    owner->mHysteresisLod = static_cast<uint8>( newLod );
+                }
+
+                owner->mCurrentMeshLod = static_cast<uint8>( newLod );
             }
 
             RenderableArray::iterator itor = owner->mRenderables.begin();

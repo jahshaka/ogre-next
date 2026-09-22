@@ -84,7 +84,8 @@ namespace Ogre
     }
     //-----------------------------------------------------------------------
     void DistanceLodStrategyBase::lodUpdateImpl( const size_t numNodes, ObjectData objData,
-                                                 const Camera *camera, Real bias ) const
+                                                 const Camera *camera, Real bias,
+                                                 Real hysteresis ) const
     {
         ArrayVector3 cameraPos;
         cameraPos.setAll( camera->_getCachedDerivedPosition() );
@@ -101,7 +102,7 @@ namespace Ogre
             arrayLodValue = arrayLodValue * lodInvBias;
             CastArrayToReal( lodValues, arrayLodValue );
 
-            lodSet( objData, lodValues );
+            lodSet( objData, lodValues, hysteresis );
 
             objData.advanceLodPack();
         }

@@ -138,6 +138,32 @@ namespace Ogre
         */
         Real mLodBias;
 
+        /** JAHSHAKA (ogre-patch 0075): THIS PASS'S LOD SWITCH HYSTERESIS BAND, as
+            a fraction of the threshold being crossed. 0 (the default) is
+            upstream's behaviour to the bit — `lodSet` flips at the exact
+            threshold in both directions, so an object sitting on one pops
+            between two levels every frame the camera jitters.
+
+            With a band `h`, a switch to a COARSER level needs the value to pass
+            the threshold by `h * |threshold|` and a switch back to a FINER one
+            needs it to fall below by the same amount. The band is relative, so
+            it means the same thing whatever a strategy's units are (distances,
+            pixel counts, Jahshaka's world-space errors), and it is bounded: a
+            value genuinely past the band switches on the frame it gets there,
+            and a jump of several levels still jumps all the way.
+
+            IT IS PER PASS BECAUSE A SCENE IS RENDERED BY MANY PASSES AND ONLY
+            SOME OF THEM ARE WATCHED. A planar reflector's mirrored camera, a
+            picture-in-picture inset, a probe cube face and a thumbnail all
+            update the LOD lists of the same objects in the same frame; each
+            should take the exact level its own value asks for, while the view a
+            person is looking at over time is the one that wants a band. The
+            band's own direction state is `MovableObject::mHysteresisLod`, which
+            only a banded pass writes, so a zero-band sibling cannot move it.
+
+            @see LodStrategy::lodSet. */
+        Real mLodHysteresis;
+
         /// When true, will render in instanced stereo mode, thus outputting left & right eyes
         /// at the same time
         bool mInstancedStereo;
@@ -203,6 +229,7 @@ namespace Ogre
             mCameraCubemapReorient( false ),
             mUpdateLodLists( true ),
             mLodBias( 1.0f ),
+            mLodHysteresis( 0.0f ),  // JAHSHAKA (ogre-patch 0075): upstream by default
             mInstancedStereo( false ),
             mReuseCullData( false ),
             mFlushCommandBuffersAfterShadowNode( false ),

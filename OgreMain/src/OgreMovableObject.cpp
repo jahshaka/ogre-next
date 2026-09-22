@@ -67,6 +67,7 @@ namespace Ogre
         mManager( manager ),
         mLodMesh( &c_DefaultLodMesh ),
         mCurrentMeshLod( 0 ),
+        mHysteresisLod( 0xFF ),  // JAHSHAKA (ogre-patch 0075): no banded pass yet
         mMinPixelSize( 0 ),
         mListener( 0 ),
         mSkeletonInstance( 0 ),
@@ -91,6 +92,7 @@ namespace Ogre
         mManager( 0 ),
         mLodMesh( &c_DefaultLodMesh ),
         mCurrentMeshLod( 0 ),
+        mHysteresisLod( 0xFF ),  // JAHSHAKA (ogre-patch 0075)
         mMinPixelSize( 0 ),
         mListener( 0 ),
         mSkeletonInstance( 0 ),
@@ -166,7 +168,14 @@ namespace Ogre
         }
     }
     //-----------------------------------------------------------------------
-    void MovableObject::resetMeshLod() { mCurrentMeshLod = 0u; }
+    void MovableObject::resetMeshLod()
+    {
+        mCurrentMeshLod = 0u;
+        // JAHSHAKA (ogre-patch 0075): the band's memory belongs to the level
+        // that was drawn; a caller resetting the level resets it too, or the
+        // next banded pass would measure its band against a level nobody holds.
+        mHysteresisLod = 0xFF;
+    }
     //-----------------------------------------------------------------------
     bool MovableObject::isStatic() const
     {

@@ -354,6 +354,35 @@ namespace Ogre
 
         /** Internal methods for loading LOD, do not use. */
         void _setLodInfo( unsigned short numLevels );
+
+        /** Sets the LOD values this mesh's levels switch at.
+
+            The array is what LodStrategy::lodSet() binary-searches every frame
+            (through MovableObject::mLodMesh, which Item::_initialise points at
+            this array), so:
+              - it must hold one entry per LOD level, in the same order as each
+                SubMesh's mVao[VpNormal]/mVao[VpShadow];
+              - entry 0 must be the strategy's base value (see
+                LodStrategy::getBaseValue), and the rest must be sorted the way
+                that strategy sorts - ascending for the distance strategies,
+                descending for the pixel-count ones;
+              - it must be set BEFORE any Item is created from this mesh: an
+                Item caches the address of this array, and while the address
+                survives a resize through FastArray, an Item created earlier
+                would have cached an array of a different LENGTH than its
+                SubItems' VAO lists.
+
+            Without this there is no public way to give a v2 Mesh built in
+            memory its LOD levels at all: mLodValues is protected with only a
+            const getter, _setLodInfo's body is commented out, and the only
+            writers left are the serializer (a friend) and importV1(). A mesh
+            built by hand - which is every mesh in an application that does its
+            own import - could therefore carry as many VAOs per SubMesh as it
+            liked and Ogre would never select any of them.
+        @param lodValues
+            The LOD values, level 0 first.
+        */
+        void _setLodValues( const LodValueArray &lodValues );
         /** Internal methods for loading LOD, do not use. */
         // void _setSubMeshLodFaceList(unsigned short subIdx, unsigned short level, IndexData* facedata);
 
