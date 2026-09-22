@@ -355,6 +355,26 @@ namespace Ogre
 
         size_t getNumCascades() const { return mExtraCascades.size() + 1u; }
 
+        /** THE CASCADE CHAIN'S PARAMETERS, the one definition every reader of the chain
+            takes them from (Jahshaka, PHOTON-READER-1): the pixel shader's pass buffer
+            (fillConstBufferData) and the irradiance field's generation job both march the
+            same chain with the same march, so they must hand it the same numbers - and
+            the field has no other way to reach the extra cascades' placement.
+        @param outInvResMaxLod
+            4 * getNumCascades() floats: per cascade, xyz = 1 / the light volume's
+            resolution per axis, w = the mip at which a cone hands over to the next
+            cascade (the next cell over this one as a mip, capped at the mip count;
+            256 for the last cascade).
+        @param outFromPrev
+            8 * ( getNumCascades() - 1 ) floats: per cascade i >= 1, two float4s -
+            ( cascade i-1's normalised space to cascade i's: the scale xyz, and cascade
+            i's radiance over cascade 0's stored units ), then ( the offset xyz, and the
+            specular walk's weight slope 1 / numMips^3 ).
+            May be null when there is one cascade.
+        */
+        void getCascadeChainParams( float *RESTRICT_ALIAS outInvResMaxLod,
+                                    float *RESTRICT_ALIAS outFromPrev ) const;
+
         size_t getConstBufferSize() const;
 
         void fillConstBufferData( const Matrix4 &viewMatrix, float *RESTRICT_ALIAS passBufferPtr ) const;

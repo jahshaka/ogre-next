@@ -1269,22 +1269,13 @@ namespace Ogre
         return retVal;
     }
     //-------------------------------------------------------------------------
-    void VctLighting::fillConstBufferData( const Matrix4 &viewMatrix,
-                                           float *RESTRICT_ALIAS passBufferPtr ) const
+    void VctLighting::getCascadeChainParams( float *RESTRICT_ALIAS outInvResMaxLod,
+                                             float *RESTRICT_ALIAS outFromPrev ) const
     {
-        const uint32 width = mLightVoxel[0]->getWidth();
-        const uint32 height = mLightVoxel[0]->getHeight();
-        const uint32 depth = mLightVoxel[0]->getDepth();
-
-        const float smallestRes = static_cast<float>( std::min( std::min( width, height ), depth ) );
-
-        const float maxMipmapCount = static_cast<float>(
-            PixelFormatGpuUtils::getMaxMipmapCount( static_cast<uint32>( smallestRes ) ) );
-
-        const float mipDiff = ( maxMipmapCount - 8.0f ) * 0.5f;
-
+        // Moved out of fillConstBufferData VERBATIM (Jahshaka, PHOTON-READER-1): the pass
+        // buffer's chain block is exactly these two arrays, back to back, and the
+        // irradiance field's generation job reads the same chain through the same march.
         const float finalMultiplier = mInvBakingMultiplier * mMultiplier;
-        const float invFinalMultiplier = 1.0f / finalMultiplier;
 
         const size_t numCascades = mExtraCascades.size() + 1u;
 
@@ -1314,12 +1305,12 @@ namespace Ogre
                 cascadeNumMipmaps = cascadeLightVoxel->getNumMipmaps();
             }
 
-            *passBufferPtr++ = 1.0f / static_cast<float>( widthCascade );
-            *passBufferPtr++ = 1.0f / static_cast<float>( heightCascade );
-            *passBufferPtr++ = 1.0f / static_cast<float>( depthCascade );
+            *outInvResMaxLod++ = 1.0f / static_cast<float>( widthCascade );
+            *outInvResMaxLod++ = 1.0f / static_cast<float>( heightCascade );
+            *outInvResMaxLod++ = 1.0f / static_cast<float>( depthCascade );
             if( i == numCascades - 1u )
             {
-                *passBufferPtr++ = 256.0f;  // cascadeMaxLod
+                *outInvResMaxLod++ = 256.0f;  // cascadeMaxLod
             }
             else
             {
@@ -1332,7 +1323,7 @@ namespace Ogre
                 const float maxFactor =
                     std::max( currToNextFactor.x, std::max( currToNextFactor.y, currToNextFactor.z ) );
 
-                *passBufferPtr++ =
+                *outInvResMaxLod++ =
                     std::min<float>( Math::Log2( maxFactor ), cascadeNumMipmaps );  // cascadeMaxLod
             }
         }
@@ -1369,21 +1360,47 @@ namespace Ogre
                 cascadeNumMipmaps = static_cast<float>( cascadeLightVoxel->getNumMipmaps() );
             }
 
-            *passBufferPtr++ = static_cast<float>( vScale.x );
-            *passBufferPtr++ = static_cast<float>( vScale.y );
-            *passBufferPtr++ = static_cast<float>( vScale.z );
-            *passBufferPtr++ = cascadeFinalMultiplier;
+            *outFromPrev++ = static_cast<float>( vScale.x );
+            *outFromPrev++ = static_cast<float>( vScale.y );
+            *outFromPrev++ = static_cast<float>( vScale.z );
+            *outFromPrev++ = cascadeFinalMultiplier;
 
-            *passBufferPtr++ = static_cast<float>( vPos.x );
-            *passBufferPtr++ = static_cast<float>( vPos.y );
-            *passBufferPtr++ = static_cast<float>( vPos.z );
+            *outFromPrev++ = static_cast<float>( vPos.x );
+            *outFromPrev++ = static_cast<float>( vPos.y );
+            *outFromPrev++ = static_cast<float>( vPos.z );
             // HACK: This is so hacky it hurts: cascadeNumMipmaps^3 empirically looks reasonably
             // good for brightness. We need a better way to equalize specular. Specular
             // brightness equalization depends on:
             //      - Roughness (as it affects lighting)
             //      - Cell Size Volume
-            *passBufferPtr++ = 1.0f / ( cascadeNumMipmaps * cascadeNumMipmaps * cascadeNumMipmaps );
+            *outFromPrev++ = 1.0f / ( cascadeNumMipmaps * cascadeNumMipmaps * cascadeNumMipmaps );
         }
+    }
+    //-------------------------------------------------------------------------
+    void VctLighting::fillConstBufferData( const Matrix4 &viewMatrix,
+                                           float *RESTRICT_ALIAS passBufferPtr ) const
+    {
+        const uint32 width = mLightVoxel[0]->getWidth();
+        const uint32 height = mLightVoxel[0]->getHeight();
+        const uint32 depth = mLightVoxel[0]->getDepth();
+
+        const float smallestRes = static_cast<float>( std::min( std::min( width, height ), depth ) );
+
+        const float maxMipmapCount = static_cast<float>(
+            PixelFormatGpuUtils::getMaxMipmapCount( static_cast<uint32>( smallestRes ) ) );
+
+        const float mipDiff = ( maxMipmapCount - 8.0f ) * 0.5f;
+
+        const float finalMultiplier = mInvBakingMultiplier * mMultiplier;
+        const float invFinalMultiplier = 1.0f / finalMultiplier;
+
+        const size_t numCascades = mExtraCascades.size() + 1u;
+
+        // float4 vctInvResolution_cascadeMaxLod[numCascades];
+        // float4 fromPreviousProbeToNext[numCascades - 1u][2]
+        // (Jahshaka, PHOTON-READER-1: one definition, shared with the irradiance field.)
+        getCascadeChainParams( passBufferPtr, passBufferPtr + 4u * numCascades );
+        passBufferPtr += 4u * numCascades + 8u * ( numCascades - 1u );
 
         // float specSdfMaxMip;
         // float specularSdfFactor;

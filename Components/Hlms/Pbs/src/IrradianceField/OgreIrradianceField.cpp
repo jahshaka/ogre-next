@@ -452,16 +452,11 @@ namespace Ogre
         // memset did), so the generation job read an uninitialised float here.
         mIfGenParams.unused0 = 0.0f;
 
-        const TextureGpu *vctLightingTex = mVctLighting->getLightVoxelTextures()[0];
-        const float smallestRes = static_cast<float>(
-            std::min( std::min( vctLightingTex->getWidth(), vctLightingTex->getHeight() ),
-                      vctLightingTex->getDepth() ) );
-        const float invSmallestRes = 1.0f / smallestRes;
-
         mIfGenParams.coneAngleTan = Math::Tan( Math::TWO_PI / static_cast<float>( numRaysPerProbe ) );
         mIfGenParams.numProcessedProbes = 0u;
-        mIfGenParams.vctStartBias = invSmallestRes;
-        mIfGenParams.vctInvStartBias = smallestRes;
+        mIfGenParams.unused1 = 0.0f;
+        mIfGenParams.unused2 = 0.0f;
+        fillChainParams();
 
         mIfGenParams.numProbes_threadsPerRow.x = mSettings.mNumProbes[0];
         mIfGenParams.numProbes_threadsPerRow.y = mSettings.mNumProbes[1];
@@ -589,7 +584,12 @@ namespace Ogre
         uint32 depthWidth, depthHeight;
         mSettings.getDepthProbeFullResolution( depthWidth, depthHeight );
         mDepthVarianceTex->setResolution( depthWidth, depthHeight );
-        mDepthVarianceTex->setPixelFormat( PFG_RG32_FLOAT );
+        // Jahshaka (PHOTON-READER-1): FOUR channels, not upstream's two - the depth
+        // moments (x: mean distance, y: mean squared distance) plus z: the ESCAPE
+        // FRACTION of the probe's rays, integrated over the same cosine lobe, which the
+        // pixel shader reads as the probe's sky visibility. The irradiance atlas had no
+        // channel for it (R10G10B10A2: a 2-bit alpha). w is unused.
+        mDepthVarianceTex->setPixelFormat( PFG_RGBA32_FLOAT );
 
         mIrradianceTex->scheduleTransitionTo( GpuResidency::Resident );
         mDepthVarianceTex->scheduleTransitionTo( GpuResidency::Resident );
@@ -634,21 +634,7 @@ namespace Ogre
 
         mGenerationJob->setConstBuffer( 0, mIfGenParamsBuffer );
 
-        const bool bIsAnisotropic = mVctLighting->isAnisotropic();
-        mGenerationJob->setProperty( "vct_anisotropic", bIsAnisotropic ? 1 : 0 );
-        mGenerationJob->setNumTexUnits( 1u + ( bIsAnisotropic ? 4u : 1u ) );
-
-        DescriptorSetTexture2::BufferSlot bufferSlot( DescriptorSetTexture2::BufferSlot::makeEmpty() );
-        bufferSlot.buffer = mDirectionsBuffer;
-        mGenerationJob->setTexBuffer( 0, bufferSlot );
-
-        TextureGpu **vctLightingTextures = mVctLighting->getLightVoxelTextures();
-        DescriptorSetTexture2::TextureSlot texSlot( DescriptorSetTexture2::TextureSlot::makeEmpty() );
-        for( uint8 i = 0u; i < ( bIsAnisotropic ? 4u : 1u ); ++i )
-        {
-            texSlot.texture = vctLightingTextures[i];
-            mGenerationJob->setTexture( 1u + i, texSlot, mVctLighting->getBindTrilinearSamplerblock() );
-        }
+        bindChainToGenerationJob();
 
         CompositorManager2 *compositorManager = mRoot->getCompositorManager2();
         CompositorChannelVec channels;
@@ -727,6 +713,80 @@ namespace Ogre
             setIrradianceFieldGenParams();
     }
     //-------------------------------------------------------------------------
+    void IrradianceField::bindChainToGenerationJob()
+    {
+        OGRE_ASSERT_LOW( mVctLighting && !mSettings.isRaster() );
+
+        // The job's texture units, in the order the shader declares them (the same
+        // order VctLighting::setupBounceTextures binds the bounce job's): unit 0 the
+        // directions buffer, then every cascade's isotropic volume, then - anisotropic
+        // tiers - every cascade's X, every cascade's Y, every cascade's Z.
+        const uint32 numCascades =
+            std::min<uint32>( static_cast<uint32>( mVctLighting->getNumCascades() ),
+                              kMaxChainCascades );
+        const bool bIsAnisotropic = mVctLighting->isAnisotropic();
+        const uint32 numVolumes = bIsAnisotropic ? 4u : 1u;
+
+        const int32 numCascadesI32 = static_cast<int32>( numCascades );
+        if( mGenerationJob->getProperty( "hlms_num_vct_cascades" ) != numCascadesI32 )
+            mGenerationJob->setProperty( "hlms_num_vct_cascades", numCascadesI32 );
+        const int32 anisoI32 = bIsAnisotropic ? 1 : 0;
+        if( mGenerationJob->getProperty( "vct_anisotropic" ) != anisoI32 )
+            mGenerationJob->setProperty( "vct_anisotropic", anisoI32 );
+
+        const uint8 numTexUnits = static_cast<uint8>( 1u + numVolumes * numCascades );
+        if( mGenerationJob->getNumTexUnits() != numTexUnits )
+            mGenerationJob->setNumTexUnits( numTexUnits );
+
+        DescriptorSetTexture2::BufferSlot bufferSlot( DescriptorSetTexture2::BufferSlot::makeEmpty() );
+        bufferSlot.buffer = mDirectionsBuffer;
+        mGenerationJob->setTexBuffer( 0, bufferSlot );
+
+        // ONE sampler, bound with the first volume (the shader declares one): the other
+        // units carry no samplerblock, exactly as the bounce job's extra cascades do.
+        DescriptorSetTexture2::TextureSlot texSlot( DescriptorSetTexture2::TextureSlot::makeEmpty() );
+        uint8 unit = 1u;
+        for( uint32 v = 0u; v < numVolumes; ++v )
+        {
+            for( uint32 c = 0u; c < numCascades; ++c )
+            {
+                texSlot.texture = mVctLighting->getLightVoxelTextures( c )[v];
+                if( unit == 1u )
+                {
+                    mGenerationJob->setTexture( unit, texSlot,
+                                                mVctLighting->getBindTrilinearSamplerblock() );
+                }
+                else
+                    mGenerationJob->setTexture( unit, texSlot, 0, false );
+                ++unit;
+            }
+        }
+    }
+    //-------------------------------------------------------------------------
+    void IrradianceField::fillChainParams()
+    {
+        const size_t numCascades = mVctLighting->getNumCascades();
+        float invResMaxLod[4u * 16u];
+        float fromPrev[8u * 16u];
+        memset( invResMaxLod, 0, sizeof( invResMaxLod ) );
+        memset( fromPrev, 0, sizeof( fromPrev ) );
+        if( numCascades <= 16u )
+            mVctLighting->getCascadeChainParams( invResMaxLod, fromPrev );
+        const size_t n = std::min<size_t>( numCascades, kMaxChainCascades );
+        for( size_t i = 0u; i < kMaxChainCascades; ++i )
+        {
+            const float *src = &invResMaxLod[4u * i];
+            mIfGenParams.vctInvResMaxLod[i] = i < n ? float4( Vector4( src[0], src[1], src[2], src[3] ) )
+                                                    : float4( Vector4::ZERO );
+        }
+        for( size_t i = 0u; i < ( kMaxChainCascades - 1u ) * 2u; ++i )
+        {
+            const float *src = &fromPrev[4u * i];
+            mIfGenParams.vctFromPrev[i] = i < ( n - 1u ) * 2u ? float4( Vector4( src[0], src[1], src[2], src[3] ) )
+                                                              : float4( Vector4::ZERO );
+        }
+    }
+    //-------------------------------------------------------------------------
     void IrradianceField::setVctLighting( VctLighting *vctLighting )
     {
         if( mSettings.isRaster() || !vctLighting || !mGenerationJob )
@@ -737,17 +797,7 @@ namespace Ogre
         // The bindings createTextures() made, re-made against the textures the lighting
         // owns now. Everything else it created (the atlases, the directions buffer, the
         // integration taps, the workspace) describes the FIELD and is unaffected.
-        const bool bIsAnisotropic = mVctLighting->isAnisotropic();
-        mGenerationJob->setProperty( "vct_anisotropic", bIsAnisotropic ? 1 : 0 );
-        mGenerationJob->setNumTexUnits( 1u + ( bIsAnisotropic ? 4u : 1u ) );
-
-        TextureGpu **vctLightingTextures = mVctLighting->getLightVoxelTextures();
-        DescriptorSetTexture2::TextureSlot texSlot( DescriptorSetTexture2::TextureSlot::makeEmpty() );
-        for( uint8 i = 0u; i < ( bIsAnisotropic ? 4u : 1u ); ++i )
-        {
-            texSlot.texture = vctLightingTextures[i];
-            mGenerationJob->setTexture( 1u + i, texSlot, mVctLighting->getBindTrilinearSamplerblock() );
-        }
+        bindChainToGenerationJob();
 
         // The generation params carry the voxel volume's placement and the cone start
         // bias derived from its resolution: both belong to the lighting that was just
@@ -804,6 +854,17 @@ namespace Ogre
         const uint32 numIntegrationTGroupsX = probesPerFrame / numIntegrationTGroupsY;
         mDepthIntegrationJob->setNumThreadGroups( numIntegrationTGroupsX, numIntegrationTGroupsY, 1u );
         mColourIntegrationJob->setNumThreadGroups( numIntegrationTGroupsX, numIntegrationTGroupsY, 1u );
+
+        if( !mSettings.isRaster() && mVctLighting )
+        {
+            // THE CHAIN AS IT IS NOW (Jahshaka, PHOTON-READER-1): every cascade's volumes
+            // and placement, re-read per dispatch. The outer cascades scroll and rebuild
+            // on their own schedule and nothing notifies the field; the bindings are
+            // descriptor writes that are no-ops when nothing changed, and the parameters
+            // are a few hundred bytes.
+            bindChainToGenerationJob();
+            fillChainParams();
+        }
 
         mIfGenParams.numProcessedProbes = mNumProbesProcessed;
         mIfGenParams.numProbes_threadsPerRow.w = numThreadGroupsX * threadsPerGroup;

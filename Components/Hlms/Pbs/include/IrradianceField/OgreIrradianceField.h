@@ -149,6 +149,11 @@ namespace Ogre
             DebugVisualizationNone
         };
 
+    public:
+        /// The longest cascade chain the generation job walks (VctLighting supports
+        /// fewer than this). The shader's parameter block is sized by it.
+        static const uint32 kMaxChainCascades = 8u;
+
     protected:
         struct IrradianceFieldGenParams
         {
@@ -159,13 +164,24 @@ namespace Ogre
 
             float  coneAngleTan;
             uint32 numProcessedProbes;
-            float  vctStartBias;
-            float  vctInvStartBias;
+            // Jahshaka (PHOTON-READER-1): these two were the cone march's start bias
+            // and its inverse, derived from cascade 0 alone. The generation job now
+            // marches the whole cascade chain through the one voxel reader, which
+            // takes each cascade's own inverse resolution from the chain block below.
+            float unused1;
+            float unused2;
 
             // float invFieldResolution;
             uint4 numProbes_threadsPerRow;
 
             float4x4 irrProbeToVctTransform;
+
+            // Jahshaka (PHOTON-READER-1): THE CASCADE CHAIN the probe rays walk, in the
+            // layout VctLighting::getCascadeChainParams writes and the pixel shader's
+            // pass buffer carries. Appended, so the integration job's declaration of
+            // this buffer (the members above) is still a prefix of it.
+            float4 vctInvResMaxLod[kMaxChainCascades];
+            float4 vctFromPrev[( kMaxChainCascades - 1u ) * 2u];
         };
 
         struct IfdBorderMirrorParams
@@ -243,6 +259,15 @@ namespace Ogre
                                       HlmsComputeJob    *job );
 
         void setTextureToDebugVisualizer();
+
+        /// Jahshaka (PHOTON-READER-1): binds EVERY cascade's light volumes to the
+        /// generation job, from the pointers the chain holds NOW. Called before every
+        /// dispatch: a cascade re-creates its volumes on a rebuild or a bounce
+        /// ping-pong without telling its readers (the bounce job re-asserts its own
+        /// bindings per dispatch for the same reason).
+        void bindChainToGenerationJob();
+        /// ...and the chain's parameters, from VctLighting's one definition of them.
+        void fillChainParams();
 
     public:
         IrradianceField( Root *root, SceneManager *sceneManager );
