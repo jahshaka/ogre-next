@@ -45,6 +45,7 @@
 #    include "OgreAtmosphereNpr.h"
 #endif
 
+#include <cstdlib>
 #include <fstream>
 
 #if OGRE_USE_SDL2
@@ -88,6 +89,13 @@ namespace Demo
         mUseMicrocodeCache( true ),
         mBackgroundColour( backgroundColour )
     {
+        // Jahshaka local patch (ogre-patch 0020): let an embedding tool suppress the
+        // config dialog so a seeded ogre.cfg is honoured. mAlwaysAskForConfig
+        // short-circuits restoreConfig() below, so seeding alone is not enough.
+        const char *jahNoConfig = getenv( "JAH_OGRE_SAMPLE_NO_CONFIG" );
+        if( jahNoConfig && jahNoConfig[0] != '\0' && jahNoConfig[0] != '0' )
+            mAlwaysAskForConfig = false;
+
 #if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
         // Note:  macBundlePath works for iOS too. It's misnamed.
         mResourcePath = Ogre::macBundlePath() + "/Contents/Resources/";
