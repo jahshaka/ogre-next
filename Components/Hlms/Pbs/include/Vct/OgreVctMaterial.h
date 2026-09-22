@@ -138,6 +138,12 @@ namespace Ogre
         /// per rebuild by its owner, so a voxelizer's build can assert it rather than
         /// discover it as an untextured material.
         bool hasTempResources() const { return mDownsampleTex != 0; }
+
+        /// Forgets every conversion and keeps every resource - see the definition. The
+        /// owner of a store that outlives a rebuild MUST call this when a material's
+        /// parameters may have changed, because addDatablock's cache hit never re-reads
+        /// the datablock.
+        void clearConversions();
     };
 }  // namespace Ogre
 

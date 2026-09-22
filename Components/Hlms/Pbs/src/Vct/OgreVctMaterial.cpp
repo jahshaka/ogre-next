@@ -169,6 +169,30 @@ namespace Ogre
         return conversionResult;
     }
     //-------------------------------------------------------------------------
+    void VctMaterial::clearConversions()
+    {
+        // FORGET EVERY CONVERSION, KEEP EVERY RESOURCE. `addDatablock` returns a CACHED
+        // row on a hit and never re-reads the datablock, so a material whose parameters
+        // change after its first conversion keeps its first row for as long as this
+        // store lives. That was invisible while a store died with its voxelizer every
+        // rebuild; a store shared by a chain outlives rebuilds, so the cache needs an
+        // explicit end of life - this is it, called by the owner at every from-scratch
+        // build and whenever a live material's voxel inputs change.
+        //
+        // The const buffers and the texture pool are NOT destroyed: the next build
+        // re-converts and overwrites the slots it uses, and destroying a buffer a live
+        // voxelizer's dispatch may still name is the hazard the shared store exists to
+        // avoid. Only the memberships go, so slots are handed out from zero again.
+        mDatablockConversionResults.clear();
+        BucketVec::iterator itor = mBuckets.begin();
+        BucketVec::iterator endt = mBuckets.end();
+        while( itor != endt )
+        {
+            itor->datablocks.clear();
+            ++itor;
+        }
+    }
+    //-------------------------------------------------------------------------
     uint16 VctMaterial::getPoolSliceIdxForTexture( TextureGpu *texture )
     {
         TextureToPoolEntryMap::const_iterator itor = mTextureToPoolEntry.find( texture );
