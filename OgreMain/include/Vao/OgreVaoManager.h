@@ -494,6 +494,38 @@ namespace Ogre
         virtual void _beginFrame() {}
         virtual void _update();
 
+        /** Jahshaka: THE GPU-VISIBLE ADDRESS OF A BUFFER'S FIRST ELEMENT.
+
+            A v2 vertex or index buffer lives inside a shared pool allocation, so a
+            shader cannot be handed "the buffer" - only Ogre's draw path knows the
+            pool and the offset. A compute shader that wants to read the SAME
+            triangles the raster draws (the voxelizer; anything building its own
+            acceleration structure) therefore needs the one number that names them:
+            the pool's device address plus this buffer's own start inside it.
+
+            Returning it here rather than letting every caller reach into the render
+            system is what keeps the arithmetic in ONE place: the offset convention
+            (`_getFinalBufferStart() * getBytesPerElement()`) is the same convention
+            Ogre's own draw uses, and a caller that recomputed it would silently read
+            another buffer's vertices the day a pool's packing changes.
+        @remarks
+            Valid only while `supportsBufferDeviceAddress()` is true. The address is
+            stable for the buffer's lifetime.
+        @return
+            The device address of element 0, or 0 where the API or the device has no
+            such concept (every render system but Vulkan, and a Vulkan device whose
+            driver does not support VK_KHR_buffer_device_address).
+        */
+        virtual uint64 getBufferDeviceAddress( const BufferPacked * ) const { return 0u; }
+
+        /// True when getBufferDeviceAddress returns real addresses AND the pools a v2
+        /// vertex/index buffer lives in were created able to have one. A shader that
+        /// dereferences an address must ask this first: on a device without the
+        /// feature the declaration itself (SPIR-V's PhysicalStorageBufferAddresses
+        /// capability) is illegal, so the CALLER must choose a different job, not a
+        /// different address.
+        virtual bool supportsBufferDeviceAddress() const { return false; }
+
         void _notifyStagingBufferEnteredZeroRef( StagingBuffer *stagingBuffer );
         void _notifyStagingBufferLeftZeroRef( StagingBuffer *stagingBuffer );
 

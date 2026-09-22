@@ -311,8 +311,17 @@ namespace Ogre
             // above 1.0, and the instance's apiVersion is the ceiling for the whole
             // process. vkEnumerateInstanceVersion is itself a 1.1 entry point, so a
             // 1.0 loader (or a null return) keeps the historical 1.0.2 exactly.
+            //
+            // Jahshaka: THE VERSION IS NO LONGER THE RAY TIER'S PROPERTY. It used to be
+            // raised only when rays were wanted, which quietly made buffer device
+            // addresses - a plain buffer feature, promoted to core in 1.2 and needed by
+            // the voxelizer on every device - a thing that existed only in a
+            // ray-tracing process. A 1.0 instance cannot enable
+            // VK_KHR_buffer_device_address without dragging in its 1.0 dependency
+            // chain (get_physical_device_properties2 + device_group), so the honest fix
+            // is to take the version the loader offers and let each FEATURE be gated on
+            // itself.
             appInfo.apiVersion = VK_MAKE_VERSION( 1, 0, 2 );
-            if( !jahNoRayQuery() )
             {
                 PFN_vkEnumerateInstanceVersion enumerateInstanceVersion =
                     (PFN_vkEnumerateInstanceVersion)vkGetInstanceProcAddr(
@@ -748,12 +757,14 @@ namespace Ogre
                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES );
         makeVkStruct( rayQueryFeatures.descriptorIndexing,
                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES );
+        const bool bWantBufferDeviceAddress =
+            hasExt( VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME );
         const bool bWantRayQuery =
             !jahNoRayQuery() &&
             hasExt( VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME ) &&
             hasExt( VK_KHR_RAY_QUERY_EXTENSION_NAME ) &&
             hasExt( VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME ) &&
-            hasExt( VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME ) &&
+            bWantBufferDeviceAddress &&
             hasExt( VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME );
         if( bWantRayQuery )
         {
@@ -761,10 +772,15 @@ namespace Ogre
             lastNext = &rayQueryFeatures.accelStruct.pNext;
             *lastNext = &rayQueryFeatures.rayQuery;
             lastNext = &rayQueryFeatures.rayQuery.pNext;
-            *lastNext = &rayQueryFeatures.bufferDeviceAddress;
-            lastNext = &rayQueryFeatures.bufferDeviceAddress.pNext;
             *lastNext = &rayQueryFeatures.descriptorIndexing;
             lastNext = &rayQueryFeatures.descriptorIndexing.pNext;
+        }
+        // Jahshaka: chained on ITS OWN extension, so a no-rays device still gets
+        // addresses (the voxelizer reads the vertex/index pools through them).
+        if( bWantBufferDeviceAddress )
+        {
+            *lastNext = &rayQueryFeatures.bufferDeviceAddress;
+            lastNext = &rayQueryFeatures.bufferDeviceAddress.pNext;
         }
 
         GetPhysicalDeviceFeatures2KHR( physicalDevice, &deviceFeatures2 );
@@ -781,10 +797,12 @@ namespace Ogre
         // cannot quietly change driver behaviour for the rest of the engine. The
         // descriptor-indexing struct is chained but left entirely off: the extension
         // is a dependency of VK_KHR_acceleration_structure, none of its features are.
-        rayQueryFeatures.enabled =
-            bWantRayQuery && rayQueryFeatures.accelStruct.accelerationStructure &&
-            rayQueryFeatures.rayQuery.rayQuery &&
-            rayQueryFeatures.bufferDeviceAddress.bufferDeviceAddress;
+        const bool bHasBufferDeviceAddress =
+            bWantBufferDeviceAddress && rayQueryFeatures.bufferDeviceAddress.bufferDeviceAddress;
+        rayQueryFeatures.enabled = bWantRayQuery && bHasBufferDeviceAddress &&
+                                   rayQueryFeatures.accelStruct.accelerationStructure &&
+                                   rayQueryFeatures.rayQuery.rayQuery;
+        rayQueryFeatures.bufferDeviceAddressEnabled = bHasBufferDeviceAddress;
         {
             // Clear every reported bit, then put back only the ones we use. sType and
             // pNext are restored so the chain vkCreateDevice is about to walk survives.
@@ -1271,8 +1289,10 @@ namespace Ogre
             else if( !jahNoRayQuery() &&
                      extensionName == VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME );
-            else if( !jahNoRayQuery() &&
-                     extensionName == VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME )
+            // Jahshaka: buffer device addresses are NOT part of the ray set - see
+            // RayQueryVkFeatures::bufferDeviceAddress. Requested whenever the driver
+            // advertises them, rays or no rays.
+            else if( extensionName == VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME );
             else if( !jahNoRayQuery() &&
                      extensionName == VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME )
@@ -1288,7 +1308,7 @@ namespace Ogre
 
         // Jahshaka patch 0013: fifo_latest_ready = vsync without the FIFO
         // queue backlog (NVIDIA xcb has no MAILBOX). A separate pass on
-        // purpose — this block must stay clear of patch 0006's context.
+        // purpose - this block must stay clear of patch 0006's context.
         // String literals like portability_subset: the name macros need a
         // recent SDK and the KHR/EXT spellings alias the same enum value.
         for( const VkExtensionProperties &ext : availableExtensions )

@@ -161,6 +161,15 @@ namespace Ogre
             /// True only when every extension the tier needs was found AND the
             /// driver reported both accelerationStructure and rayQuery.
             bool enabled;
+            /// Jahshaka: TRUE WHEN BUFFER DEVICE ADDRESSES ARE ON, WHICH IS NOT THE
+            /// SAME QUESTION AS `enabled`. The two used to be one bit, and that made
+            /// the whole feature a property of the ray-query tier: a device brought up
+            /// with rays OFF (the selftest's no-rays pose, a driver without
+            /// VK_KHR_ray_query, lavapipe) had no addresses either, so a compute job
+            /// that reads geometry through an address - the voxelizer - would have had
+            /// to keep a second, non-address code path alive forever. Addresses are a
+            /// plain buffer feature; they are enabled whenever the driver has them.
+            bool bufferDeviceAddressEnabled;
         };
 
         // clang-format off
@@ -264,6 +273,12 @@ namespace Ogre
         /// Jahshaka-owned compute pass to know whether it may build acceleration
         /// structures on this device.
         bool hasRayQuery() const { return mRayQueryFeatures.enabled; }
+
+        /// Jahshaka: true when VK_KHR_buffer_device_address was requested at
+        /// vkCreateDevice and the driver reported the feature - independently of the
+        /// ray-query tier. The VBO pools a v2 vertex/index buffer lives in carry
+        /// VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT exactly when this is true.
+        bool hasBufferDeviceAddress() const { return mRayQueryFeatures.bufferDeviceAddressEnabled; }
 
         void initQueues();
 

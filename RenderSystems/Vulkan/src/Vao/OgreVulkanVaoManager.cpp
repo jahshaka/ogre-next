@@ -1137,18 +1137,28 @@ namespace Ogre
                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
                 if( vboFlag == CPU_READ_WRITE )
                     bufferCi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-                // Jahshaka (ogre-patch 0039): when the device came up with hardware ray
-                // query, the DEVICE-LOCAL VBO pools (the ones v2 vertex and index buffers
-                // live in) also become legal BLAS build input and get a device address.
-                // Without this a Jahshaka-owned acceleration structure would have to COPY
-                // every vertex and index buffer into its own VkBuffers (a second full copy
-                // of the world's geometry in VRAM, plus a readback per mesh). The two bits
-                // cost nothing when unused, and both are illegal unless the
-                // bufferDeviceAddress feature is on - hence the guard.
-                if( mDevice->hasRayQuery() && vboFlag == CPU_INACCESSIBLE )
+                // Jahshaka (ogre-patch 0039, WIDENED): the DEVICE-LOCAL VBO pools (the
+                // ones v2 vertex and index buffers live in) get a device address, so a
+                // compute shader or an acceleration structure can read the SAME
+                // triangles the raster draws. Without it every such consumer would have
+                // to COPY the world's geometry into its own VkBuffers (a second full
+                // copy in VRAM, plus a readback per mesh) - which is exactly what the
+                // voxelizer used to do.
+                //
+                // THE GATE IS THE ADDRESS FEATURE, NOT THE RAY TIER. It used to be
+                // hasRayQuery(), which made the addresses a property of ray tracing: a
+                // device brought up with rays off had none, so a shader reading geometry
+                // through an address needed a second code path for that case forever.
+                // The build-input bit stays on the ray tier's own question because that
+                // one really is an acceleration-structure usage and is illegal without
+                // VK_KHR_acceleration_structure.
+                if( vboFlag == CPU_INACCESSIBLE )
                 {
-                    bufferCi.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+                    if( mDevice->hasBufferDeviceAddress() )
+                        bufferCi.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+                    if( mDevice->hasRayQuery() )
+                        bufferCi.usage |=
+                            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
                 }
                 VkResult result = vkCreateBuffer( mDevice->mDevice, &bufferCi, 0, &newVbo.vkBuffer );
                 checkVkResult( mDevice, result, "vkCreateBuffer" );
@@ -1169,7 +1179,8 @@ namespace Ogre
             // VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT must carry this allocate flag.
             VkMemoryAllocateFlagsInfo memAllocFlags;
             makeVkStruct( memAllocFlags, VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO );
-            if( mDevice->hasRayQuery() && !bIsTextureOnly && vboFlag == CPU_INACCESSIBLE )
+            if( mDevice->hasBufferDeviceAddress() && !bIsTextureOnly &&
+                vboFlag == CPU_INACCESSIBLE )
             {
                 memAllocFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
                 memAllocInfo.pNext = &memAllocFlags;
@@ -2046,6 +2057,49 @@ namespace Ogre
     void VulkanVaoManager::_schedulePoolAdvanceFrame( VulkanDescriptorPool *pool )
     {
         mUsedDescriptorPools.push_back( pool );
+    }
+    //-----------------------------------------------------------------------------------
+    bool VulkanVaoManager::supportsBufferDeviceAddress() const
+    {
+        return mDevice && mDevice->hasBufferDeviceAddress();
+    }
+    //-----------------------------------------------------------------------------------
+    uint64 VulkanVaoManager::getBufferDeviceAddress( const BufferPacked *buffer ) const
+    {
+        if( !buffer || !supportsBufferDeviceAddress() )
+            return 0u;
+
+        // A CPU-accessible buffer lives in a pool created WITHOUT the address bit (see
+        // allocateVbo) - asking for its address is a Vulkan error, not a slow path.
+        VulkanBufferInterface *bufIntf =
+            static_cast<VulkanBufferInterface *>( buffer->getBufferInterface() );
+        if( !bufIntf || !bufIntf->getVboName() )
+            return 0u;
+
+        // Loaded once per VaoManager, which is once per VkDevice. The KHR entry point
+        // and the core 1.2 one are the same function; whichever the loader has.
+        if( !mGetBufferDeviceAddress )
+        {
+            mGetBufferDeviceAddress = (PFN_vkGetBufferDeviceAddressKHR)vkGetDeviceProcAddr(
+                mDevice->mDevice, "vkGetBufferDeviceAddressKHR" );
+            if( !mGetBufferDeviceAddress )
+            {
+                mGetBufferDeviceAddress = (PFN_vkGetBufferDeviceAddressKHR)vkGetDeviceProcAddr(
+                    mDevice->mDevice, "vkGetBufferDeviceAddress" );
+            }
+            if( !mGetBufferDeviceAddress )
+                return 0u;
+        }
+
+        VkBufferDeviceAddressInfo info;
+        makeVkStruct( info, VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO );
+        info.buffer = bufIntf->getVboName();
+        const VkDeviceAddress poolAddress = mGetBufferDeviceAddress( mDevice->mDevice, &info );
+        if( !poolAddress )
+            return 0u;
+
+        return uint64( poolAddress ) +
+               uint64( buffer->_getFinalBufferStart() ) * uint64( buffer->getBytesPerElement() );
     }
     //-----------------------------------------------------------------------------------
     void VulkanVaoManager::_update()

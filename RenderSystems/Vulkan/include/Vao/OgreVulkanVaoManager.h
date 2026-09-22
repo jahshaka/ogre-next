@@ -256,6 +256,10 @@ namespace Ogre
         VkSemaphoreArray mAvailableSemaphores;
 
         VulkanDevice *mDevice;
+
+        /// Jahshaka: vkGetBufferDeviceAddress, resolved on first use (one VkDevice per
+        /// VaoManager). Mutable because getBufferDeviceAddress is a const question.
+        mutable PFN_vkGetBufferDeviceAddressKHR mGetBufferDeviceAddress = 0;
         VulkanRenderSystem *mVkRenderSystem;
 
         typedef map<VkDescriptorSetLayout, FastArray<VulkanDescriptorPool *> >::type
@@ -538,6 +542,12 @@ namespace Ogre
 
         void _update() override;
         void _notifyNewCommandBuffer();
+
+        /// Jahshaka: see VaoManager::getBufferDeviceAddress. The pool's VkBuffer
+        /// address plus this buffer's own start inside it - the same arithmetic
+        /// Ogre's draw performs when it binds the pool at offset 0.
+        uint64 getBufferDeviceAddress( const BufferPacked *buffer ) const override;
+        bool   supportsBufferDeviceAddress() const override;
 
         VulkanDevice *getDevice() const { return mDevice; }
 
