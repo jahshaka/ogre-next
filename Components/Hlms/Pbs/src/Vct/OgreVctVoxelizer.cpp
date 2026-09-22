@@ -81,7 +81,7 @@ namespace Ogre
     };
     //-------------------------------------------------------------------------
     VctVoxelizer::VctVoxelizer( IdType id, RenderSystem *renderSystem, HlmsManager *hlmsManager,
-                                bool correctAreaLightShadows ) :
+                                bool correctAreaLightShadows, VctMaterial *materialStore ) :
         VctVoxelizerSourceBase( id, renderSystem, hlmsManager ),
         mAabbWorldSpaceJob( 0 ),
         mMergeAccumTex( 0 ),
@@ -98,9 +98,7 @@ namespace Ogre
         mDefaultIndexCountSplit( 2001u
                                  /*std::numeric_limits<uint32>::max()*/ ),
         mComputeTools( new ComputeTools( hlmsManager->getComputeHlms() ) ),
-        mVctMaterial( new VctMaterial( id, renderSystem->getVaoManager(),
-                                       Root::getSingleton().getCompositorManager2(),
-                                       renderSystem->getTextureGpuManager() ) ),
+        mVctMaterial( materialStore ),
         mAutoRegion( true ),
         mMaxRegion( Aabb::BOX_INFINITE ),
         mNumOctantsX( 0u ),
@@ -132,7 +130,7 @@ namespace Ogre
         freeBuffers( true );
         destroyInstanceBuffers();
 
-        delete mVctMaterial;
+        // THE STORE IS NOT OURS (see the constructor): the owner outlives us.
         mVctMaterial = 0;
 
         delete mComputeTools;
@@ -1307,9 +1305,17 @@ namespace Ogre
 
         createVoxelTextures();
 
-        mVctMaterial->initTempResources( sceneManager );
+        // THE TEMP RESOURCES ARE THE OWNER'S BRACKET NOW, not this build's. They are a
+        // 64x64 render target, a dummy camera and two workspaces, all created under
+        // FIXED NAMES ("VctMaterialDownsampleTex", "VctMaterialCam"), so a second init
+        // without a destroy throws on the duplicate name. With one store shared by a
+        // chain, one bracket around all its builds is both correct and the only shape
+        // that cannot collide: the builds are sequential on the render thread and share
+        // the one store's resources. A voxelizer whose owner forgot the bracket is
+        // refused here rather than producing untextured materials.
+        OGRE_ASSERT_LOW( mVctMaterial->hasTempResources() &&
+                         "VctMaterial::initTempResources must bracket VctVoxelizer::build" );
         placeItemsInBuckets();
-        mVctMaterial->destroyTempResources();
 
         // NOTHING TO VOXELISE, AND THE DECISION IS MADE HERE - before anything
         // allocates or dispatches. `mItems` non-empty does NOT mean there is geometry:

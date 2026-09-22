@@ -417,8 +417,30 @@ namespace Ogre
         void clearVoxels();
 
     public:
+        /** @param materialStore
+                THE MATERIAL STORE THIS VOXELIZER USES, AND DOES NOT OWN. Required.
+
+                It used to `new` its own, which made (bucketIdx, slotIdx) a PER-STORE
+                fact: `findFreeBucketFor` fills buckets in insertion order, and a chain's
+                cascades see different attach sets in different orders, so the SAME
+                datablock got a different pool and slot in every cascade. Nothing
+                scene-wide could then name a material - which is exactly what a GPU
+                instance feed needs, one word per instance, for every cascade at once.
+
+                Sharing one store across a chain is also the better shape on its own
+                terms: one conversion per datablock instead of one per cascade, one set
+                of pool const buffers, one texture pool, one by-pointer alias cache and
+                one eviction call. AND IT CLOSES A HAZARD: the compute jobs the
+                dispatches use are CLONED PER VARIANT AND SHARED between voxelizers, so a
+                job could hold one store's texture pool in its descriptor while another
+                voxelizer dispatched it. With one store there is one pool.
+
+                The owner creates it before any voxelizer and destroys it after all of
+                them, and brackets a whole chain's builds with ONE
+                initTempResources/destroyTempResources pair.
+        */
         VctVoxelizer( IdType id, RenderSystem *renderSystem, HlmsManager *hlmsManager,
-                      bool correctAreaLightShadows );
+                      bool correctAreaLightShadows, VctMaterial *materialStore );
         ~VctVoxelizer();
 
         void _setNeedsAllMipmaps( bool bNeedsAllMipmaps ) { mNeedsAllMipmaps = bNeedsAllMipmaps; }
@@ -578,9 +600,10 @@ namespace Ogre
         }
 
     public:
-        /// JAHSHAKA PATCH 0081: the voxeliser's material cache, so a host can
-        /// evict a dying datablock (VctMaterial::removeDatablock) instead of
-        /// re-voxelising every volume.
+        /// JAHSHAKA PATCH 0081: the material store, so a host can evict a dying
+        /// datablock (VctMaterial::removeDatablock) instead of re-voxelising every
+        /// volume. NOT OWNED - see the constructor. The host that owns the store
+        /// should evict on the STORE, once, rather than through each voxelizer.
         VctMaterial *getVctMaterial() const { return mVctMaterial; }
 
     };

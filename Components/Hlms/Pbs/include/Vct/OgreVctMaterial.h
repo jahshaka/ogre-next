@@ -133,6 +133,11 @@ namespace Ogre
         void removeDatablock( const HlmsDatablock *datablock );
 
         TextureGpu *getTexturePool() const { return mTexturePool; }
+
+        /// Are the temp resources up? A store shared by a whole chain is bracketed ONCE
+        /// per rebuild by its owner, so a voxelizer's build can assert it rather than
+        /// discover it as an untextured material.
+        bool hasTempResources() const { return mDownsampleTex != 0; }
     };
 }  // namespace Ogre
 

@@ -257,6 +257,14 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VctMaterial::initTempResources( SceneManager *sceneManager )
     {
+        // IDEMPOTENT. The texture and the camera are created under FIXED NAMES, so a
+        // second init without a destroy throws on the duplicate - which is how a
+        // rebuild that threw between the bracket's two halves used to poison every
+        // rebuild after it. Now the owner may call this freely and the failure path may
+        // call destroyTempResources without knowing whether init ran.
+        if( mDownsampleTex )
+            return;
+
         mDownsampleTex = mTextureGpuManager->createTexture(
             "VctMaterialDownsampleTex", "VctMaterialDownsampleTex", GpuPageOutStrategy::Discard,
             TextureFlags::RenderToTexture | TextureFlags::DiscardableContent, TextureTypes::Type2D );
@@ -277,6 +285,9 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VctMaterial::destroyTempResources()
     {
+        if( !mDownsampleTex )
+            return;  // never inited, or already torn down - see initTempResources
+
         mTextureGpuManager->destroyTexture( mDownsampleTex );
         mDownsampleTex = 0;
 

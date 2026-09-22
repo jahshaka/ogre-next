@@ -32,6 +32,10 @@ THE SOFTWARE.
 
 #include "Vct/OgreVoxelizedMeshCache.h"
 
+#include "Vct/OgreVctMaterial.h"
+
+#include "OgreRoot.h"
+
 #include "Vct/OgreVctVoxelizer.h"
 
 #include "OgreItem.h"
@@ -194,8 +198,18 @@ namespace Ogre
 
         if( !bUpToDate )
         {
+            // ITS OWN STORE, FOR THE LIFE OF THIS ONE-SHOT. A voxelizer does not own a
+            // material store any more (see VctVoxelizer's constructor: a chain shares
+            // one so a material's pool and slot are a scene-wide fact). This cache
+            // voxelizes ONE mesh into ONE volume and throws both away, so its store is
+            // a local with the same lifetime, and it brackets the temp resources the
+            // way any owner must.
+            VctMaterial vctMaterial( Ogre::Id::generateNewId<Ogre::VctMaterial>(),
+                                     renderSystem->getVaoManager(),
+                                     Root::getSingleton().getCompositorManager2(),
+                                     renderSystem->getTextureGpuManager() );
             VctVoxelizer voxelizer( Ogre::Id::generateNewId<Ogre::VctVoxelizer>(), renderSystem,
-                                    hlmsManager, true );
+                                    hlmsManager, true, &vctMaterial );
             voxelizer._setNeedsAllMipmaps( true );
 
             Item *tmpItem = sceneManager->createItem( mesh );
@@ -224,7 +238,9 @@ namespace Ogre
             voxelizer.addItem( tmpItem, false );
             voxelizer.autoCalculateRegion();
             voxelizer.dividideOctants( 1u, 1u, 1u );
+            vctMaterial.initTempResources( sceneManager );
             voxelizer.build( sceneManager );
+            vctMaterial.destroyTempResources();
 
             VoxelizedMesh voxelizedMesh;
 
