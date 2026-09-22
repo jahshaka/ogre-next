@@ -483,6 +483,39 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
+    /** Jahshaka: THE ACCESS THE BARRIER SOLVER CANNOT SEE.
+
+        Ogre derives a buffer's access flags from WHAT KIND OF BUFFER IT IS
+        (VulkanMappings::get( BufferPackedTypes )): a vertex buffer is read at
+        VERTEX_ATTRIBUTE_READ, an index buffer at INDEX_READ, and
+        deriveStageFromBufferAccessFlags therefore unblocks VERTEX_INPUT and nothing
+        else. That is complete only while a vertex or index buffer can be read ONLY by
+        the fixed-function input stage.
+
+        It no longer can. With VK_KHR_buffer_device_address on, the DEVICE-LOCAL VBO
+        pools carry VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT (allocateVbo) and a
+        compute shader can dereference a pointer into them - which is how the VCT
+        voxelizer reads the geometry the raster draws instead of keeping a private copy.
+        Such a read is invisible here: it goes through an ADDRESS, not through a
+        descriptor, so no DescriptorSetUav/Texture names the buffer and nothing in the
+        solver can learn of it. A BT_DEFAULT mesh re-uploaded and voxelised in the same
+        submission would then have no memory dependency at all.
+
+        So when the feature is on, a vertex or index buffer also declares SHADER_READ -
+        which makes the pre-copy barrier wait for the compute read and the copy-end
+        barrier unblock the shader stages (COMPUTE among them). It costs one stage mask
+        on barriers that already happen, and only on devices that have the feature.
+    */
+    VkAccessFlags VulkanQueue::jahBufferDeviceAddressAccess( const BufferPacked *buffer ) const
+    {
+        if( !mOwnerDevice || !mOwnerDevice->hasBufferDeviceAddress() )
+            return 0;
+        const BufferPackedTypes type = buffer->getBufferPackedType();
+        if( type != BP_TYPE_VERTEX && type != BP_TYPE_INDEX )
+            return 0;
+        return VK_ACCESS_SHADER_READ_BIT;
+    }
+    //-------------------------------------------------------------------------
     void VulkanQueue::prepareForUpload( const BufferPacked *buffer, TextureGpu *texture,
                                         CopyEncTransitionMode::CopyEncTransitionMode transitionMode )
     {
@@ -493,7 +526,10 @@ namespace Ogre
             BufferPackedDownloadMap::iterator it = mCopyDownloadBuffers.find( buffer );
 
             if( it == mCopyDownloadBuffers.end() )
+            {
                 bufferAccessFlags = VulkanMappings::get( buffer->getBufferPackedType() );
+                bufferAccessFlags |= jahBufferDeviceAddressAccess( buffer );
+            }
             else
             {
                 if( !it->second )

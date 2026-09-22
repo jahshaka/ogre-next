@@ -2069,8 +2069,15 @@ namespace Ogre
         if( !buffer || !supportsBufferDeviceAddress() )
             return 0u;
 
-        // A CPU-accessible buffer lives in a pool created WITHOUT the address bit (see
-        // allocateVbo) - asking for its address is a Vulkan error, not a slow path.
+        // ONLY A DEVICE-LOCAL POOL HAS AN ADDRESS, and this is the check rather than a
+        // comment: allocateVbo puts VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT on
+        // CPU_INACCESSIBLE pools only, so asking for a dynamic buffer's address is
+        // VUID-VkBufferDeviceAddressInfo-buffer-02601 - and a dynamic buffer's
+        // _getFinalBufferStart() moves every frame anyway (the triple-buffered section),
+        // so an address taken once would be stale on the next.
+        if( bufferTypeToVboFlag( buffer->getBufferType(), false ) != CPU_INACCESSIBLE )
+            return 0u;
+
         VulkanBufferInterface *bufIntf =
             static_cast<VulkanBufferInterface *>( buffer->getBufferInterface() );
         if( !bufIntf || !bufIntf->getVboName() )

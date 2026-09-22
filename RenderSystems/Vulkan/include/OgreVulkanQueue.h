@@ -209,6 +209,11 @@ namespace Ogre
         VulkanQueue();
         ~VulkanQueue();
 
+        /// Jahshaka: SHADER_READ for a vertex/index buffer when buffer device addresses
+        /// are on - a compute shader can read the pool through a pointer and the barrier
+        /// solver cannot see it. See the definition for the full reasoning.
+        VkAccessFlags jahBufferDeviceAddressAccess( const BufferPacked *buffer ) const;
+
         void setQueueData( VulkanDevice *owner, QueueFamily family, uint32 familyIdx, uint32 queueIdx );
         void setExternalQueue( VulkanDevice *owner, QueueFamily family, VkQueue queue );
 

@@ -249,6 +249,17 @@ namespace Ogre
         mAabbWorldSpaceJob->clearUavBuffers();
     }
     //-------------------------------------------------------------------------
+    /// JAHSHAKA TEST HOOK: refuse every (mesh, level, submesh), which is the state a
+    /// device with no buffer device addresses is in for every mesh in the scene. It is
+    /// unreachable on hardware this engine ships on, and the path it exercises - a
+    /// build with items queued and NO geometry - used to segfault, so it needs a way to
+    /// be tested. Read per build, like the GI cascade fault hooks on the host side: a
+    /// getenv against a build that costs milliseconds is not a cost anyone can measure.
+    static bool jahRefuseGeometry()
+    {
+        return getenv( "JAH_VCT_REFUSE_GEOMETRY" ) != 0;
+    }
+    //-------------------------------------------------------------------------
     /// The normal / uv formats a geometry row can name, mirrored in
     /// Voxelizer_piece_cs.any. A FORMAT IS DATA, NOT A SHADER PERMUTATION: the old
     /// `compressed_vertex_format` property existed only because this class chose the
@@ -305,6 +316,14 @@ namespace Ogre
             size_t posSource = 0u, posOffset = 0u;
             const VertexElement2 *posElem =
                 vao->findBySemantic( VES_POSITION, posSource, posOffset );
+            if( jahRefuseGeometry() )
+            {
+                LogManager::getSingleton().logMessage(
+                    "WARNING: JAH_VCT_REFUSE_GEOMETRY: refusing mesh '" + mesh->getName() +
+                        "'. It will not contribute to GI.",
+                    LML_CRITICAL );
+                continue;
+            }
             if( !posElem || posElem->mType != VET_FLOAT3 ||
                 posSource >= vao->getVertexBuffers().size() )
             {
@@ -385,6 +404,27 @@ namespace Ogre
             row.posAddress[1] = uint32( posAddress >> 32u );
             row.idxAddress[0] = uint32( flooredIdx & 0xFFFFFFFFu );
             row.idxAddress[1] = uint32( flooredIdx >> 32u );
+
+            // THE SHADER'S ADDRESS ARITHMETIC IS IN 4-BYTE LANES (`GEOM_LANE` does a
+            // `>> 2` over `vertexIdx * stride + offset`), so an odd stride or an odd
+            // element offset would not fail - it would read the WRONG BYTES, silently,
+            // and only for that one mesh. Refuse it with a reason instead. Every layout
+            // this engine bakes is 48 or 68 bytes with 4-aligned elements; a format that
+            // is not wants the row widened to carry a byte shift, not this loosened.
+            const bool bAligned =
+                ( row.vertexStride & 3u ) == 0u && ( row.posOffset & 3u ) == 0u &&
+                ( row.normalOffset == 0xFFFFFFFFu || ( row.normalOffset & 3u ) == 0u ) &&
+                ( row.uvOffset == 0xFFFFFFFFu || ( row.uvOffset & 3u ) == 0u );
+            if( !bAligned )
+            {
+                LogManager::getSingleton().logMessage(
+                    "WARNING: Mesh '" + mesh->getName() +
+                        "' has a vertex stride or element offset that is not a multiple of 4 "
+                        "bytes; the voxelizer reads vertices in 4-byte lanes and will not "
+                        "read this mesh. It will not contribute to GI.",
+                    LML_CRITICAL );
+                continue;
+            }
 
             qsm.geomRow = uint32( mCpuGeometry.size() );
             mCpuGeometry.push_back( row );
@@ -994,6 +1034,14 @@ namespace Ogre
         OgreProfile( "VctVoxelizer::fillInstanceBuffers" );
 
         createInstanceBuffers();
+        if( !mInstanceBuffer || !mCpuInstanceBuffer )
+        {
+            // createInstanceBuffers had nothing to size. build() already decided to
+            // clear and return in that case, so reaching here means a new caller: say
+            // nothing and touch nothing rather than dereference null.
+            mTotalNumInstances = 0u;
+            return;
+        }
 
         //        float * RESTRICT_ALIAS instanceBuffer =
         //                reinterpret_cast<float*>( mInstanceBuffer->map( 0,
@@ -1265,18 +1313,26 @@ namespace Ogre
         placeItemsInBuckets();
         mVctMaterial->destroyTempResources();
 
+        // NOTHING TO VOXELISE, AND THE DECISION IS MADE HERE - before anything
+        // allocates or dispatches. `mItems` non-empty does NOT mean there is geometry:
+        // describeMeshLevel refuses a (submesh, level) it cannot read (no float3
+        // position, an unaligned layout, or - the whole-scene case - a device with no
+        // buffer device addresses at all), and a refused row produces no bucket. That
+        // state used to walk on into fillInstanceBuffers with a null instance buffer and
+        // SEGFAULT, so the honest "GI is empty" path was a crash.
+        if( mBuckets.empty() || !mGeometryBuffer )
+        {
+            mTotalNumInstances = 0u;
+            clearVoxels();
+            OgreProfileGpuEnd( "VCT build" );
+            return;
+        }
+
         fillInstanceBuffers();
 
         computeMeshAabbs();
 
         const bool hasTypedUavs = mRenderSystem->getCapabilities()->hasCapability( RSC_TYPED_UAV_LOADS );
-
-        if( !mGeometryBuffer || mBuckets.empty() )
-        {
-            clearVoxels();
-            OgreProfileGpuEnd( "VCT build" );
-            return;
-        }
 
         for( size_t i = 0; i < sizeof( mComputeJobs ) / sizeof( mComputeJobs[0] ); ++i )
         {

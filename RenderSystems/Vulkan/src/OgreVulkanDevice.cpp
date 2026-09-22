@@ -821,13 +821,29 @@ namespace Ogre
             {
                 rayQueryFeatures.accelStruct.accelerationStructure = VK_TRUE;
                 rayQueryFeatures.rayQuery.rayQuery = VK_TRUE;
-                rayQueryFeatures.bufferDeviceAddress.bufferDeviceAddress = VK_TRUE;
             }
+            // PUT THE ADDRESS BIT BACK ON ITS OWN QUESTION. It used to sit inside the
+            // ray-query arm above, which meant a device with rays OFF but addresses
+            // AVAILABLE was created with the feature DISABLED while
+            // hasBufferDeviceAddress() answered true - so the pools got
+            // VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT and
+            // VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, vkGetBufferDeviceAddress was
+            // called, and a compute shader declared PhysicalStorageBufferAddresses, all
+            // four against a feature that was never enabled (VUID-VkBufferCreateInfo-
+            // usage-08099, -VkMemoryAllocateInfo-flags-03331, -VkBufferDeviceAddressInfo-
+            // buffer-02601 and the SPIR-V capability rule). NVIDIA tolerates every one of
+            // them silently, which is exactly why it has to be right here.
+            if( bHasBufferDeviceAddress )
+                rayQueryFeatures.bufferDeviceAddress.bufferDeviceAddress = VK_TRUE;
             LogManager::getSingleton().logMessage(
                 String( "Vulkan: hardware ray query " ) +
                 ( rayQueryFeatures.enabled
                       ? "AVAILABLE (VK_KHR_acceleration_structure + VK_KHR_ray_query enabled)"
                       : "not available" ) );
+            LogManager::getSingleton().logMessage(
+                String( "Vulkan: buffer device addresses " ) +
+                ( bHasBufferDeviceAddress ? "ENABLED (VK_KHR_buffer_device_address)"
+                                          : "not available" ) );
         }
         return true;
     }
