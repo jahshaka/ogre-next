@@ -561,12 +561,22 @@ namespace Ogre
 
         size_t bytesFlushed = 0u;
 
-        // Unlike CPU -> GPU (or GPU -> CPU) resources, GPU -> GPU resources
-        // are safe to reuse after 1 frame of synchronization.
+        // A BLOCK IS SAFE TO REUSE ONCE THE FRAME THAT FREED IT HAS FINISHED ON THE
+        // GPU, AND THAT IS mDynamicBufferMultiplier FRAMES, NOT ONE (Jahshaka patch
+        // 0067). The caller below waits for the TAIL frame -- the oldest of the
+        // mDynamicBufferMultiplier frames in flight, i.e. mFrameCount - multiplier
+        // + 1 -- so a block freed during frame N is only known to be idle once
+        // N is the tail, which is mFrameCount == N + multiplier - 1 and one more
+        // frame of margin for the fence this manager has already flushed. Reusing
+        // it at N + 1 hands its memory to a NEW resource while frame N's command
+        // buffer may still be executing: the two alias, and on NVIDIA the second
+        // image's writes into memory the first is still using hang the channel
+        // (NVRM: Xid 109 CTX SWITCH TIMEOUT -> VK_ERROR_DEVICE_LOST). See the
+        // patch header for the measurement.
         DirtyBlockArray::iterator itor = mDelayedBlocks.begin();
         DirtyBlockArray::iterator endt = mDelayedBlocks.end();
 
-        while( itor != endt && ( frameCount - itor->frameIdx ) >= 1u )
+        while( itor != endt && ( frameCount - itor->frameIdx ) >= mDynamicBufferMultiplier )
         {
             bytesFlushed += itor->size;
             deallocateVbo( itor->vboIdx, itor->offset, itor->size, itor->vboFlag, true );
@@ -1127,6 +1137,19 @@ namespace Ogre
                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
                 if( vboFlag == CPU_READ_WRITE )
                     bufferCi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                // Jahshaka (ogre-patch 0039): when the device came up with hardware ray
+                // query, the DEVICE-LOCAL VBO pools (the ones v2 vertex and index buffers
+                // live in) also become legal BLAS build input and get a device address.
+                // Without this a Jahshaka-owned acceleration structure would have to COPY
+                // every vertex and index buffer into its own VkBuffers (a second full copy
+                // of the world's geometry in VRAM, plus a readback per mesh). The two bits
+                // cost nothing when unused, and both are illegal unless the
+                // bufferDeviceAddress feature is on - hence the guard.
+                if( mDevice->hasRayQuery() && vboFlag == CPU_INACCESSIBLE )
+                {
+                    bufferCi.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+                }
                 VkResult result = vkCreateBuffer( mDevice->mDevice, &bufferCi, 0, &newVbo.vkBuffer );
                 checkVkResult( mDevice, result, "vkCreateBuffer" );
 
@@ -1141,6 +1164,16 @@ namespace Ogre
             makeVkStruct( memAllocInfo, VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO );
             memAllocInfo.allocationSize = poolSize;
             memAllocInfo.memoryTypeIndex = chosenMemoryTypeIdx;
+
+            // Jahshaka (ogre-patch 0039): memory backing a buffer created with
+            // VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT must carry this allocate flag.
+            VkMemoryAllocateFlagsInfo memAllocFlags;
+            makeVkStruct( memAllocFlags, VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO );
+            if( mDevice->hasRayQuery() && !bIsTextureOnly && vboFlag == CPU_INACCESSIBLE )
+            {
+                memAllocFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+                memAllocInfo.pNext = &memAllocFlags;
+            }
 
             VkResult result = vkAllocateMemory( mDevice->mDevice, &memAllocInfo, NULL, &newVbo.vboName );
             checkVkResult( mDevice, result, "vkAllocateMemory" );
@@ -2149,7 +2182,9 @@ namespace Ogre
                 mDelayedFuncs[mDynamicBufferCurrentFrame].begin(), itor );
         }
 
-        if( !mDelayedBlocks.empty() && ( mFrameCount - mDelayedBlocks.front().frameIdx ) >= 1u )
+        // Jahshaka patch 0067: the same window as flushGpuDelayedBlocks' own test.
+        if( !mDelayedBlocks.empty() &&
+            ( mFrameCount - mDelayedBlocks.front().frameIdx ) >= mDynamicBufferMultiplier )
         {
             waitForTailFrameToFinish();
             flushGpuDelayedBlocks();

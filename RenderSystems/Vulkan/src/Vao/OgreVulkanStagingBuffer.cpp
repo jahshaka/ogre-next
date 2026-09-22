@@ -32,6 +32,7 @@ THE SOFTWARE.
 #include "Vao/OgreVulkanDynamicBuffer.h"
 #include "Vao/OgreVulkanVaoManager.h"
 
+#include "OgreLogManager.h"
 #include "OgreStringConverter.h"
 
 #include "OgreVulkanDevice.h"
@@ -57,15 +58,35 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     VulkanStagingBuffer::~VulkanStagingBuffer()
     {
-        if( !mFences.empty() )
+        VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mVaoManager );
+
+        // Jahshaka (ogre-patch 0069): DO NOT WAIT ON A LOST DEVICE FROM A DESTRUCTOR.
+        //
+        // wait() ends in checkVkResult(), which THROWS on VK_ERROR_DEVICE_LOST - and a
+        // throw leaving a destructor (implicitly noexcept since C++11) is
+        // std::terminate. handleDeviceLost() destroys every staging buffer
+        // (destroyVkResources -> VaoManager::deleteStagingBuffers), so at this pin every
+        // device loss that reaches the recovery path ABORTS THE PROCESS instead of
+        // recovering or throwing cleanly - by construction, not by luck.
+        //
+        // A fence on a lost device will never be signalled and the wait is meaningless;
+        // vkDestroyFence and the pool return below are both legal on a lost device, so
+        // skipping only the wait is the whole fix.
+        if( !mFences.empty() && !vaoManager->getDevice()->isDeviceLost() )
             wait( mFences.back().fenceName );
+        else if( !mFences.empty() )
+        {
+            LogManager::getSingleton().logMessage(
+                "Vulkan: [INFO] Device is lost; not waiting on a staging buffer's fence "
+                "(it can never be signalled). Destroying it anyway.",
+                LML_CRITICAL );
+        }
 
         deleteFences( mFences.begin(), mFences.end() );
 
         // Staging Buffers are already delayed (see mZeroRefStagingBuffers) so they can
         // be deallocated immediately.
         // BT_DYNAMIC_DEFAULT already signals this information so no extra info is required.
-        VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mVaoManager );
         vaoManager->deallocateVbo( mVboPoolIdx, mInternalBufferStart, getMaxSize(), BT_DYNAMIC_DEFAULT,
                                    !mUploadOnly, true );
     }
