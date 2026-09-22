@@ -191,6 +191,15 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VctMaterial::refreshAll( FastArray<HlmsDatablock *> *moved )
     {
+        // THE TEXTURE POOL IS RE-COPIED TOO. Its slices are cached by TextureGpu POINTER
+        // (getPoolSliceIdxForTexture), so a store that outlives rebuilds would keep a
+        // texture's first pixels for ever and hand a dead texture's slice to whatever
+        // texture is later allocated at its address. Forgetting the cache here makes
+        // every row re-written below copy its textures afresh into slices numbered from
+        // zero; the pool keeps its size.
+        mTextureToPoolEntry.clear();
+        mNumUsedPoolSlices = 0u;
+
         // THE KEYS FIRST: a datablock that has to MOVE is erased from the map and
         // re-inserted while this walks, so the walk is over a copy.
         FastArray<HlmsDatablock *> datablocks;

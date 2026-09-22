@@ -151,8 +151,10 @@ namespace Ogre
         /** RE-READS EVERY CONVERTED DATABLOCK, in place where it can, and reports the ones
             that had to move. The owner calls it when a material's parameters may have
             changed; it is the store's end of the VCT lifecycle's "always from scratch"
-            rule for the one piece of state that now outlives a rebuild. Needs the temp
-            resources (a texture new to the pool is rendered into it).
+            rule for the one piece of state that now outlives a rebuild. The texture pool
+            is RE-COPIED too (its by-pointer slice cache is forgotten first), so an edited
+            or dead texture never survives in it. Needs the temp resources (every texture
+            a row binds is rendered into the pool).
         */
         void refreshAll( FastArray<HlmsDatablock *> *moved );
 
