@@ -30,7 +30,10 @@ INLINE float findIntersectionDistance( float3 reflDirLS, float3 posLS, float3 pr
 	float fDist = length( viewSpacePosition.xyz );
 	float3 probeToPosDir = viewSpacePosition / fDist;
 
-	probeToPosDir = mul( p_viewSpaceToProbeLocalSpace, probeToPosDir );
+	// Jahshaka: the matrix multiply must follow the SYNTAX's convention --
+	// see OGRE_MUL_M3V in each wrapper (upstream's own Hlms piece splits the
+	// same product by syntax: Cubemap_piece_all.any toProbeLocalSpace).
+	probeToPosDir = OGRE_MUL_M3V( p_viewSpaceToProbeLocalSpace, probeToPosDir );
 
 	float fApproxDist = findIntersectionDistance( probeToPosDir, p_cameraPosLS, p_probeShapeHalfSize );
 

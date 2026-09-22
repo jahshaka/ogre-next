@@ -7,6 +7,9 @@
 #define float3x3 mat3
 
 #define mul( x, y ) ((x) * (y))
+// Ogre uploads a Matrix3 ROW BY ROW into the padded columns of a GLSL mat3, so
+// `M * v` computes the TRANSPOSE and `v * M` is the intended M*v.
+#define OGRE_MUL_M3V( m, v ) ((v) * (m))
 #define INLINE
 
 #ifdef VULKAN

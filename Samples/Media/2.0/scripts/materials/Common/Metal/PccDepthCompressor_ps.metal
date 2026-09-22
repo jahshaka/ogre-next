@@ -2,6 +2,8 @@
 using namespace metal;
 
 #define mul( x, y ) ((x) * (y))
+// Same convention as GLSL: Ogre's rows land in the matrix's columns.
+#define OGRE_MUL_M3V( m, v ) ((v) * (m))
 #define INLINE inline
 #define OGRE_Sample( tex, sampler, uv ) tex.sample( sampler, uv )
 

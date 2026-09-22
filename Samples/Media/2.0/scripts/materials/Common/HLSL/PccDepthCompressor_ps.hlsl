@@ -1,6 +1,10 @@
 
 #define INLINE
 
+// HLSL keeps mul( matrix, vector ) -- the convention upstream's Hlms pieces
+// already assume for this syntax (Cubemap_piece_all.any toProbeLocalSpace).
+#define OGRE_MUL_M3V( m, v ) mul( (m), (v) )
+
 #define OGRE_Sample( tex, sampler, uv ) tex.Sample( sampler, uv )
 
 struct PS_INPUT
