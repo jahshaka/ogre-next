@@ -83,6 +83,9 @@ THE SOFTWARE.
 #ifdef OGRE_VULKAN_WINDOW_ANDROID
 #    include "Windowing/Android/OgreVulkanAndroidWindow.h"
 #endif
+#ifdef OGRE_VULKAN_WINDOW_METAL
+#    include "Windowing/OSX/OgreVulkanMetalWindow.h"
+#endif
 
 #include "OgrePixelFormatGpuUtils.h"
 
@@ -220,6 +223,14 @@ namespace Ogre
         mCurrentAutoParamsBufferPtr( 0 ),
         mCurrentAutoParamsBufferSpaceLeft( 0 ),
         mDevice( 0 ),
+#ifdef JAH_GPU_TIMESTAMPS
+        mJahPoolIdx( 0u ),
+        mJahNextQuery( 0u ),
+        mJahOverflowed( 0u ),
+        mJahOverflowedLastFrame( 0u ),
+        mJahTimestampPeriodNs( 0.0f ),
+        mJahGpuProfiling( false ),
+#endif
         mCache( 0 ),
         mPso( 0 ),
         mComputePso( 0 ),
@@ -467,6 +478,10 @@ namespace Ogre
 #ifdef OGRE_VULKAN_WINDOW_ANDROID
         if( VulkanInstance::hasExtension( VulkanAndroidWindow::getRequiredExtensionName() ) )
             mAvailableVulkanSupports["android"]->setSupported();
+#endif
+#ifdef OGRE_VULKAN_WINDOW_METAL
+        if( VulkanInstance::hasExtension( VulkanMetalWindow::getRequiredExtensionName() ) )
+            mAvailableVulkanSupports["metal"]->setSupported();
 #endif
 
         if( mInstance->mVkInstanceIsExternal )
@@ -1225,15 +1240,36 @@ namespace Ogre
         }
         else
         {
+            // Dispatch on the SELECTED interface, not on what was compiled in: with
+            // two non-null backends built the old #ifdef stack ran them all, so the
+            // last one won and every earlier OGRE_NEW leaked.
+            const IdString interfaceName = mVulkanSupport->getInterfaceName();
+            (void)interfaceName;
 #ifdef OGRE_VULKAN_WINDOW_WIN32
-            win = OGRE_NEW VulkanWin32Window( name, width, height, fullScreen );
+            if( interfaceName == "win32" )
+                win = OGRE_NEW VulkanWin32Window( name, width, height, fullScreen );
 #endif
 #ifdef OGRE_VULKAN_WINDOW_XCB
-            win = OGRE_NEW VulkanXcbWindow( name, width, height, fullScreen );
+            if( interfaceName == "xcb" )
+                win = OGRE_NEW VulkanXcbWindow( name, width, height, fullScreen );
 #endif
 #ifdef OGRE_VULKAN_WINDOW_ANDROID
-            win = OGRE_NEW VulkanAndroidWindow( name, width, height, fullScreen );
+            if( interfaceName == "android" )
+                win = OGRE_NEW VulkanAndroidWindow( name, width, height, fullScreen );
 #endif
+#ifdef OGRE_VULKAN_WINDOW_METAL
+            if( interfaceName == "metal" )
+                win = OGRE_NEW VulkanMetalWindow( name, width, height, fullScreen );
+#endif
+            if( !win )
+            {
+                OGRE_EXCEPT( Exception::ERR_RENDERINGAPI_ERROR,
+                             "No Vulkan window backend for interface '" +
+                                 mVulkanSupport->getInterfaceNameStr() +
+                                 "' was compiled in. Check the OGRE_VULKAN_WINDOW_* build "
+                                 "settings.",
+                             "VulkanRenderSystem::_createRenderWindow" );
+            }
         }
         mWindows.insert( win );
 
@@ -1376,8 +1412,24 @@ namespace Ogre
     //-------------------------------------------------------------------------
     bool VulkanRenderSystem::validateDevice( bool forceDeviceElection )
     {
-        if( mDevice == nullptr || mDevice->mIsExternal || mInstance->mVkInstanceIsExternal )
+        if( mDevice == nullptr )
             return false;
+
+        // Jahshaka (ogre-patch 0068): an EXTERNAL device or instance used to return
+        // false here UNCONDITIONALLY - and Root::_fireFrameStarted treats a false from
+        // validateDevice as a VETO on the frame (OgreRoot.cpp), so an engine booted on
+        // somebody else's VkDevice (the OpenXR route: the runtime creates the device via
+        // xrCreateVulkanDeviceKHR) rendered NOTHING, every frame, silently.
+        //
+        // What is still true is the SECOND half of this function: device election and
+        // handleDeviceLost() recreate the instance, the device and every resource, which
+        // is meaningless for a device we do not own - the runtime created it, the runtime
+        // holds swapchain images on it, and it would have to be told. So the external
+        // route keeps NO recovery (a lost external device ends the session; the owner
+        // restarts) and this function answers the only question it can honestly answer:
+        // is the device still alive?
+        if( mDevice->mIsExternal || mInstance->mVkInstanceIsExternal )
+            return !mDevice->isDeviceLost();
 
         bool anotherIsElected = false;
         if( forceDeviceElection )
@@ -1404,8 +1456,36 @@ namespace Ogre
             }
         }
 
-        // recreate logical device with all resources
-        if( anotherIsElected || mDevice->isDeviceLost() )
+        // A LOST DEVICE IS NOT RECREATED (Jahshaka patch 0072). handleDeviceLost()
+        // ends in VulkanDevice::setPhysicalDevice -> destroy() -> vkDestroyDevice,
+        // and on NVIDIA 595.84 after an Xid 109 CTX SWITCH TIMEOUT that call does
+        // not return: it spins at 100 % of a core inside libnvidia-glcore for
+        // ever (lane XID-2 caught it with gdb on the owner's own reproduction --
+        // the frame below is Root::_fireFrameStarted, so the UI thread never comes
+        // back and the application is frozen, not crashed). A hang is worse than
+        // an end for a user.
+        //
+        // It would not be a recovery either: the host keeps Vulkan objects of its
+        // own on this VkDevice (Jahshaka's ray-query tier is one), and nothing
+        // tells them a new device exists. So this render system answers the only
+        // question it can answer honestly -- the device is gone -- and leaves the
+        // ending to the host, which is expected to say so and quit.
+        if( mDevice->isDeviceLost() )
+        {
+            if( !mReportedDeviceLost )
+            {
+                mReportedDeviceLost = true;
+                LogManager::getSingleton().logMessage(
+                    "Vulkan: THE DEVICE WAS LOST AND IS NOT RECREATED. Check the system log for "
+                    "an NVRM Xid / GPU reset around this time. The application must end.",
+                    LML_CRITICAL );
+            }
+            return false;
+        }
+
+        // recreate logical device with all resources (a device ELECTION on a live
+        // device, not a loss)
+        if( anotherIsElected )
         {
             handleDeviceLost();
 
@@ -2118,6 +2198,90 @@ namespace Ogre
                        pso.mNumThreadGroups[1], pso.mNumThreadGroups[2] );
     }
     //-------------------------------------------------------------------------
+    void VulkanRenderSystem::_dispatchIndirect( const HlmsComputePso &pso,
+                                                BufferPacked *indirectBuffer, size_t offsetBytes,
+                                                bool issueBarrier )
+    {
+        // JAHSHAKA PATCH 0032 — GPU-driven compute dispatch.
+        //
+        // The argument buffer has to be a real VkBuffer. Note that Ogre's own
+        // IndirectBufferPacked is NOT one on this pin: VulkanVaoManager forces
+        // mSupportsIndirectBuffers to false (OgreVulkanVaoManager.cpp:183-184) and emulates
+        // indirect DRAW buffers in system memory, so such a buffer carries no
+        // BufferInterface at all. UavBufferPacked is the buffer to use — it comes out of the
+        // ordinary VBO pools, which are already created with
+        // VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT (same file, :1122-1127), and it is the only
+        // kind a compute shader can write the counts into anyway.
+        VulkanBufferInterface *bufferInterface =
+            static_cast<VulkanBufferInterface *>( indirectBuffer->getBufferInterface() );
+        if( !bufferInterface )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                         "The indirect dispatch buffer has no GPU representation. "
+                         "IndirectBufferPacked is CPU-emulated on Vulkan at this pin; "
+                         "use a UavBufferPacked instead.",
+                         "VulkanRenderSystem::_dispatchIndirect" );
+        }
+
+        const VkDeviceSize bufferOffset =
+            indirectBuffer->_getFinalBufferStart() * indirectBuffer->getBytesPerElement() +
+            offsetBytes;
+
+        flushRootLayoutCS();
+
+        VkCommandBuffer cmdBuffer = mDevice->mGraphicsQueue.getCurrentCmdBuffer();
+
+        // THE BARRIER THE SOLVER CANNOT EXPRESS.
+        //
+        // executeResourceTransition's buffer branch only ever sets SHADER_READ/SHADER_WRITE,
+        // and ogreToVkStageFlags only knows the six shader stages (:3372-3389, :3510-3520), so
+        // VK_ACCESS_INDIRECT_COMMAND_READ_BIT at VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT is
+        // unreachable from the BarrierSolver — and BarrierSolver has no assumeTransition()
+        // overload for buffers to be told about one after the fact either.
+        //
+        // So this edge is issued here, by hand, and DELIBERATELY NOT registered with the
+        // solver: it is orthogonal to the state the solver tracks. The caller still resolves
+        // the buffer's ordinary SSBO transitions (write-by-job-A -> read-by-job-B) the normal
+        // way; this adds the second, indirect-read dependency on top and changes no tracked
+        // state, so the solver stays coherent by construction rather than by notification.
+        // Routing it through executeResourceTransition() would be wrong for a second reason:
+        // that function starts with endAllEncoders(), which would close the compute encoder
+        // the dispatch about to be recorded is riding in.
+        //
+        // Scope is the twelve bytes actually read, on the pool buffer's real offset — not a
+        // global VkMemoryBarrier — so it cannot accidentally serialise unrelated pool traffic.
+        //
+        // It covers BOTH producers, because neither path reaches the indirect stage on its
+        // own: a compute shader that wrote the counts (the point of the feature) and a
+        // TRANSFER that uploaded them (a CPU-seeded argument, and also every buffer's
+        // _firstUpload). Ogre's copy encoder does not end with INDIRECT_COMMAND_READ in its
+        // destination mask either, so the upload case is the same gap wearing a different
+        // hat — measured: with this barrier suppressed, Vulkan synchronization validation
+        // reports SYNC-HAZARD-READ-AFTER-WRITE at vkCmdDispatchIndirect naming exactly
+        // "must allow VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT at
+        // VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT", and with it the layer is silent.
+        if( issueBarrier )
+        {
+            VkBufferMemoryBarrier bufferBarrier;
+            makeVkStruct( bufferBarrier, VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER );
+            bufferBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            bufferBarrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            bufferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bufferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bufferBarrier.buffer = bufferInterface->getVboName();
+            bufferBarrier.offset = bufferOffset;
+            bufferBarrier.size = sizeof( uint32 ) * 3u;
+
+            const VkPipelineStageFlags srcStage =
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+            vkCmdPipelineBarrier( cmdBuffer, srcStage & mDevice->mSupportedStages,
+                                  VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT & mDevice->mSupportedStages, 0,
+                                  0u, 0, 1u, &bufferBarrier, 0u, 0 );
+        }
+
+        vkCmdDispatchIndirect( cmdBuffer, bufferInterface->getVboName(), bufferOffset );
+    }
+    //-------------------------------------------------------------------------
     void VulkanRenderSystem::_setVertexArrayObject( const VertexArrayObject *vao )
     {
         VkBuffer vulkanVertexBuffers[15];
@@ -2634,13 +2798,197 @@ namespace Ogre
 #endif
     }
     //-------------------------------------------------------------------------
-    void VulkanRenderSystem::initGPUProfiling() {}
+    // JAHSHAKA patch 0027: the GPU timestamp half of these hooks. Upstream
+    // leaves all four empty on Vulkan, so nothing in this render system can say
+    // what the GPU spent on a pass. See OgreVulkanRenderSystem.h for the design
+    // and for why every line of it is behind JAH_GPU_TIMESTAMPS.
     //-------------------------------------------------------------------------
-    void VulkanRenderSystem::deinitGPUProfiling() {}
+    void VulkanRenderSystem::initGPUProfiling()
+    {
+#ifdef JAH_GPU_TIMESTAMPS
+        if( mJahGpuProfiling || !mDevice )
+            return;
+
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties( mDevice->mPhysicalDevice, &props );
+        // timestampPeriod == 0 means the device cannot do timestamps at all;
+        // timestampValidBits == 0 on the queue family means this queue cannot.
+        if( props.limits.timestampPeriod <= 0.0f )
+            return;
+        uint32 numFamilies = 0u;
+        vkGetPhysicalDeviceQueueFamilyProperties( mDevice->mPhysicalDevice, &numFamilies, 0 );
+        FastArray<VkQueueFamilyProperties> families;
+        families.resize( numFamilies );
+        vkGetPhysicalDeviceQueueFamilyProperties( mDevice->mPhysicalDevice, &numFamilies,
+                                                  families.begin() );
+        const uint32 familyIdx = mDevice->mGraphicsQueue.getFamilyIdx();
+        if( familyIdx >= numFamilies || families[familyIdx].timestampValidBits == 0u )
+            return;
+
+        VkQueryPoolCreateInfo poolCi;
+        makeVkStruct( poolCi, VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO );
+        poolCi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        poolCi.queryCount = kJahMaxGpuQueries;
+        for( size_t i = 0u; i < 2u; ++i )
+        {
+            mJahQueryPool[i] = 0;
+            mJahPoolWritten[i] = false;
+            mJahSamples[i].clear();
+            if( vkCreateQueryPool( mDevice->mDevice, &poolCi, 0, &mJahQueryPool[i] ) != VK_SUCCESS )
+            {
+                for( size_t j = 0u; j < i; ++j )
+                    vkDestroyQueryPool( mDevice->mDevice, mJahQueryPool[j], 0 );
+                return;
+            }
+        }
+        mJahTimestampPeriodNs = props.limits.timestampPeriod;
+        mJahPoolIdx = 0u;
+        mJahNextQuery = 0u;
+        mJahOverflowed = 0u;
+        mJahOverflowedLastFrame = 0u;
+        mJahSampleStack.clear();
+        mJahResults.clear();
+        mJahGpuProfiling = true;
+#endif
+    }
     //-------------------------------------------------------------------------
-    void VulkanRenderSystem::beginGPUSampleProfile( const String &name, uint32 *hashCache ) {}
+    void VulkanRenderSystem::deinitGPUProfiling()
+    {
+#ifdef JAH_GPU_TIMESTAMPS
+        if( !mJahGpuProfiling )
+            return;
+        mJahGpuProfiling = false;
+        // The pools may still be referenced by command buffers in flight.
+        mDevice->stall();
+        for( size_t i = 0u; i < 2u; ++i )
+        {
+            if( mJahQueryPool[i] )
+                vkDestroyQueryPool( mDevice->mDevice, mJahQueryPool[i], 0 );
+            mJahQueryPool[i] = 0;
+            mJahPoolWritten[i] = false;
+            mJahSamples[i].clear();
+        }
+        mJahSampleStack.clear();
+        mJahResults.clear();
+#endif
+    }
     //-------------------------------------------------------------------------
-    void VulkanRenderSystem::endGPUSampleProfile( const String &name ) {}
+    void VulkanRenderSystem::beginGPUSampleProfile( const String &name, uint32 *hashCache )
+    {
+#ifdef JAH_GPU_TIMESTAMPS
+        if( !mJahGpuProfiling )
+            return;
+        // Two queries per sample (begin, end). OUT OF ROOM: push a SENTINEL and
+        // return. Returning without pushing was a real mis-attribution bug: the
+        // stack is how `end` finds its own sample, so a bare return made the
+        // matching `end` pop the ENCLOSING sample, write that sample's end
+        // timestamp at the wrong point in the frame and file it as complete —
+        // from the first overflow to the end of the frame, WRONG durations were
+        // reported as real numbers. A sentinel keeps the nesting honest and the
+        // sample is simply absent, which the caller reports as "no GPU time".
+        // Reachable: three shadowed point lamps inside one probe capture is
+        // 6 faces x 22 passes before the view and the planar arms are counted.
+        JahGpuSample sample;
+        sample.hash = hashCache ? *hashCache : 0u;
+        if( mJahNextQuery + 2u > kJahMaxGpuQueries )
+        {
+            sample.query = kJahOverflowQuery;
+            ++mJahOverflowed;
+            mJahSampleStack.push_back( sample );
+            return;
+        }
+        sample.query = mJahNextQuery;
+        mJahNextQuery += 2u;
+        // A timestamp write is legal inside a render pass, which is where most
+        // of these land.
+        vkCmdWriteTimestamp( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
+                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, mJahQueryPool[mJahPoolIdx],
+                             sample.query );
+        mJahPoolWritten[mJahPoolIdx] = true;
+        mJahSampleStack.push_back( sample );
+#else
+        (void)name;
+        (void)hashCache;
+#endif
+    }
+    //-------------------------------------------------------------------------
+    void VulkanRenderSystem::endGPUSampleProfile( const String &name )
+    {
+#ifdef JAH_GPU_TIMESTAMPS
+        if( !mJahGpuProfiling || mJahSampleStack.empty() )
+            return;
+        const JahGpuSample sample = mJahSampleStack.back();
+        mJahSampleStack.pop_back();
+        if( sample.query == kJahOverflowQuery )
+            return;   // the sentinel: no query was ever written for it
+        vkCmdWriteTimestamp( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mJahQueryPool[mJahPoolIdx],
+                             sample.query + 1u );
+        mJahSamples[mJahPoolIdx].push_back( sample );
+#else
+        (void)name;
+#endif
+    }
+#ifdef JAH_GPU_TIMESTAMPS
+    //-------------------------------------------------------------------------
+    void VulkanRenderSystem::jahGpuFrameBegin()
+    {
+        if( !mJahGpuProfiling )
+            return;
+        // Any sample left open by a frame that threw would corrupt the next
+        // one's nesting.
+        mJahSampleStack.clear();
+        mJahPoolIdx = ( mJahPoolIdx + 1u ) & 1u;
+        mJahResults.clear();
+
+        const uint32 written = (uint32)mJahSamples[mJahPoolIdx].size();
+        if( mJahPoolWritten[mJahPoolIdx] && written > 0u )
+        {
+            // NON-BLOCKING. WITH_AVAILABILITY gives a third word per query that
+            // is zero while the GPU has not written it; a sample whose pair is
+            // not both available is skipped, never waited for and never
+            // reported as zero.
+            uint32 highest = 0u;
+            for( size_t i = 0u; i < mJahSamples[mJahPoolIdx].size(); ++i )
+                highest = std::max( highest, mJahSamples[mJahPoolIdx][i].query + 2u );
+            // Sized to what was actually written, not to the pool: a 20-pass
+            // frame read back 64 KB every frame before this.
+            mJahRawResults.resize( (size_t)highest * 2u );
+            uint64 *raw = mJahRawResults.begin();
+            const VkResult res = vkGetQueryPoolResults(
+                mDevice->mDevice, mJahQueryPool[mJahPoolIdx], 0u, highest,
+                (size_t)highest * 2u * sizeof( uint64 ), raw, 2u * sizeof( uint64 ),
+                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT );
+            if( res == VK_SUCCESS || res == VK_NOT_READY )
+            {
+                for( size_t i = 0u; i < mJahSamples[mJahPoolIdx].size(); ++i )
+                {
+                    const JahGpuSample &sample = mJahSamples[mJahPoolIdx][i];
+                    const uint64 *b = raw + (size_t)sample.query * 2u;
+                    const uint64 *e = raw + (size_t)( sample.query + 1u ) * 2u;
+                    if( b[1] == 0u || e[1] == 0u || e[0] < b[0] )
+                        continue;   // not back yet, or a wrapped counter
+                    const float ms = float( double( e[0] - b[0] ) *
+                                            double( mJahTimestampPeriodNs ) * 1e-6 );
+                    mJahResults.push_back( std::pair<uint32, float>( sample.hash, ms ) );
+                }
+            }
+        }
+        mJahSamples[mJahPoolIdx].clear();
+
+        // THE RESET MUST BE OUTSIDE EVERY ENCODER (a render pass cannot contain
+        // vkCmdResetQueryPool). This is the one call the host makes at the top
+        // of the frame, before any workspace updates, so ending the encoders
+        // here costs nothing: there is nothing open yet in a normal frame.
+        mDevice->mGraphicsQueue.endAllEncoders();
+        vkCmdResetQueryPool( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
+                             mJahQueryPool[mJahPoolIdx], 0u, kJahMaxGpuQueries );
+        mJahPoolWritten[mJahPoolIdx] = false;
+        mJahNextQuery = 0u;
+        mJahOverflowedLastFrame = mJahOverflowed;
+        mJahOverflowed = 0u;
+    }
+#endif
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::endGpuDebuggerFrameCapture( Window *window, const bool bDiscard )
     {
@@ -2681,6 +3029,45 @@ namespace Ogre
             *(VulkanQueue **)pData = &mDevice->mGraphicsQueue;
             return;
         }
+#ifdef JAH_GPU_TIMESTAMPS
+        // JAHSHAKA patch 0027 — the readback channel for the GPU timestamps
+        // above. getCustomAttribute is used rather than new virtuals so the
+        // patch adds NO OgreMain ABI surface, and the names simply do not exist
+        // in a build without the define: the host asks for "JahGpuTimestamps",
+        // catches the exception, and reports gpuCompiled = false.
+        else if( name == "JahGpuTimestamps" )
+        {
+            // "was this render system built with timestamp support, and did the
+            // device accept it" — the runtime half of the answer is whether a
+            // pool exists, i.e. whether initGPUProfiling succeeded.
+            *(bool *)pData = mJahGpuProfiling;
+            return;
+        }
+        else if( name == "JahGpuFrameBegin" )
+        {
+            jahGpuFrameBegin();
+            return;
+        }
+        else if( name == "JahGpuSamplesTruncated" )
+        {
+            // How many samples the LAST completed frame could not record
+            // because the query pool was full. Non-zero means a capture's GPU
+            // numbers are incomplete, and the host says so rather than letting
+            // analysis read a partial frame as a whole one.
+            *(uint32 *)pData = mJahOverflowedLastFrame;
+            return;
+        }
+        else if( name == "JahGpuSampleResults" )
+        {
+            // (sample id, milliseconds) for the frame recorded two frames ago.
+            // Appended, never cleared, so one caller can drain several.
+            std::vector<std::pair<uint32, float> > *out =
+                (std::vector<std::pair<uint32, float> > *)pData;
+            out->insert( out->end(), mJahResults.begin(), mJahResults.end() );
+            mJahResults.clear();
+            return;
+        }
+#endif
 
         OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS, "Attribute not found: " + name,
                      "VulkanRenderSystem::getCustomAttribute" );
@@ -3811,7 +4198,12 @@ namespace Ogre
         if( mGlobalTable.bakedDescriptorSets[BakedDescriptorSets::Samplers] ==
             &vulkanSet->mWriteDescSet )
         {
-            mGlobalTable.bakedDescriptorSets[BakedDescriptorSets::Samplers] = &vulkanSet->mWriteDescSet;
+            // JAHSHAKA PATCH 0041. Was `= &vulkanSet->mWriteDescSet`, i.e. the address of the
+            // object being destroyed on the very next line -- a dangling pointer that the
+            // comparison in _setSamplers then matches against a recycled allocation, skipping the
+            // rebind. The compute twin eight lines below has always cleared it correctly; this is
+            // the same bug class as the descriptor-cache ABA this patch's other hunks fix.
+            mGlobalTable.bakedDescriptorSets[BakedDescriptorSets::Samplers] = 0;
             mGlobalTable.dirtyBakedSamplers = true;
             mTableDirty = true;
         }

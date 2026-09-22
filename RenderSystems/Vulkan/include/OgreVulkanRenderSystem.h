@@ -106,6 +106,9 @@ namespace Ogre
 
         VulkanDevice *mDevice;
 
+        /// Jahshaka patch 0072: the "device lost, not recreated" line is said once.
+        bool mReportedDeviceLost = false;
+
         VulkanCache *mCache;
 
         HlmsPso const *mPso;
@@ -148,6 +151,61 @@ namespace Ogre
         void createVkResources();
         void destroyVkResources0();
         void destroyVkResources1();
+
+#ifdef JAH_GPU_TIMESTAMPS
+        // ---- JAHSHAKA patch 0027: GPU timestamp sampling ------------------
+        //
+        // Upstream leaves initGPUProfiling / beginGPUSampleProfile /
+        // endGPUSampleProfile as empty stubs on Vulkan, so there is no GPU time
+        // anywhere in this render system. Jahshaka's render-loop monitor needs
+        // it ("we want GPU more than CPU, but we need both" — owner, 2026-09-12)
+        // and fills them with plain timestamp queries.
+        //
+        // ENTIRELY BEHIND THIS DEFINE. Without JAH_GPU_TIMESTAMPS the class has
+        // no extra members and the four hooks compile to upstream's empty
+        // bodies, byte for byte — which is what a production or packaging build
+        // gets (owner decision D3, lock 1 of 2).
+        //
+        // TWO POOLS, READ TWO FRAMES LATE. A timestamp write is legal inside a
+        // render pass; a query-pool RESET is not. So the pool for frame N is
+        // reset at the START of frame N, outside every encoder, at the one
+        // moment the host calls in (the "JahGpuFrameBegin" custom attribute) —
+        // and the pool being recycled then is the one written two frames ago,
+        // whose results are read back non-blocking with the availability bit
+        // just before it is reset. Nothing ever stalls the CPU on the GPU.
+        static const uint32 kJahMaxGpuQueries = 4096u;
+        /// A sample the pool had no room for. It still rides the stack — that
+        /// is how `endGPUSampleProfile` finds its own sample — but no query is
+        /// written for it and it is never reported. Without the sentinel the
+        /// matching `end` popped the ENCLOSING sample and filed a wrong
+        /// duration as a real number.
+        static const uint32 kJahOverflowQuery = 0xFFFFFFFFu;
+        struct JahGpuSample
+        {
+            uint32 hash;   ///< the caller's id for this sample (hashCache)
+            uint32 query;  ///< the begin query index; end is query + 1
+        };
+        VkQueryPool               mJahQueryPool[2] = { 0, 0 };
+        bool                      mJahPoolWritten[2] = { false, false };
+        std::vector<JahGpuSample> mJahSamples[2];
+        std::vector<JahGpuSample> mJahSampleStack;   ///< samples nest
+        std::vector<std::pair<uint32, float> > mJahResults;
+        /// Readback scratch, sized to what a frame actually wrote rather than
+        /// to the whole pool (which was 64 KB every frame).
+        FastArray<uint64>         mJahRawResults;
+        uint32                    mJahPoolIdx;
+        uint32                    mJahNextQuery;
+        /// Samples dropped for want of query room, this frame and last — the
+        /// honest "this capture's GPU numbers are incomplete" signal, read
+        /// through getCustomAttribute( "JahGpuSamplesTruncated" ).
+        uint32                    mJahOverflowed;
+        uint32                    mJahOverflowedLastFrame;
+        float                     mJahTimestampPeriodNs;
+        bool                      mJahGpuProfiling;
+        /// Rotates the pools, reads back the one being recycled and resets it.
+        /// Called through getCustomAttribute( "JahGpuFrameBegin" ).
+        void jahGpuFrameBegin();
+#endif
 
     public:
         VulkanRenderSystem( const NameValuePairList *options );
@@ -268,6 +326,11 @@ namespace Ogre
         VertexElementType getColourVertexElementType() const override;
 
         void _dispatch( const HlmsComputePso &pso ) override;
+        /// Jahshaka patch 0032 — GPU-driven dispatch, plus the compute-write ->
+        /// indirect-read barrier BarrierSolver cannot express.
+        void _dispatchIndirect( const HlmsComputePso &pso, BufferPacked *indirectBuffer,
+                                size_t offsetBytes, bool issueBarrier ) override;
+        bool supportsIndirectDispatch() const override { return true; }
 
         void _setVertexArrayObject( const VertexArrayObject *vao ) override;
 
