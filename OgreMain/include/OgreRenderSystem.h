@@ -1182,6 +1182,39 @@ namespace Ogre
 
         virtual void _dispatch( const HlmsComputePso &pso ) = 0;
 
+        /** GPU-DRIVEN COMPUTE DISPATCH (Jahshaka patch 0032).
+
+            Same as _dispatch, except the three thread-group counts are NOT known to
+            the CPU: they are read by the GPU out of `indirectBuffer` at `offsetBytes`,
+            as three consecutive uint32 (x, y, z) — the layout of
+            VkDispatchIndirectCommand / D3D12's D3D12_DISPATCH_ARGUMENTS.
+
+            That is what lets a compute job SIZE the job after it: pass A appends N
+            items to a list and writes ceil(N/threadsPerGroup) into the buffer, pass B
+            runs exactly that many groups. Without it every later pass must be
+            dispatched at its worst case.
+
+            `indirectBuffer` must be a buffer the GPU can read as an indirect argument.
+            On Vulkan that means any BufferPacked living in the ordinary VBO pools —
+            UavBufferPacked in practice, because the writer has to bind it as an SSBO
+            (note IndirectBufferPacked is a CPU-side emulation on this pin, see
+            VulkanVaoManager::mSupportsIndirectBuffers).
+
+            Implementations are responsible for the compute-write -> indirect-read
+            execution/memory dependency, which BarrierSolver cannot express. Pass
+            issueBarrier = false only when the counts were made visible some other way
+            (e.g. written in an earlier frame, or by a CPU upload).
+
+        @remarks
+            Not implemented by every render system; the base throws. Only call it
+            after checking RenderSystem::supportsIndirectDispatch().
+        */
+        virtual void _dispatchIndirect( const HlmsComputePso &pso, BufferPacked *indirectBuffer,
+                                        size_t offsetBytes, bool issueBarrier );
+
+        /// True when _dispatchIndirect is implemented by this render system.
+        virtual bool supportsIndirectDispatch() const { return false; }
+
         /** Part of the low level rendering interface. Tells the RS which VAO will be bound now.
             (i.e. Vertex Formats, buffers being bound, etc.)
             You don't need to rebind if the VAO's mRenderQueueId is the same as previous call.

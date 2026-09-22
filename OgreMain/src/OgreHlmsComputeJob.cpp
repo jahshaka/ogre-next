@@ -70,7 +70,10 @@ namespace Ogre
         mInformHlmsOfTextureData( false ),
         mMaxTexUnitReached( 0 ),
         mMaxUavUnitReached( 0 ),
-        mPsoCacheHash( std::numeric_limits<size_t>::max() )
+        mPsoCacheHash( std::numeric_limits<size_t>::max() ),
+        mIndirectDispatchBuffer( 0 ),
+        mIndirectDispatchOffset( 0u ),
+        mIndirectDispatchBarrier( true )
     {
         memset( mThreadsPerGroup, 0, sizeof( mThreadsPerGroup ) );
         memset( mNumThreadGroups, 0, sizeof( mNumThreadGroups ) );
@@ -685,6 +688,33 @@ namespace Ogre
         }
     }
     //-----------------------------------------------------------------------------------
+    void HlmsComputeJob::setIndirectDispatchBuffer( BufferPacked *buffer, size_t offsetBytes,
+                                                    bool issueBarrier )
+    {
+        // Jahshaka patch 0032. See the header. Vulkan's vkCmdDispatchIndirect requires the
+        // offset to be 4-byte aligned and three uint32s to fit.
+        //
+        // OGRE_EXCEPT and not OGRE_ASSERT_LOW: this engine ships RelWithDebInfo, where
+        // OGRE_ASSERT_LOW compiles to (void)0 — the named failure would never fire in any
+        // build anyone runs, and the alternative is a validation-layer message (or silence)
+        // from inside somebody's render loop.
+        if( buffer && ( offsetBytes & 0x03u ) != 0u )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                         "Indirect dispatch offset must be a multiple of 4 bytes.",
+                         "HlmsComputeJob::setIndirectDispatchBuffer" );
+        }
+        if( buffer && offsetBytes + sizeof( uint32 ) * 3u > buffer->getTotalSizeBytes() )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                         "Indirect dispatch offset + 12 bytes is past the end of the buffer.",
+                         "HlmsComputeJob::setIndirectDispatchBuffer" );
+        }
+        mIndirectDispatchBuffer = buffer;
+        mIndirectDispatchOffset = offsetBytes;
+        mIndirectDispatchBarrier = issueBarrier;
+    }
+    //-----------------------------------------------------------------------------------
     void HlmsComputeJob::setNumThreadGroupsBasedOn( ThreadGroupsBasedOn source, uint8 texSlot,
                                                     uint8 divisorX, uint8 divisorY, uint8 divisorZ )
     {
@@ -1030,8 +1060,19 @@ namespace Ogre
     {
         OGRE_ASSERT_LOW( slotIdx < mTexSlots.size() );
 
+        // JAHSHAKA PATCH 0041. Stamp the buffer's per-instance identity HERE, where the buffer is
+        // known to be alive, so neither the comparison below nor the HlmsManager cache lookup that
+        // follows has to dereference a pointer that may already be dangling. Without it a buffer
+        // created at the address of a destroyed one compares EQUAL to the dead one's slot, the
+        // comparison says "unchanged" and/or getDescriptorSetTexture2() returns the dead buffer's
+        // cached set -- which still holds the dead buffer's API view, at its old suballocation
+        // offset and in its old pixel format.
+        DescriptorSetTexture2::BufferSlot stampedSlot = newSlot;
+        stampedSlot.creationSerial = newSlot.buffer ? newSlot.buffer->getCreationSerial() : 0u;
+
         DescriptorSetTexture2::Slot &slot = mTexSlots[slotIdx];
-        if( slot.slotType != DescriptorSetTexture2::SlotTypeBuffer || slot.getBuffer() != newSlot )
+        if( slot.slotType != DescriptorSetTexture2::SlotTypeBuffer ||
+            slot.getBuffer() != stampedSlot )
         {
             if( mInformHlmsOfTextureData && slot.slotType == DescriptorSetTexture2::SlotTypeTexture &&
                 slot.getTexture().texture )
@@ -1041,7 +1082,7 @@ namespace Ogre
 
             slot.slotType = DescriptorSetTexture2::SlotTypeBuffer;
             DescriptorSetTexture2::BufferSlot &bufferSlot = slot.getBuffer();
-            bufferSlot = newSlot;
+            bufferSlot = stampedSlot;  // JAHSHAKA PATCH 0041
             destroyDescriptorTextures();  // Descriptor is dirty
 
             // Remove sampler
@@ -1143,8 +1184,12 @@ namespace Ogre
     {
         assert( slotIdx < mUavSlots.size() );
 
+        // JAHSHAKA PATCH 0041 -- see setTexBuffer above.
+        DescriptorSetUav::BufferSlot stampedSlot = newSlot;
+        stampedSlot.creationSerial = newSlot.buffer ? newSlot.buffer->getCreationSerial() : 0u;
+
         DescriptorSetUav::Slot &slot = mUavSlots[slotIdx];
-        if( slot.slotType != DescriptorSetUav::SlotTypeBuffer || slot.getBuffer() != newSlot )
+        if( slot.slotType != DescriptorSetUav::SlotTypeBuffer || slot.getBuffer() != stampedSlot )
         {
             if( mInformHlmsOfTextureData && slot.slotType == DescriptorSetUav::SlotTypeTexture &&
                 slot.getTexture().texture )
@@ -1155,7 +1200,7 @@ namespace Ogre
             slot.slotType = DescriptorSetUav::SlotTypeBuffer;
             DescriptorSetUav::BufferSlot &bufferSlot = slot.getBuffer();
 
-            bufferSlot = newSlot;
+            bufferSlot = stampedSlot;  // JAHSHAKA PATCH 0041
             destroyDescriptorUavs();  // Descriptor is dirty
         }
     }
@@ -1282,13 +1327,26 @@ namespace Ogre
                 else
                 {
                     const DescriptorSetTexture2::BufferSlot &bufferSlot = itor->getBuffer();
-                    BufferPacked *origBuffer = bufferSlot.buffer->getOriginalBufferType();
-                    if( origBuffer != bufferSlot.buffer )
+                    BufferPacked *origBuffer =
+                        bufferSlot.buffer ? bufferSlot.buffer->getOriginalBufferType() : 0;
+                    if( origBuffer && origBuffer != bufferSlot.buffer )
                     {
                         OGRE_ASSERT_HIGH( dynamic_cast<UavBufferPacked *>( origBuffer ) );
                         UavBufferPacked *uavBuffer = static_cast<UavBufferPacked *>( origBuffer );
                         solver.resolveTransition( resourceTransitions, uavBuffer, ResourceAccess::Read,
                                                   1u << GPT_COMPUTE_PROGRAM );
+                    }
+                    else if( origBuffer )
+                    {
+                        // JAHSHAKA PATCH 0041. A PLAIN TexBufferPacked read by a compute job got no
+                        // transition resolved at all: the branch above only fires for a read-only
+                        // VIEW of a UAV buffer. The solver then has no record of the buffer, so a
+                        // later write to it cannot be ordered against this read. Registering it
+                        // emits nothing on its own (a first-seen buffer produces no barrier,
+                        // BarrierSolver::resolveTransition) -- it only makes the solver able to see
+                        // the hazard if one ever appears.
+                        solver.resolveTransition( resourceTransitions, origBuffer,
+                                                  ResourceAccess::Read, 1u << GPT_COMPUTE_PROGRAM );
                     }
                 }
                 ++itor;

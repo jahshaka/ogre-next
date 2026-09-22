@@ -31,6 +31,8 @@ THE SOFTWARE.
 
 #include "OgreResourceTransition.h"
 
+#include <atomic>
+
 namespace Ogre
 {
     enum BufferType
@@ -200,6 +202,22 @@ namespace Ogre
         uint32 mBytesPerElement;
         uint32 mNumElementsPadding;
 
+        /** JAHSHAKA PATCH 0041 — the per-INSTANCE identity a raw pointer cannot give.
+        @remarks
+            Descriptor-set slots (DescriptorSetTexture2::BufferSlot, DescriptorSetUav::BufferSlot)
+            identify a buffer by its ADDRESS, and HlmsManager caches whole descriptor sets keyed
+            on those slots. Nothing tells that cache when a buffer dies, so an allocator that hands
+            a freshly created buffer the address a destroyed one had makes the cache return the DEAD
+            buffer's descriptor set — with the dead buffer's API view, its old suballocation offset
+            and its old pixel format. This counter is assigned once per constructed BufferPacked and
+            never reused, so a slot that carries it can tell two buffers apart even when they share
+            an address.
+        */
+        uint32 mCreationSerial;
+
+        /// JAHSHAKA PATCH 0041. Process-wide, monotonic, never reused.
+        static std::atomic<uint32> msNextCreationSerial;
+
         BufferType  mBufferType;
         VaoManager *mVaoManager;
 
@@ -364,6 +382,10 @@ namespace Ogre
         size_t getNumElements() const { return mNumElements; }
         uint32 getBytesPerElement() const { return mBytesPerElement; }
         size_t getTotalSizeBytes() const { return mNumElements * mBytesPerElement; }
+
+        /// JAHSHAKA PATCH 0041. Unique for the lifetime of the process; never 0 for a real
+        /// buffer, so 0 is usable as "no buffer" in a descriptor slot.
+        uint32 getCreationSerial() const { return mCreationSerial; }
 
         size_t _getInternalBufferStart() const { return mInternalBufferStart; }
         size_t _getFinalBufferStart() const { return mFinalBufferStart; }

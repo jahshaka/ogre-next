@@ -355,8 +355,15 @@ namespace Ogre
         pso.mNumThreadGroups[1] = (uint32)( getProperty( kNoTid, ComputeProperty::NumThreadGroupsY ) );
         pso.mNumThreadGroups[2] = (uint32)( getProperty( kNoTid, ComputeProperty::NumThreadGroupsZ ) );
 
+        // Jahshaka patch 0032: a job dispatched INDIRECTLY has no CPU-side group count by
+        // definition — the whole point is that only the GPU knows it — so requiring one here
+        // would force every such job to carry a meaningless dummy. The threads per group are
+        // still required (Metal needs them on the C++ side, and both back ends bake them into
+        // the shader), so only the second half of the test is relaxed.
+        const bool bIndirect = job->mIndirectDispatchBuffer != 0;
         if( pso.mThreadsPerGroup[0] * pso.mThreadsPerGroup[1] * pso.mThreadsPerGroup[2] == 0u ||
-            pso.mNumThreadGroups[0] * pso.mNumThreadGroups[1] * pso.mNumThreadGroups[2] == 0u )
+            ( !bIndirect &&
+              pso.mNumThreadGroups[0] * pso.mNumThreadGroups[1] * pso.mNumThreadGroups[2] == 0u ) )
         {
             OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
                          job->getNameStr() +
@@ -561,7 +568,18 @@ namespace Ogre
         csParams->_updateAutoParams( mAutoParamDataSource, GPV_ALL );
         mRenderSystem->bindGpuProgramParameters( GPT_COMPUTE_PROGRAM, csParams, GPV_ALL );
 
-        mRenderSystem->_dispatch( psoCache.pso );
+        // Jahshaka patch 0032: a job that has been given an indirect buffer is sized by
+        // the GPU, not by mNumThreadGroups.
+        if( job->mIndirectDispatchBuffer )
+        {
+            mRenderSystem->_dispatchIndirect( psoCache.pso, job->mIndirectDispatchBuffer,
+                                              job->mIndirectDispatchOffset,
+                                              job->mIndirectDispatchBarrier );
+        }
+        else
+        {
+            mRenderSystem->_dispatch( psoCache.pso );
+        }
     }
     //----------------------------------------------------------------------------------
     HlmsDatablock *HlmsCompute::createDatablockImpl( IdString datablockName,

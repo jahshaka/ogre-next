@@ -151,10 +151,30 @@ namespace Ogre
             /// binds from offset until the end of the buffer.
             size_t sizeBytes;
 
+            /** JAHSHAKA PATCH 0041 — `buffer` alone is not an identity.
+            @remarks
+                HlmsManager caches whole descriptor sets keyed on these slots and nothing
+                invalidates an entry when a buffer is destroyed, so a new buffer handed the
+                ADDRESS of a dead one makes the cache return the dead one's set (its API view,
+                its old suballocation offset, its old pixel format). Carrying the buffer's
+                per-instance creation serial makes two buffers that share an address compare
+                DIFFERENT, so the cache misses and a correct set is built.
+
+                It is a plain field rather than a call to buffer->getCreationSerial() inside the
+                comparison ON PURPOSE: the comparison runs against slots that may already name a
+                destroyed buffer, and dereferencing one would be the very use-after-free this is
+                here to prevent. Whoever fills the slot stamps it while the buffer is alive
+                (HlmsComputeJob::setTexBuffer / _setUavBuffer do). 0 = unstamped, which is what
+                makeEmpty() leaves and what call sites that assign `buffer` directly get: those
+                keep the pre-patch behaviour exactly, they are simply not protected.
+            */
+            uint32 creationSerial;
+
             bool operator!=( const BufferSlot &other ) const
             {
                 return this->buffer != other.buffer || this->offset != other.offset ||
-                       this->sizeBytes != other.sizeBytes;
+                       this->sizeBytes != other.sizeBytes ||
+                       this->creationSerial != other.creationSerial;
             }
 
             bool operator<( const BufferSlot &other ) const
@@ -165,6 +185,8 @@ namespace Ogre
                     return this->offset < other.offset;
                 if( this->sizeBytes != other.sizeBytes )
                     return this->sizeBytes < other.sizeBytes;
+                if( this->creationSerial != other.creationSerial )
+                    return this->creationSerial < other.creationSerial;
 
                 return false;
             }

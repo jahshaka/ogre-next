@@ -121,6 +121,11 @@ namespace Ogre
         PiecesMap mPieces;
         size_t    mPsoCacheHash;
 
+        /// See setIndirectDispatchBuffer (Jahshaka patch 0032). Null = CPU-sized dispatch.
+        BufferPacked *mIndirectDispatchBuffer;
+        size_t        mIndirectDispatchOffset;
+        bool          mIndirectDispatchBarrier;
+
         map<IdString, ShaderParams>::type mShaderParams;
 
         void discoverGeneralTextures();
@@ -239,6 +244,38 @@ namespace Ogre
         /// INTERNAL USE. Calculates the number of thread groups as specified
         /// in setNumThreadGroupsBasedOn, overriding setNumThreadGroups.
         void _calculateNumThreadGroupsBasedOnSetting();
+
+        /** GPU-DRIVEN DISPATCH (Jahshaka patch 0032).
+
+            While a buffer is set, this job dispatches INDIRECTLY: the three thread-group
+            counts are read by the GPU from `buffer` at `offsetBytes` as three uint32
+            (x, y, z), and setNumThreadGroups / setNumThreadGroupsBasedOn are ignored.
+
+            That is what lets a compute pass be sized by the pass before it — a compaction
+            writes how many groups the next pass needs and the next pass runs exactly that
+            many, instead of being dispatched at its worst case from the CPU.
+
+            The buffer must be GPU-resident and readable as an indirect argument. On Vulkan
+            that means an ordinary pooled buffer — in practice a UavBufferPacked, since the
+            producing job binds it as an SSBO to write the counts (IndirectBufferPacked is
+            a CPU-side emulation on this pin). `offsetBytes` must be a multiple of 4.
+
+            The render system issues the compute-write -> indirect-read barrier itself; the
+            BarrierSolver has no vocabulary for VK_ACCESS_INDIRECT_COMMAND_READ_BIT.
+
+        @param buffer
+            Null to go back to CPU-sized dispatch (the default).
+        @param issueBarrier
+            Leave true unless the counts are already visible to the indirect stage (they were
+            written in an earlier frame, or uploaded from the CPU). False exists so the
+            dependency can be measured, and so a caller who already paid for the sync does not
+            pay twice.
+        */
+        void setIndirectDispatchBuffer( BufferPacked *buffer, size_t offsetBytes = 0u,
+                                        bool issueBarrier = true );
+
+        BufferPacked *getIndirectDispatchBuffer() const { return mIndirectDispatchBuffer; }
+        size_t        getIndirectDispatchOffset() const { return mIndirectDispatchOffset; }
 
         /** Sets an arbitrary property to pass to the shader.
         @remarks

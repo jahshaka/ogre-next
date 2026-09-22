@@ -38,6 +38,9 @@ THE SOFTWARE.
 
 namespace Ogre
 {
+    // JAHSHAKA PATCH 0041. Starts at 1 so that 0 means "no buffer" in a descriptor slot.
+    std::atomic<uint32> BufferPacked::msNextCreationSerial( 1u );
+
     BufferPacked::BufferPacked( size_t internalBufferStartBytes, size_t numElements,
                                 uint32 bytesPerElement, uint32 numElementsPadding, BufferType bufferType,
                                 void *initialData, bool keepAsShadow, VaoManager *vaoManager,
@@ -47,6 +50,9 @@ namespace Ogre
         mNumElements( numElements ),
         mBytesPerElement( bytesPerElement ),
         mNumElementsPadding( numElementsPadding ),
+        // JAHSHAKA PATCH 0041: a monotonic per-instance identity. Relaxed ordering is enough --
+        // all we need is uniqueness, never a happens-before relationship.
+        mCreationSerial( msNextCreationSerial.fetch_add( 1u, std::memory_order_relaxed ) ),
         mBufferType( bufferType ),
         mVaoManager( vaoManager ),
         mMappingState( MS_UNMAPPED ),

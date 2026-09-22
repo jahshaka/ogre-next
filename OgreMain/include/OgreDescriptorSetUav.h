@@ -74,10 +74,17 @@ namespace Ogre
             /// resolve memory barrier dependencies.
             ResourceAccess::ResourceAccess access;
 
+            /// JAHSHAKA PATCH 0041 — the buffer's per-instance creation serial, so a new buffer
+            /// that reuses a dead one's ADDRESS is not mistaken for it by the descriptor-set
+            /// cache. See DescriptorSetTexture2::BufferSlot::creationSerial for the whole story.
+            /// 0 = unstamped (makeEmpty, and every call site that assigns `buffer` directly).
+            uint32 creationSerial;
+
             bool operator!=( const BufferSlot &other ) const
             {
                 return this->buffer != other.buffer || this->offset != other.offset ||
-                       this->sizeBytes != other.sizeBytes || this->access != other.access;
+                       this->sizeBytes != other.sizeBytes || this->access != other.access ||
+                       this->creationSerial != other.creationSerial;
             }
 
             bool operator<( const BufferSlot &other ) const
@@ -90,6 +97,8 @@ namespace Ogre
                     return this->sizeBytes < other.sizeBytes;
                 if( this->access != other.access )
                     return this->access < other.access;
+                if( this->creationSerial != other.creationSerial )
+                    return this->creationSerial < other.creationSerial;
 
                 return false;
             }

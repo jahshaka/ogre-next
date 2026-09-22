@@ -1099,6 +1099,17 @@ namespace Ogre
         }
     }
     //-----------------------------------------------------------------------
+    void RenderSystem::_dispatchIndirect( const HlmsComputePso &, BufferPacked *, size_t, bool )
+    {
+        // Jahshaka patch 0032. Only Vulkan implements GPU-driven dispatch at this pin;
+        // every other render system keeps the CPU-sized _dispatch and says so loudly
+        // rather than silently running the wrong number of groups.
+        OGRE_EXCEPT( Exception::ERR_NOT_IMPLEMENTED,
+                     "Indirect compute dispatch is not implemented by this RenderSystem. "
+                     "Check RenderSystem::supportsIndirectDispatch() first.",
+                     "RenderSystem::_dispatchIndirect" );
+    }
+    //-----------------------------------------------------------------------
     void RenderSystem::_render( const v1::RenderOperation &op )
     {
         // Update stats
