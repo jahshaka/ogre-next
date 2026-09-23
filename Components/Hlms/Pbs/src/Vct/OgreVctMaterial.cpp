@@ -57,7 +57,11 @@ namespace Ogre
         float emissive[4];
         uint32 diffuseTexIdx;
         uint32 emissiveTexIdx;
-        uint32 padding01[2];
+        // Jahshaka (PHOTON-WRITER-1): the datablock's perceptual roughness, so the
+        // voxel's stored radiance can be what its surface renders (the diffuse
+        // lobe's directional albedo depends on it; LightInjection reads it).
+        float roughness;
+        uint32 padding0;
     };
     //-------------------------------------------------------------------------
     VctMaterial::VctMaterial( IdType id, VaoManager *vaoManager, CompositorManager2 *compositorManager,
@@ -143,6 +147,15 @@ namespace Ogre
                 shaderMaterial.bgDiffuse[i] = bgDiffuse[i];
             shaderMaterial.diffuse[3] = transparency;
             shaderMaterial.emissive[3] = 1.0f;
+            // The scalar only: a roughness MAP is not voxelised (the voxel is one
+            // surface-averaged texel either way).
+            shaderMaterial.roughness = pbsDatablock->getRoughness();
+        }
+        else
+        {
+            // Not a PBS datablock (no diffuse lobe of HlmsPbs's to match): the
+            // matte end.
+            shaderMaterial.roughness = 1.0f;
         }
 
         TextureGpu *diffuseTex = datablock->getDiffuseTexture();

@@ -502,7 +502,9 @@ namespace Ogre
         // and thirteen rather than sixteen because only thirteen carry anything.
         mMergeAccumTex->scheduleTransitionTo( GpuResidency::OnStorage );
         mMergeAccumTex->setPixelFormat( PFG_R32_UINT );
-        mMergeAccumTex->setResolution( mWidth, mHeight, mDepth * 13u );
+        // Jahshaka (PHOTON-WRITER-1): FOURTEEN scalar sums per voxel - the thirteen of
+        // patch 0065 and the material roughness (VoxelMerge_piece_cs.any, voxelMergeUvw).
+        mMergeAccumTex->setResolution( mWidth, mHeight, mDepth * 14u );
         mMergeAccumTex->setNumMipmaps( 1u );
         mMergeAccumTex->scheduleTransitionTo( GpuResidency::Resident );
 

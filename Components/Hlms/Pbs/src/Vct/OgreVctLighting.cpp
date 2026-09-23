@@ -587,6 +587,10 @@ namespace Ogre
         // the rest of these bindings (the job is shared by name).
         if( mEnvCube )
             ++numNeededTexUnits;
+        // Jahshaka (PHOTON-WRITER-1): +1 for the voxeliser's EMISSIVE volume, whose alpha
+        // holds the voxel's roughness (the bounce's re-emission carries the diffuse
+        // lobe's hemispherical albedo). Bound right after `directVoxel`.
+        ++numNeededTexUnits;
 
         HlmsManager *hlmsManager = mVoxelizer->getHlmsManager();
         const RenderSystemCapabilities *caps = hlmsManager->getRenderSystem()->getCapabilities();
@@ -661,6 +665,9 @@ namespace Ogre
         // OpenGL path's samplerblock loop above deliberately skips it).
         texSlot.texture = mLightDirect;
         mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
+        // Jahshaka (PHOTON-WRITER-1): the voxeliser's emissive volume (roughness in .w).
+        texSlot.texture = mVoxelizer->getEmissiveVox();
+        mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
 
         // Jahshaka (PHOTON-ENV-1): the environment cube, sampled with the probes'
         // trilinear sampler (a separate sampler object on Vulkan).
@@ -690,6 +697,7 @@ namespace Ogre
             numNeededTexUnits = 6u + 4u * numExtraCascades + 1u;
         else
             numNeededTexUnits = 3u + numExtraCascades + 1u;
+        ++numNeededTexUnits;  // Jahshaka (PHOTON-WRITER-1): voxelEmissiveTex
 
         // This code assumes there's 2 textures at the beginning that always stays the same
         // the rest of them are dynamically generated.
@@ -723,6 +731,10 @@ namespace Ogre
             // array -- the same order setupBounceTextures() binds them in.
             param.name = "directVoxel";
             param.setManualValue( texSlotIdx );
+            glslShaderParams.mParams.push_back( param );
+            // Jahshaka (PHOTON-WRITER-1): the voxeliser's emissive volume, right after.
+            param.name = "voxelEmissiveTex";
+            param.setManualValue( texSlotIdx + 1 );
             glslShaderParams.mParams.push_back( param );
 
             glslShaderParams.setDirty();
