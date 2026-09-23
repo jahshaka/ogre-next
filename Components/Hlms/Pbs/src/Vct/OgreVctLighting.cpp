@@ -111,7 +111,7 @@ namespace Ogre
         mBounceVoxelCellSize( 0 ),
         mBounceInvVoxelResolution( 0 ),
         mBounceIterationDampening( 0 ),
-        mBounceStartBiasInvBiasCascadeMaxLod( 0 ),
+        mBounceInvResMaxLod( 0 ),
         mBounceFromPreviousProbeToNext( 0 ),
         mBounceShaderParams( 0 ),
         mSpecularSdfQuality( 0.875f ),
@@ -161,8 +161,7 @@ namespace Ogre
         mBounceVoxelCellSize = addLocalBounceShaderParam( "voxelCellSize" );
         mBounceInvVoxelResolution = addLocalBounceShaderParam( "invVoxelResolution" );
         mBounceIterationDampening = addLocalBounceShaderParam( "iterationDampening" );
-        mBounceStartBiasInvBiasCascadeMaxLod =
-            addLocalBounceShaderParam( "startBias_invStartBias_cascadeMaxLod" );
+        mBounceInvResMaxLod = addLocalBounceShaderParam( "vctInvResMaxLod" );
         mBounceFromPreviousProbeToNext = addLocalBounceShaderParam( "fromPreviousProbeToNext" );
 
         createTextures();
@@ -761,81 +760,16 @@ namespace Ogre
 
         OGRE_ASSERT_LOW( numCascades < c_maxCascades && "VctLighting: Up to 16 cascades are supported" );
 
-        float4 startBias_invStartBias_cascadeMaxLod[c_maxCascades];
+        // THE CHAIN'S PARAMETERS COME FROM THEIR ONE DEFINITION (Jahshaka,
+        // PHOTON-READER-1): getCascadeChainParams, the same arrays the pixel pass
+        // buffer and the irradiance field's generation job read, because all three run
+        // the one cone march. This used to be a second formula set - a scalar
+        // 1/smallestRes on all three axes, and a hop weight of the cascades'
+        // mMultiplier ratio WITHOUT their baking multipliers - equal to the first only
+        // while every volume is cubic and every cascade bakes at the same D_max.
+        float4 vctInvResMaxLod[c_maxCascades];
         float4 fromPreviousProbeToNext[c_maxCascades][2];
-
-        for( size_t i = 0u; i < numCascades; ++i )
-        {
-            const VctLighting *cascade;
-            if( i == 0u )
-                cascade = this;
-            else
-                cascade = mExtraCascades[i - 1u];
-
-            const TextureGpu *lightVoxelTexture = cascade->mLightVoxel[0];
-
-            const uint32 width = lightVoxelTexture->getWidth();
-            const uint32 height = lightVoxelTexture->getHeight();
-            const uint32 depth = lightVoxelTexture->getDepth();
-
-            const float smallestRes = static_cast<float>( std::min( std::min( width, height ), depth ) );
-            const float invSmallestRes = 1.0f / smallestRes;
-
-            startBias_invStartBias_cascadeMaxLod[i].x = invSmallestRes;  // startBias
-            startBias_invStartBias_cascadeMaxLod[i].y = smallestRes;     // invStartBias
-
-            uint8 cascadeNumMipmaps = 0u;
-
-            if( cascade->mLightVoxel[1] )
-            {
-                // Anisotropic has the number of mipmaps calculated
-                cascadeNumMipmaps = cascade->mLightVoxel[1]->getNumMipmaps();
-            }
-            else
-            {
-                cascadeNumMipmaps = cascade->mLightVoxel[0]->getNumMipmaps();
-            }
-
-            if( i == numCascades - 1u )
-            {
-                startBias_invStartBias_cascadeMaxLod[i].z = 256.0f;  // cascadeMaxLod
-            }
-            else
-            {
-                const VctLighting *nextCascade = mExtraCascades[i];
-
-                const Vector3 cascadeVoxelCellSize = cascade->mVoxelizer->getVoxelCellSize();
-                const Vector3 nextCascadeVoxelCellSize = nextCascade->mVoxelizer->getVoxelCellSize();
-
-                const Vector3 currToNextFactor = nextCascadeVoxelCellSize / cascadeVoxelCellSize;
-                const float maxFactor =
-                    std::max( currToNextFactor.x, std::max( currToNextFactor.y, currToNextFactor.z ) );
-
-                // cascadeMaxLod
-                startBias_invStartBias_cascadeMaxLod[i].z =
-                    std::min<float>( Math::Log2( maxFactor ), cascadeNumMipmaps );
-            }
-
-            if( i > 0u )
-            {
-                const VctLighting *prevCascade;
-                if( i == 1u )
-                    prevCascade = this;
-                else
-                    prevCascade = mExtraCascades[i - 2u];
-
-                const float cascadeFinalMultiplier = cascade->mMultiplier / this->mMultiplier;
-
-                const Vector3 cascadeVoxelSize = cascade->mVoxelizer->getVoxelSize();
-                fromPreviousProbeToNext[i - 1u][0] = Vector4(
-                    prevCascade->mVoxelizer->getVoxelSize() / cascadeVoxelSize, cascadeFinalMultiplier );
-                fromPreviousProbeToNext[i - 1u][1] =
-                    Vector4( ( prevCascade->mVoxelizer->getVoxelOrigin() -
-                               cascade->mVoxelizer->getVoxelOrigin() ) /
-                                 cascadeVoxelSize,
-                             1.0f / cascadeNumMipmaps );
-            }
-        }
+        getCascadeChainParams( &vctInvResMaxLod[0].x, &fromPreviousProbeToNext[0][0].x );
 
         {
             const int32 numCascadesI32 = static_cast<int32>( numCascades );
@@ -843,8 +777,8 @@ namespace Ogre
                 mLightVctBounceInject->setProperty( NumVctCascadesProp, numCascadesI32 );
         }
 
-        mBounceStartBiasInvBiasCascadeMaxLod->setManualValue( &startBias_invStartBias_cascadeMaxLod[0].x,
-                                                              static_cast<uint32>( numCascades * 4u ) );
+        mBounceInvResMaxLod->setManualValue( &vctInvResMaxLod[0].x,
+                                             static_cast<uint32>( numCascades * 4u ) );
         if( !mExtraCascades.empty() )
         {
             mBounceFromPreviousProbeToNext->setManualValueEx(
