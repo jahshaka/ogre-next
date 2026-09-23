@@ -2,177 +2,49 @@
 #include "/media/matias/Datos/SyntaxHighlightingMisc.h"
 
 @piece( HeaderCS )
+	// THE BOUNCE'S CONE MARCH IS JAHSHAKA'S ONE VOXEL RADIANCE READER
+	// (PHOTON-READER-1). This job used to carry its own copy of the pixel
+	// shader's march - the age carry, but no escape estimate, no one-cell bias at
+	// a cascade hop, its own start bias and mip rule - so the bounce a cascade
+	// injected and the bounce the pixel read were two integrals of one volume.
+	// It now calls the march the pixel shader, the irradiance field's generation
+	// job and (for the read) the ray hit share: jah_voxel_sample.glsl +
+	// jah_voxel_march.glsl, wrapped by Jahshaka's build into the pieces
+	// JahVoxelSample / JahVoxelMarch (this job's piece list names both files).
+	// Every rule and its fork-change number is written there once; what is here
+	// is the binding.
+	//
+	// The chain's parameters are VctLighting::getCascadeChainParams' arrays (the one
+	// definition the pixel pass buffer and the field's generation job read too).
+	#define JAH_VOX_MAX_CASCADES @value( hlms_num_vct_cascades )
+	#define JAH_VOX_COUNT @value( hlms_num_vct_cascades )
+	#define JAH_VOX_SAMPLE_ISO( c, u, l ) OGRE_SampleLevel( vctProbes[c], vctProbeSampler, u, l )
 	@property( vct_anisotropic )
-		#define OGRE_VCT_ANISO_PROBE_ARG_DECL , OGRE_ArrayTex( OGRE_Texture3D_float4, probeX, @value( hlms_num_vct_cascades ) ), OGRE_ArrayTex( OGRE_Texture3D_float4, probeY, @value( hlms_num_vct_cascades ) ), OGRE_ArrayTex( OGRE_Texture3D_float4, probeZ, @value( hlms_num_vct_cascades ) )
-		#define OGRE_VCT_ANISO_PROBE_ARG , probeX, probeY, probeZ
-		#define OGRE_VCT_ANISO_ROOT_PROBE_ARG , vctProbeX, vctProbeY, vctProbeZ
+		#define JAH_VOX_HAS_ANISO 1
+		#define JAH_VOX_ANISO true
+		#define JAH_VOX_SAMPLE_X( c, u, l ) OGRE_SampleLevel( vctProbeX[c], vctProbeSampler, u, l )
+		#define JAH_VOX_SAMPLE_Y( c, u, l ) OGRE_SampleLevel( vctProbeY[c], vctProbeSampler, u, l )
+		#define JAH_VOX_SAMPLE_Z( c, u, l ) OGRE_SampleLevel( vctProbeZ[c], vctProbeSampler, u, l )
 	@else
-		#define OGRE_VCT_ANISO_PROBE_ARG_DECL
-		#define OGRE_VCT_ANISO_PROBE_ARG
-		#define OGRE_VCT_ANISO_ROOT_PROBE_ARG
+		#define JAH_VOX_HAS_ANISO 0
+		#define JAH_VOX_ANISO false
 	@end
+	#define JAH_VOX_INVRES( c ) p_vctInvResMaxLod[c].xyz
+	#define JAH_VOX_MAXLOD( c ) p_vctInvResMaxLod[c].w
+	@property( hlms_num_vct_cascades > 1 )
+		#define JAH_VOX_FROM_PREV_SCALE( c ) p_vctFromPreviousProbeToNext[(c) - 1][0]
+		#define JAH_VOX_FROM_PREV_OFFSET( c ) p_vctFromPreviousProbeToNext[(c) - 1][1]
+	@end
+	@insertpiece( JahVoxelSample )
+	@insertpiece( JahVoxelMarch )
 
-	struct VctResult
+	INLINE void computeVctProbe( OGRE_INOUT_REF( float3, outDiffuse ),
+								 float3 posLS, float3 geomNormal, float3x3 TBN )
 	{
-		float3 colour;
-		float alpha;
-		float lodLevel;
-		float3 posLS;
-		// JAHSHAKA PATCH 0074: the cone's AGE -- how far it has travelled from
-		// the surface it started on, which is what sizes it. The pixel piece's
-		// twin (Vct_piece_ps.any) has carried it since patch 0066; this is the
-		// same carry on the bounce-injection walk.
-		float travelled;
-	};
-
-	INLINE VctResult voxelConeTraceDiff
-	(
-		float3 posLS,
-		float3 dirLS, float tanHalfAngle,
-		float4 localStartBias_invStartBias_cascadeMaxLod, float startingLodLevel,
-		float startingAlpha, float startingTravelled, int probeIdx,
-		OGRE_ArrayTex( OGRE_Texture3D_float4, probes, @value( hlms_num_vct_cascades ) )
-		OGRE_SAMPLER_ARG_DECL( probeSampler )
-		OGRE_VCT_ANISO_PROBE_ARG_DECL
-	)
-	{
-		float vctStartBias = localStartBias_invStartBias_cascadeMaxLod.x;
-		float vctInvStartBias = localStartBias_invStartBias_cascadeMaxLod.y;
-		float maxLod = localStartBias_invStartBias_cascadeMaxLod.z;
-
-		float dist = vctStartBias;
-		// JAHSHAKA PATCH 0074 (the compute twin of patch 0066): `dist` positions
-		// the samples from THIS cascade's entry point; `travelled` is the cone's
-		// age since the SURFACE, and it is what sizes the footprint. They are
-		// identical on the first cascade.
-		float travelled = max( startingTravelled, vctStartBias );
-		float alpha = startingAlpha;
-		float3 color = float3( 0.0, 0.0, 0.0 );
-
-		float diameter = max( vctStartBias, 2.0 * tanHalfAngle * travelled );
-		float3 nextPosLS = posLS + dist * dirLS;
-
-		float lodLevel = startingLodLevel;
-
-		@property( !vct_anisotropic )
-			#define VCT_ANISOTROPIC_EARLY_OUT && lodLevel < maxLod
-		@else
-			#define VCT_ANISOTROPIC_EARLY_OUT && lodLevel <= 0.5
-		@end
-
-		float threshold = 0.5f + diameter * 0.5;
-
-		while( alpha < 0.95 && // Abort once we've gathered enough light
-			   abs( nextPosLS.x - 0.5f ) <= threshold && // Out of bounds
-			   abs( nextPosLS.y - 0.5f ) <= threshold &&
-			   abs( nextPosLS.z - 0.5f ) <= threshold
-			   VCT_ANISOTROPIC_EARLY_OUT ) // Either another cascade will handle, or aniso will
-		{
-			threshold = 0.5f + diameter * 0.5;
-
-			float4 sampleColour = OGRE_SampleLevel( probes[probeIdx], probeSampler, nextPosLS, lodLevel );
-
-			float a = ( 1.0f - alpha );  // Calc. the % left of light we are able to gather
-
-			color += sampleColour.xyz * a;                  // Accumulate colour
-			alpha += a * sampleColour.w;                    // Accumulate opacity
-			dist += diameter * 0.5f;                        // Advance forward
-			travelled += diameter * 0.5f;                   // ...and age by the same step (0074)
-			nextPosLS = posLS + dist * dirLS;               // Advance forward
-			diameter = max( vctStartBias, 2.0 * tanHalfAngle * travelled );
-			lodLevel = log2( diameter * vctInvStartBias );  // Calculate next LOD
-		}
-
-		@property( vct_anisotropic )
-			float3 isNegative;
-			isNegative.x = dirLS.x < 0 ? 0.5f : 0.0f;
-			isNegative.y = dirLS.y < 0 ? 0.5f : 0.0f;
-			isNegative.z = dirLS.z < 0 ? 0.5f : 0.0f;
-
-			float3 dirLSSquared = dirLS.xyz * dirLS.xyz;
-
-			while( alpha < 0.95 && // Abort once we've gathered enough light
-				   lodLevel < maxLod && // Past maxLod, another cascade will handle this
-				   abs( nextPosLS.x - 0.5f ) <= threshold && // Out of bounds
-				   abs( nextPosLS.y - 0.5f ) <= threshold &&
-				   abs( nextPosLS.z - 0.5f ) <= threshold )
-			{
-				threshold = 0.5f + diameter * 0.5;
-
-				float3 sampleUVW = nextPosLS;
-				sampleUVW.x = saturate( sampleUVW.x ) * 0.5;
-
-				float4 xColor = OGRE_SampleLevel( probeX[probeIdx], probeSampler,
-												  sampleUVW + float3( isNegative.x, 0, 0 ),
-												  lodLevel );
-				float4 yColor = OGRE_SampleLevel( probeY[probeIdx], probeSampler,
-												  sampleUVW + float3( isNegative.y, 0, 0 ),
-												  lodLevel );
-				float4 zColor = OGRE_SampleLevel( probeZ[probeIdx], probeSampler,
-												  sampleUVW + float3( isNegative.z, 0, 0 ),
-												  lodLevel );
-
-				float4 sampleColour = dirLSSquared.x * xColor +  //
-									  dirLSSquared.y * yColor +  //
-									  dirLSSquared.z * zColor;
-
-				float a = ( 1.0f - alpha );  // Calc. the % left of light we are able to gather
-
-				color += sampleColour.xyz * a;                  // Accumulate colour
-				alpha += a * sampleColour.w;                    // Accumulate opacity
-				dist += diameter * 0.5f;                        // Advance forward
-				travelled += diameter * 0.5f;                   // ...and age by the same step (0074)
-				nextPosLS = posLS + dist * dirLS;               // Advance forward
-				diameter = max( vctStartBias, 2.0 * tanHalfAngle * travelled );
-				lodLevel = log2( diameter * vctInvStartBias );  // Calculate next LOD
-			}
-		@end
-
-		VctResult result;
-		result.colour = color;
-		result.alpha = alpha;
-		result.lodLevel = lodLevel;
-		result.posLS = nextPosLS;
-		result.travelled = travelled;
-
-		return result;
-	}
-
-@property( hlms_num_vct_cascades > 1 )
-	/** Converts pos from Local Space of probeIdx - 1 into the Local Space of probeIdx
-	\param posLS
-		Position in local space of probeIdx - 1
-	\param probeIdx
-		Probe Index to convert to
-	\return
-		Position in local space of probeIdx
-	*/
-	INLINE float3 fromVctProbeToNext( float3 posLS, int probeIdx PARAMS_ARG_DECL )
-	{
-		return posLS * p_vctFromPreviousProbeToNext[probeIdx - 1][0].xyz +
-			   p_vctFromPreviousProbeToNext[probeIdx - 1][1].xyz;
-		return float3( 0, 0, 0 );
-	}
-@end
-
-	INLINE void computeVctProbe
-	(
-		OGRE_INOUT_REF( float3, outDiffuse ),
-		float3 posLS, float3 geomNormal, float3x3 TBN,
-		OGRE_ArrayTex( OGRE_Texture3D_float4, probes, @value( hlms_num_vct_cascades ) )
-		OGRE_SAMPLER_ARG_DECL( probeSampler )
-		OGRE_VCT_ANISO_PROBE_ARG_DECL
-		PARAMS_ARG_DECL
-	)
-	{
-		// JAHSHAKA PATCH 0070 - ONE CELL, WHICHEVER WAY THE SURFACE FACES.
-		// The pixel piece's twin (Vct_piece_ps.any's computeVctProbe) carries the same
-		// change and the full rationale. Upstream divided the normal by its LARGEST
-		// component before stepping one inverse-resolution along it, so the step was one
-		// voxel down an axis and 1.73 voxels along a body diagonal: on a curved surface
-		// the cone's start point sweeps with the normal's direction instead of standing
-		// a fixed distance off the surface, which is a seam and not a bias. Normalising
-		// makes it exactly one cell everywhere; an axis-aligned surface is unchanged.
+		// JAHSHAKA PATCH 0070 - ONE CELL, WHICHEVER WAY THE SURFACE FACES: the
+		// start bias, exactly the pixel shader's (Vct_piece_ps.any's
+		// computeVctProbe carries the rationale). The normal is normalised so the
+		// componentwise step is one cell long in every direction.
 		geomNormal.xyz *= 1.0f / max( length( geomNormal.xyz ), 1e-6f );
 		posLS = posLS + geomNormal.xyz * p_invVoxelResolution;
 
@@ -203,48 +75,13 @@
 			float3 dir = mul( TBN, cone_dirs[i] );
 			dir = normalize( dir );
 
-			VctResult result = voxelConeTraceDiff(
-				posLS, dir, coneAngleTan, p_vctStartBias_invStartBias_cascadeMaxLod[0], 0.0f, 0.0f,
-				0.0f, 0, probes OGRE_SAMPLER_ARG( probeSampler ) OGRE_VCT_ANISO_PROBE_ARG );
-
-			@property( hlms_num_vct_cascades > 1 )
-				for( int j = 1; j < @value( hlms_num_vct_cascades ) && result.alpha < 0.95f; ++j )
-				{
-					float startBias = p_vctStartBias_invStartBias_cascadeMaxLod[j].x;
-					float prevCascadeMaxLod = p_vctStartBias_invStartBias_cascadeMaxLod[j - 1].z;
-
-					float3 newPosLS = fromVctProbeToNext( result.posLS, j PARAMS_ARG ) - dir * startBias;
-
-					VctResult newRes = voxelConeTraceDiff(
-						newPosLS, dir, coneAngleTan, p_vctStartBias_invStartBias_cascadeMaxLod[j],
-						max( result.lodLevel - prevCascadeMaxLod, 0.0f ), result.alpha,
-						// JAHSHAKA PATCH 0074: the age, in the NEW cascade's units --
-						// the same directional scale the pixel piece uses (0066).
-						result.travelled *
-							dot( abs( dir ), p_vctFromPreviousProbeToNext[j - 1][0].xyz ),
-						j, probes OGRE_SAMPLER_ARG( probeSampler ) OGRE_VCT_ANISO_PROBE_ARG );
-
-					// JAHSHAKA PATCH 0074, the three defects of this walk, the same
-					// three the pixel piece had:
-					//  - the transmittance is already inside `newRes.colour` (the
-					//    trace starts its accumulator at `result.alpha`), so the
-					//    ( 1 - result.alpha ) factor applied it twice (F9);
-					//  - `result.alpha += newRes.alpha` DOUBLED the opacity at every
-					//    hop -- the accumulator started at `result.alpha` -- so the
-					//    loop's `< 0.95f` guard ended the walk after one cascade and
-					//    a bounce never travelled further than cascade 1 (patch 0033
-					//    fixed the same line in the pixel piece);
-					//  - the cone's age restarted at every hop, so the continuation
-					//    marched a cascade at a footprint that never matched the
-					//    cone's solid angle (patch 0066, above).
-					result.colour += newRes.colour * p_vctFromPreviousProbeToNext[j - 1][0].w;
-					result.alpha = newRes.alpha;
-					result.travelled = newRes.travelled;
-					result.lodLevel = newRes.lodLevel;
-					result.posLS = newRes.posLS;
-				}
-			@end
-
+			// The whole walk, the pixel shader's diffuse rules exactly: the
+			// hop's bias is one cell of the new cascade along the voxel's normal.
+			// The escape estimate comes back with it and is NOT used here - the
+			// bounce carries radiance only; what escapes is the sky's, and the
+			// sky is never injected into the voxels (the pixel adds it).
+			JahConeResult result = jahConeMarch( posLS, dir, coneAngleTan, geomNormal.xyz,
+												 geomNormal.xyz, JAH_MARCH_NO_ESCAPE );
 			light += coneWeights[i] * result.colour;
 		}
 
@@ -312,9 +149,7 @@
 		float3x3 TBN = buildFloat3x3( vTangent, vBinormal, normalVal.xyz );
 
 		float3 vctDiffuse = float3( 0, 0, 0 );
-		computeVctProbe( vctDiffuse, voxelUvwPos, normalVal.xyz, TBN,
-						 vctProbes OGRE_SAMPLER_ARG( vctProbeSampler )
-						 OGRE_VCT_ANISO_ROOT_PROBE_ARG PARAMS_ARG );
+		computeVctProbe( vctDiffuse, voxelUvwPos, normalVal.xyz, TBN );
 		currentLight.xyz += albedoVal.xyz * vctDiffuse.xyz * p_iterationDampening;
 	}
 

@@ -11,6 +11,11 @@
 			vulkan_layout( ogre_t@value(vctProbeY) ) uniform texture3D vctProbeY[@value( vct_num_probes )];
 			vulkan_layout( ogre_t@value(vctProbeZ) ) uniform texture3D vctProbeZ[@value( vct_num_probes )];
 		@end
+		// THE CONE FUNCTIONS COME AFTER THE VOLUMES THEY READ (PHOTON-READER-1): the
+		// march reads the volumes as globals through its macro convention, and this
+		// piece is the first point in the pixel shader where they are declared
+		// (DeclVctFuncs is inserted earlier, with the pass-buffer helpers).
+		@insertpiece( DeclVctConeFuncs )
 	@end
 	@property( syntax == hlsl )
 		Texture3D vctProbes[@value( vct_num_probes )]		: register(t@value(vctProbes));
@@ -33,32 +38,6 @@
 @end
 
 @piece( DeclVctFuncs )
-	@property( vct_anisotropic )
-		#define OGRE_VCT_ANISO_PROBE_ARG_DECL , OGRE_ArrayTex( OGRE_Texture3D_float4, probeX, @value( vct_num_probes ) ), OGRE_ArrayTex( OGRE_Texture3D_float4, probeY, @value( vct_num_probes ) ), OGRE_ArrayTex( OGRE_Texture3D_float4, probeZ, @value( vct_num_probes ) )
-		#define OGRE_VCT_ANISO_PROBE_ARG , probeX, probeY, probeZ
-		#define OGRE_VCT_ANISO_ROOT_PROBE_ARG , vctProbeX, vctProbeY, vctProbeZ
-	@else
-		#define OGRE_VCT_ANISO_PROBE_ARG_DECL
-		#define OGRE_VCT_ANISO_PROBE_ARG
-		#define OGRE_VCT_ANISO_ROOT_PROBE_ARG
-	@end
-
-	struct VctResult
-	{
-		float3 colour;
-		float alpha;
-		// Jahshaka patch 0021: the ESCAPE opacity -- how much of the cone made
-		// it out of the volume -- kept apart from `alpha` because under
-		// anisotropic tracing the two legitimately differ (see the loop).
-		// Identical to alpha on the isotropic path.
-		float escapeAlpha;
-		float lodLevel;
-		float3 posLS;
-		// SEAM-1: how far the cone has travelled FROM THE SURFACE, in this
-		// cascade's local-space units. See the march.
-		float travelled;
-	};
-
 	/// Jahshaka patch 0083: THE CONE BASIS IS A FUNCTION OF THE NORMAL AND OF
 	/// NOTHING ELSE. `buildConeBasis` returns an orthonormal frame whose third
 	/// axis is `n`, built by Frisvad's method (JGT 2012) -- continuous over the
@@ -123,323 +102,6 @@
 		return buildFloat3x3( t, b, n );
 	}
 
-	@foreach( 2, n )
-		@property( @n == 0 )
-			INLINE VctResult voxelConeTraceDiff
-		@else
-			INLINE VctResult voxelConeTraceSpec
-		@end
-			( VctProbeParams probeParams, float3 posLS,
-			  float3 dirLS, float tanHalfAngle,
-			  float startingLodLevel, float startingAlpha, float startingEscapeAlpha,
-			  float startingTravelled, int probeIdx,
-			  OGRE_Texture3D_float4 probes[@value( vct_num_probes )]
-			  OGRE_SAMPLER_ARG_DECL( probeSampler )
-			  OGRE_VCT_ANISO_PROBE_ARG_DECL )
-		{
-			float vctInvResolution =
-				dot( abs( dirLS ), probeParams.vctInvResolution_cascadeMaxLod[probeIdx].xyz );
-			float resolution = 1.0f / vctInvResolution;
-			@property( @n == 0 )
-				float maxLod = probeParams.vctInvResolution_cascadeMaxLod[probeIdx].w;
-			@else
-				float maxLod = 11.0f; // 2048x2048x2048 is max possible res
-			@end
-
-			float dist = vctInvResolution;
-			// SEAM-1: the cone's footprint is a function of how far it has come
-			// FROM THE SURFACE, which is not the same as how far it has come
-			// from THIS cascade's entry point. `dist` stays the offset from
-			// posLS (it positions the samples); `travelled` is the age of the
-			// cone, and it is what sizes it. They are identical on the first
-			// cascade (startingTravelled == vctInvResolution there).
-			float travelled = max( startingTravelled, vctInvResolution );
-			float alpha = startingAlpha;
-			float escapeAlpha = startingEscapeAlpha;	// Jahshaka patch 0021
-			float3 color = float3( 0.0, 0.0, 0.0 );
-
-			float diameter = max( vctInvResolution, 2.0 * tanHalfAngle * travelled );
-
-			@property( @n == 0 )
-				@property( vct_cone_dirs == 6 )
-					float lodLevel	= startingLodLevel;
-					float lodStep	= 0.71;
-				@else
-					float lodLevel	= startingLodLevel;
-					float lodStep	= 1.0;
-				@end
-			@else
-				float lodLevel = log2( diameter * resolution );
-			@end
-
-			@property( @n == 1 && vct_enable_specular_sdf_quality )
-				float skipLod = 1;
-			@end
-
-			float3 nextPosLS = posLS + dist * dirLS;
-
-			//The formula is:
-			//	threshold = 0.5f + vctInvResolution * exp2( lodLevel ) * 0.5;
-			//Thus:
-			//	threshold = 0.5f + invRes * exp2( log2( diameter * probeParams.vctResolution ) ) * 0.5;
-			//	threshold = 0.5f + invRes * diameter * probeParams.vctResolution * 0.5;
-			//	threshold = 0.5f + diameter * 0.5;
-			//
-			// Another way to look at it, is an AABB vs AABB test where A is
-			// a cube in [0; 1] and B is a cube centered in nextPosLS and halfSize = diameter * 0.5
-			float threshold = 0.5f + diameter * 0.5;
-
-			@property( !vct_anisotropic )
-				#define VCT_ANISOTROPIC_EARLY_OUT && lodLevel < maxLod
-			@else
-				#define VCT_ANISOTROPIC_EARLY_OUT && lodLevel <= 0.5
-			@end
-			while( alpha < 0.95 && // Abort once we've gathered enough light
-					abs( nextPosLS - 0.5f ).x <= threshold && // Out of bounds
-					abs( nextPosLS - 0.5f ).y <= threshold &&
-					abs( nextPosLS - 0.5f ).z <= threshold
-				   VCT_ANISOTROPIC_EARLY_OUT ) // Either another cascade will handle, or aniso will
-			{
-				// Saturate to avoid going further than [-1.5; 1.5] outside the voxel's box
-				// Btw for some reason it can really go very far outside box because
-				// threshold grows too much/too big; thus we keep a near infinite-loop
-				threshold = 0.5f + diameter * 0.5;
-
-				float4 sampleColour =
-					OGRE_SampleLevel( probes[probeIdx], probeSampler, nextPosLS, lodLevel );
-
-				@property( @n == 1 && vct_enable_specular_sdf_quality && vct_num_probes <= 1 )
-					// Advance forward using SDF-like formula:
-					//
-					// When roughness is close to 0.02, specular cone tracing becomes path tracing.
-					// This is very slow. However we can greatly speed it up by skipping gaps of empty
-					// voxels.
-					//
-					// We use the alpha (opacity) component of the higher mips to approximate
-					// the SDF (Signed Distance Field) and thus know how much to skip. This is
-					// theoretically wrong, but not very wrong because the mips are very close to
-					// its true SDF representation thus in it works practice.
-					//
-					// Some of these formulas have been empirically tuned to match a good
-					// performance/quality ratio
-					//
-					// Once the roughness is higher, this formula starts hurting quality (produces
-					// noticeable artifacts) and thus we disable it.
-					//
-					// This formula has tweakable parameters to leverage performance vs quality
-					float finalOpac =
-						OGRE_SampleLevel( probes[probeIdx], probeSampler, nextPosLS, skipLod ).w;
-					float skipFactor = exp2( max( 0.0f, skipLod * 0.5f - 1.0f ) ) * (1.0f - finalOpac) +
-									   finalOpac;
-					skipFactor = lerp( skipFactor, 1.0f,
-									   min( -1.0 + finalOpac * probeParams.specularSdfFactor +
-											tanHalfAngle * 50.0f, 1.0f ) );
-					skipLod = clamp( skipLod + (1.0f - finalOpac) * 2.0f - 1.0f,
-									 1.0f, probeParams.specSdfMaxMip );
-
-					dist += diameter * 0.5f * skipFactor;	// Advance forward
-					travelled += diameter * 0.5f * skipFactor;
-				@else
-					dist += diameter * 0.5f;				// Advance forward
-					travelled += diameter * 0.5f;			// SEAM-1
-				@end
-
-				float a = ( 1.0f - alpha );  // Calc. the % left of light we are able to gather
-
-				color += sampleColour.xyz * a;     // Accumulate colour
-				alpha += a * sampleColour.w;       // Accumulate opacity
-				// Jahshaka patch 0021: same expression as alpha, so the isotropic
-				// path (which never enters the loop below) is unchanged.
-				escapeAlpha += ( 1.0f - escapeAlpha ) * sampleColour.w;
-				nextPosLS = posLS + dist * dirLS;  // Advance forward
-				// Calculate next LOD & next fwd step
-				diameter = max( vctInvResolution, 2.0 * tanHalfAngle * travelled );
-				@property( @n == 0 && vct_cone_dirs == 4 )
-					lodLevel += lodStep;			// Calculate next LOD
-				@else
-					lodLevel = log2( diameter * resolution ); // Calculate next LOD
-				@end
-			}
-
-			@property( vct_anisotropic )
-				float3 isNegative;
-				isNegative.x = dirLS.x < 0 ? 0.5f : 0.0f;
-				isNegative.y = dirLS.y < 0 ? 0.5f : 0.0f;
-				isNegative.z = dirLS.z < 0 ? 0.5f : 0.0f;
-
-				float3 dirLSSquared = dirLS.xyz * dirLS.xyz;
-
-				while( alpha < 0.95 && // Abort once we've gathered enough light
-					   lodLevel < maxLod && // Past maxLod, another cascade will handle this
-					   abs( nextPosLS.x - 0.5f ) <= threshold && // Out of bounds
-					   abs( nextPosLS.y - 0.5f ) <= threshold &&
-					   abs( nextPosLS.z - 0.5f ) <= threshold )
-				{
-					threshold = 0.5f + diameter * 0.5;
-
-					float3 sampleUVW = nextPosLS;
-					sampleUVW.x = saturate( sampleUVW.x ) * 0.5;
-
-					float4 xColor = OGRE_SampleLevel( probeX[probeIdx], probeSampler,
-													  sampleUVW + float3( isNegative.x, 0, 0 ),
-													  lodLevel );
-					float4 yColor = OGRE_SampleLevel( probeY[probeIdx], probeSampler,
-													  sampleUVW + float3( isNegative.y, 0, 0 ),
-													  lodLevel );
-					float4 zColor = OGRE_SampleLevel( probeZ[probeIdx], probeSampler,
-													  sampleUVW + float3( isNegative.z, 0, 0 ),
-													  lodLevel );
-
-					float4 sampleColour = dirLSSquared.x * xColor +  //
-										  dirLSSquared.y * yColor +  //
-										  dirLSSquared.z * zColor;
-
-					float a = ( 1.0f - alpha );  // Calc. the % left of light we are able to gather
-
-					color += sampleColour.xyz * a;     // Accumulate colour
-					alpha += a * sampleColour.w;       // Accumulate opacity
-
-					// Jahshaka patch 0021 (upstream-reportable): THE ESCAPE FRACTION
-					// UNDER ANISOTROPIC TRACING.
-					//
-					// Each axis texture is front-to-back COMPOSITED along its axis
-					// (AnisotropicMipVctStep1: a + b * (1 - a.a)), so a surface one
-					// voxel thick reads as alpha 1.0 along its own normal at EVERY
-					// coarser mip, no matter how little of the cell it fills. That
-					// is the right opacity for a ray crossing the cell -- and the
-					// wrong one for the cone that STARTS on that surface: as its
-					// footprint grows it re-enters the cell holding its own
-					// starting slab, the direction-weighted alpha above reaches
-					// 0.95 within a few steps, and the escape weight the ambient
-					// rides (`light.w`, computeVctProbe) collapses. Measured on an
-					// open floor with nothing above it: the isotropic march keeps
-					// 93% of the ambient, this one kept 4%.
-					//
-					// The colour/alpha accumulation is left exactly as it was (the
-					// bounce is not what is wrong); only the ESCAPE estimate
-					// changes: the MIN of the three axis composites, one mip FINER
-					// than the colour samples. The axis textures are half the main
-					// resolution (mip 0 of probeX is the 2x downsample of main mip
-					// 0), so lodLevel here is already one mip coarser than the
-					// isotropic march at the same distance, and that coarser
-					// footprint alone kept most of the loss (measured: min3 at
-					// lodLevel restores 26% of the ambient, at lodLevel - 1 65%).
-					// min3 is the cell's mean occupancy up to the compositing: a
-					// slab one layer thick in an N-layer cell composites to 1 along
-					// its normal and to ~1/N along the other two, a solid cell to 1
-					// on all three -- and because a + b - ab is never below the
-					// mean, it still UNDER-estimates the escape (65% of the raw
-					// ambient on an open floor against the isotropic path's 93%).
-					//
-					// THAT IS DELIBERATE. The exact route -- the main texture's own
-					// mip alpha at lodLevel, which VctLighting builds in anisotropic
-					// mode whenever vct_enable_specular_sdf_quality is set (volumes
-					// above 32^3) -- was measured too: 95% on the open floor, and
-					// the isotropic path's LEAK with it. Mean-occupancy alpha lets
-					// a cone escape through a one-voxel wall, so in a sealed room
-					// the "restored" ambient floods the floor: Jahshaka's Mirror
-					// Room and Showroom samples went +46 and +51 (of 255) at Medium
-					// and clipped, where this route moves them +7 -- less than the
-					// isotropic march's own +14 on the same rooms. Three alpha
-					// fetches per step became SIX with patch 0084 below (the half
-					// selection), anisotropic diffuse cones only; measured frame cost
-					// under the noise floor at Medium and High.
-					//
-					// JAHSHAKA PATCH 0084: THE OCCUPANCY ESTIMATE READS BOTH HALVES OF
-					// EVERY AXIS VOLUME, BECAUSE IT IS A PROPERTY OF THE CELL AND NOT
-					// OF THE CONE.
-					//
-					// `isNegative` selects which of the two composites packed into an
-					// axis texture -- the one accumulated towards +axis or the one
-					// towards -axis -- a sample reads, from the SIGN of that component
-					// of the cone's direction. For the colour composite above that is
-					// exactly right and it is self-healing: the sample is weighted by
-					// `dirLSSquared`, so as a component goes to zero the half it chose
-					// stops mattering. The `min` below has no such weight. It gives an
-					// axis whose direction component is zero the same authority as the
-					// axis the cone actually travels down -- and on every axis-aligned
-					// surface in the world (a floor, a wall, the face of a box) two of
-					// the three components ARE zero.
-					//
-					// Zero in exact arithmetic. In the shader they are the last bits of
-					// a round trip: the geometric normal is interpolated in VIEW space,
-					// carried to a camera-independent space through
-					// `invViewMatCubemap` to build the cone frame (patch 0083), carried
-					// back, and rotated into probe space by `toVctProbeSpaceDir` -- and
-					// the view matrix those rotations are built from is a function of
-					// where the camera stands IN THE WORLD. So the sign of a quantity
-					// that is identically zero is decided by the camera's distance from
-					// the world origin, and `min` turns that into a different answer.
-					//
-					// MEASURED (lane CLIFF-32-1, 2026-09-21, a 4 m cube on the default
-					// ground at Epic, the whole scene and the camera translated together
-					// by an exactly lattice-aligned distance so that not one voxel moves
-					// -- LATTICE-1's protocol, `scripting.e2e.lattice_placement`):
-					//
-					//   * `isNegative.y` for the first diffuse cone reads 0.5 on 100 %
-					//     of the cube face's pixels at the origin and flips on 50.5 %
-					//     of them with the scene standing 60 m away;
-					//   * the colour composite is untouched by it -- the cone's `alpha`
-					//     is identical between the two arms to 1/255 over 22,400 pixels
-					//     -- while the escape weight `light.w`, which is exactly what
-					//     the sky's ambient rides, moves by 26/255;
-					//   * so the face reads 8-9 display codes BRIGHTER for the crime of
-					//     standing 32 m from the world origin, with an 8-bit step at
-					//     32 m and a plateau out to 180 m (the bias is lost in the noise
-					//     and the flip becomes a coin toss).
-					//
-					// THE FIX IS TO STOP ASKING THE CONE. The two halves of one axis
-					// texture are two measurements of the same cells, composited in
-					// opposite directions, and the mean of them is the direction-free
-					// reading `min3` was always after. It keeps every property the
-					// estimate was chosen for -- it is still a COMPOSITE, so a wall one
-					// voxel thick still reports 1 along its own normal at every mip and
-					// the sealed-room leak the mean-occupancy route had stays shut --
-					// and it is continuous in the cone's direction, so no last bit of a
-					// matrix can move a picture again. Six alpha fetches per step
-					// instead of three, anisotropic diffuse cones only.
-					float escapeLod = max( lodLevel - 1.0f, 0.0f );
-					float escapeX = 0.5f * ( OGRE_SampleLevel( probeX[probeIdx], probeSampler,
-															   sampleUVW, escapeLod ).w +
-											 OGRE_SampleLevel( probeX[probeIdx], probeSampler,
-															   sampleUVW + float3( 0.5f, 0, 0 ),
-															   escapeLod ).w );
-					float escapeY = 0.5f * ( OGRE_SampleLevel( probeY[probeIdx], probeSampler,
-															   sampleUVW, escapeLod ).w +
-											 OGRE_SampleLevel( probeY[probeIdx], probeSampler,
-															   sampleUVW + float3( 0.5f, 0, 0 ),
-															   escapeLod ).w );
-					float escapeZ = 0.5f * ( OGRE_SampleLevel( probeZ[probeIdx], probeSampler,
-															   sampleUVW, escapeLod ).w +
-											 OGRE_SampleLevel( probeZ[probeIdx], probeSampler,
-															   sampleUVW + float3( 0.5f, 0, 0 ),
-															   escapeLod ).w );
-					escapeAlpha += ( 1.0f - escapeAlpha ) * min( escapeX, min( escapeY, escapeZ ) );
-
-					dist += diameter * 0.5f;		   // Advance forward
-					travelled += diameter * 0.5f;	   // SEAM-1
-					nextPosLS = posLS + dist * dirLS;  // Advance forward
-					// Calculate next LOD & next fwd step
-					diameter = max( vctInvResolution, 2.0 * tanHalfAngle * travelled );
-					@property( @n == 0 && vct_cone_dirs == 4 )
-						lodLevel += lodStep; // Calculate next LOD
-					@else
-						lodLevel = log2( diameter * resolution ); // Calculate next LOD
-					@end
-				}
-			@end
-
-			VctResult result;
-			result.colour = color;
-			result.alpha = alpha;
-			result.escapeAlpha = escapeAlpha;	// Jahshaka patch 0021
-			result.lodLevel = lodLevel;
-			result.posLS = nextPosLS;
-			result.travelled = travelled;	// SEAM-1
-
-			return result;
-		}
-	@end
 
 	INLINE float3 toVctProbeSpacePos( float3 pos, VctProbeParams probeParams )
 	{
@@ -470,23 +132,85 @@
 	}
 
 
-	@property( vct_num_probes > 1 )
-		/** Converts pos from Local Space of probeIdx - 1 into the Local Space of probeIdx
-		\param posLS
-			Position in local space of probeIdx - 1
-		\param probeIdx
-			Probe Index to convert to
-		\return
-			Position in local space of probeIdx
-		*/
-		INLINE float3 fromVctProbeToNext( float3 posLS, int probeIdx, VctProbeParams probeParams )
-		{
-			return posLS * probeParams.fromPreviousProbeToNext[probeIdx - 1][0].xyz +
-				   probeParams.fromPreviousProbeToNext[probeIdx - 1][1].xyz;
-		}
-	@end
 
 	#define M_PI 3.141592654f
+
+	INLINE float getPccVctBlendWeight( float3 inPsPos, float3 reflDir, float fDist,
+									   float roughness, float3 cubemapPosVS,
+									   float3 vctSpecPosVS, float vctSpecularW,
+									   float pccVctMinDistanceVar, float invPccVctInvDistanceVar,
+									   float pccCompressedDepth )
+	{
+		//Calculate interesectionPosVS as the intersection between the reflection ray and a cube
+		float3 interesectionPosVS = inPsPos + reflDir * fDist;
+
+		//Now increase interesectionPosVS accuracy (it will no longer be a box)
+		//by taking the compressed PCC depth stored in pccCompressedDepth
+		//The compressed PCC depth is in the form of:
+		//	interesectionPosVS = cubemapPosVS + reflDirLS * (pccCompressedDir * 2.0);
+		interesectionPosVS = cubemapPosVS.xyz +
+							 (interesectionPosVS - cubemapPosVS.xyz) * (pccCompressedDepth * 2.0);
+		float3 vctSpecPosToPccSpecPos = interesectionPosVS - vctSpecPosVS;
+		//Calculate distance to VCT pos and blend based on that
+		float distToVct = max3( abs( vctSpecPosToPccSpecPos ).x,
+								abs( vctSpecPosToPccSpecPos ).y,
+								abs( vctSpecPosToPccSpecPos ).z );
+		float vctLerp = (distToVct - pccVctMinDistanceVar) * invPccVctInvDistanceVar;
+		vctLerp = saturate( vctLerp );
+
+		//vctLerp has quantization artifacts due to 8-bit precision when interpolating via HW
+		//texture filtering present in vctSpecPosVS. They're very noticeable at non-zero roughness.
+		//Hide these artifacts by reusing the PCC compressed depth as a mask.
+		float pccErrorMask = ( pccCompressedDepth - 0.5f ) * ( pccCompressedDepth - 0.5f ) * 4.0f;
+		float roughThreshWeight = roughness - 0.02f;
+		roughThreshWeight = min( roughThreshWeight * 200.0f, 1.0f );
+		vctLerp = lerp( vctLerp, vctLerp * pccErrorMask, roughThreshWeight );
+
+		//At very high roughness, VCT (anisotropic) is much more accurate. Thus bias towards VCT
+		vctLerp = min( vctLerp + roughness * roughness * roughness, 1.0f );
+
+		//If no VCT probe was found, fallback to PCC
+		vctLerp = (vctSpecularW == 0) ? 0.0f : vctLerp;
+
+		return vctLerp;
+	}
+@end
+
+@piece( DeclVctConeFuncs )
+	// THE ONE VOXEL RADIANCE READER, BOUND TO THE PIXEL SHADER (PHOTON-READER-1).
+	// The cone march this piece used to hold — and its twin in the bounce job and
+	// the third one in the irradiance field's generation job — is now ONE pair of
+	// plain-GLSL files, irisgl/engine/src/rayquery/include/jah_voxel_sample.glsl
+	// and jah_voxel_march.glsl, that Jahshaka's build wraps into the library pieces
+	// JahVoxelSample and JahVoxelMarch (Hlms/Jahshaka). Every rule of the march
+	// and the fork change that made it (the age carry, the escape estimate, the
+	// one-cell hop bias, the single transmittance) is written there once. What is
+	// left here is the binding: which volumes, which pass-buffer members.
+	#define JAH_VOX_MAX_CASCADES @value( vct_num_probes )
+	#define JAH_VOX_COUNT @value( vct_num_probes )
+	#define JAH_VOX_SAMPLE_ISO( c, u, l ) OGRE_SampleLevel( vctProbes[c], vctProbeSampler, u, l )
+	@property( vct_anisotropic )
+		#define JAH_VOX_HAS_ANISO 1
+		#define JAH_VOX_ANISO true
+		#define JAH_VOX_SAMPLE_X( c, u, l ) OGRE_SampleLevel( vctProbeX[c], vctProbeSampler, u, l )
+		#define JAH_VOX_SAMPLE_Y( c, u, l ) OGRE_SampleLevel( vctProbeY[c], vctProbeSampler, u, l )
+		#define JAH_VOX_SAMPLE_Z( c, u, l ) OGRE_SampleLevel( vctProbeZ[c], vctProbeSampler, u, l )
+	@else
+		#define JAH_VOX_HAS_ANISO 0
+		#define JAH_VOX_ANISO false
+	@end
+	#define JAH_VOX_INVRES( c ) passBuf.vctProbeParams.vctInvResolution_cascadeMaxLod[c].xyz
+	#define JAH_VOX_MAXLOD( c ) passBuf.vctProbeParams.vctInvResolution_cascadeMaxLod[c].w
+	@property( vct_num_probes > 1 )
+		#define JAH_VOX_FROM_PREV_SCALE( c ) passBuf.vctProbeParams.fromPreviousProbeToNext[(c) - 1][0]
+		#define JAH_VOX_FROM_PREV_OFFSET( c ) passBuf.vctProbeParams.fromPreviousProbeToNext[(c) - 1][1]
+	@end
+	@property( vct_enable_specular_sdf_quality && vct_num_probes <= 1 )
+		#define JAH_VOX_SDF_MAXMIP passBuf.vctProbeParams.specSdfMaxMip
+		#define JAH_VOX_SDF_FACTOR passBuf.vctProbeParams.specularSdfFactor
+	@end
+	@insertpiece( JahVoxelSample )
+	@insertpiece( JahVoxelMarch )
 
 	INLINE void computeVctProbe
 	(
@@ -504,10 +228,7 @@
 	@property( use_parallax_correct_cubemaps )
 		OGRE_INOUT_REF( float3, vctSpecPosVS ),
 	@end
-		VctProbeParams probeParams,
-		OGRE_Texture3D_float4 probes[@value( vct_num_probes )]
-		OGRE_SAMPLER_ARG_DECL( probeSampler )
-		OGRE_VCT_ANISO_PROBE_ARG_DECL
+		VctProbeParams probeParams
 	)
 	{
 		float3 posLS = toVctProbeSpacePos( pos, probeParams );
@@ -602,71 +323,20 @@
 			{
 				float3 dir = toVctProbeSpaceDir( mul( TBN, cone_dirs[i] ), probeParams );
 
-				VctResult result = voxelConeTraceDiff(
-					probeParams, posLS, dir, coneAngleTan, 0.0f, 0.0f, 0.0f, 0.0f, 0,
-                    probes OGRE_SAMPLER_ARG( probeSampler ) OGRE_VCT_ANISO_PROBE_ARG );
-
-				@property( vct_num_probes > 1 )
-					for( int j = 1; j < @value( vct_num_probes ) && result.alpha < 0.95f; ++j )
-					{
-						float startBias =
-							dot( abs( dirLS ), probeParams.vctInvResolution_cascadeMaxLod[j].xyz );
-						float prevCascadeMaxLod = probeParams.vctInvResolution_cascadeMaxLod[j - 1].w;
-
-						// Jahshaka patch 0070: the same one cell, componentwise, in the
-						// NEW cascade's units. See the start bias at the top of this
-						// function for why the scalar form is not one cell.
-						float3 newPosLS =
-							fromVctProbeToNext( result.posLS, j, probeParams ) - dir * startBias +
-							biasDirLS * probeParams.vctInvResolution_cascadeMaxLod[j].xyz;
-
-						VctResult newRes = voxelConeTraceDiff(
-							probeParams, newPosLS, dir, coneAngleTan,
-							max( result.lodLevel - prevCascadeMaxLod, 0.0f ), result.alpha,
-							result.escapeAlpha,
-							result.travelled *
-								dot( abs( dir ),
-									 probeParams.fromPreviousProbeToNext[j - 1][0].xyz ),
-							j,
-							probes OGRE_SAMPLER_ARG( probeSampler )
-								OGRE_VCT_ANISO_PROBE_ARG PARAMS_ARG );
-
-						// JAHSHAKA PATCH 0074: THE TRANSMITTANCE IS ALREADY INSIDE
-						// `newRes.colour`, AND WAS BEING APPLIED TWICE.
-						// voxelConeTraceDiff starts its opacity accumulator at
-						// `startingAlpha` -- this very `result.alpha` -- and every
-						// sample it composites is weighted by `a = 1 - alpha` from
-						// that start, so what it returns is the continuation's
-						// contribution ALREADY reduced by the light this cone has
-						// used up in the cascades before it. Multiplying by
-						// ( 1 - result.alpha ) a second time squares the
-						// transmittance and darkens every outer cascade.
-						// Upstream calls that second factor "de-amplification"
-						// (upstream VctCascadedVoxelizer::update, not in this fork) and pairs it with "more
-						// bounces for coarser cascades" -- a brightness
-						// stabilisation invented when the opacity was doubling per
-						// hop, which patch 0033 fixed at the cause. With 0033 in it
-						// is a pure darkening, so it goes.
-						result.colour += newRes.colour *
-										 probeParams.fromPreviousProbeToNext[j - 1][0].w;
-						// Jahshaka patch 0033 (both lines were `+=`): what the
-						// continuation RETURNS is already the running total for the
-						// whole cone -- voxelConeTraceDiff starts both accumulators
-						// at `startingAlpha`, which is this very `result.alpha` --
-						// so adding it doubles the opacity at every cascade hop. The
-						// colour composite above no longer reads it at all
-						// (patch 0074), so the order of these assignments is free.
-						result.alpha = newRes.alpha;
-						result.escapeAlpha = newRes.escapeAlpha;
-						result.travelled = newRes.travelled;
-						result.lodLevel = newRes.lodLevel;
-						result.posLS = newRes.posLS;
-					}
+				// THE WHOLE WALK, cascade 0 and every hop out (JahVoxelMarch; the
+				// rules and their fork-change numbers are in its header).
+				JahConeResult result = jahConeMarch( posLS, dir, coneAngleTan, biasDirLS, dirLS,
+				@property( vct_cone_dirs == 4 )
+													 JAH_MARCH_LODSTEP );
+				@else
+													 0u );
 				@end
 
 				light.xyz += coneWeights[i] * result.colour;
-				// Jahshaka patch 0021: the ambient escape weight reads the escape
-				// opacity (== result.alpha on the isotropic path).
+				// THE ESCAPE WEIGHT: how much of this cone left the voxels unstopped,
+				// which is the share of the sky it sees. The ESCAPE opacity, not the
+				// colour's (the two differ only where the anisotropic volumes are
+				// read — JahVoxelMarch, the escape estimate).
 				light.w += coneWeights[i] * ( 1.0f - min( 1.0f, result.escapeAlpha / 0.95f ) );
 			}
 			@property( vct_ambient_hemisphere )
@@ -691,102 +361,13 @@
 			// 1 / (1 - 0.02) = 1.020408163
 			float vctRoughness = (pixelData.perceptualRoughness - 0.02f) * 1.020408163f;
 			float specConeAngleTan = max( 0.0f, tan( vctRoughness * 0.5f * M_PI * 0.99f ) );
-			VctResult irrLight = voxelConeTraceSpec( probeParams, posLS, reflVecLS,
-													 specConeAngleTan, 0.0f, 0.0f, 0.0f, 0.0f, 0,
-													 probes OGRE_SAMPLER_ARG( probeSampler )
-													 OGRE_VCT_ANISO_PROBE_ARG );
-
-
-			@property( vct_num_probes > 1 )
-				for( int j = 1; j < @value( vct_num_probes ) && irrLight.alpha < 0.95f; ++j )
-				{
-					float startBias =
-						dot( abs( reflVecLS ), probeParams.vctInvResolution_cascadeMaxLod[j].xyz );
-					float prevCascadeMaxLod = probeParams.vctInvResolution_cascadeMaxLod[j - 1].w;
-
-					// Jahshaka patch 0033 (amended): THE SELF-OCCLUSION BIAS, ONCE PER
-					// CASCADE, on the specular walk too. computeVctProbe starts the
-					// first cone one bias along the GEOMETRIC NORMAL away from the
-					// surface it stands on; this continuation re-enters the march at
-					// the point the previous cascade stopped, which is inside one cell
-					// of the coarser volume, so without the same bias in the NEW
-					// cascade's units the surface occludes its own reflection once per
-					// hop. `startBias` measures the new cascade's voxel along the
-					// REFLECTION ray (upstream's gap term); the bias is along the
-					// normal, so it needs its own measure in the same units.
-					// Jahshaka patch 0070: one cell along the normal, componentwise, in the
-					// new cascade's units. See the start bias above.
-					float3 newPosLS =
-						fromVctProbeToNext( irrLight.posLS, j, probeParams ) - reflVecLS * startBias +
-						biasDirLS * probeParams.vctInvResolution_cascadeMaxLod[j].xyz;
-
-					VctResult newRes = voxelConeTraceSpec(
-						probeParams, newPosLS, reflVecLS, specConeAngleTan,
-						max( irrLight.lodLevel - prevCascadeMaxLod, 0.0f ), irrLight.alpha,
-						irrLight.escapeAlpha,
-						// SEAM-1: THE AGE IS DELIBERATELY NOT CARRIED ON THE
-						// SPECULAR WALK, and 0 here restores upstream's restart
-						// exactly (the trace floors the age at
-						// `vctInvResolution`, which is what `dist` starts at, so
-						// travelled == dist for every step of this march and
-						// every expression is the one it was).
-						//
-						// WHY the diffuse walk carries it and this one must not.
-						// The two marches hand over at different places and
-						// weigh their escape with different estimates. The
-						// diffuse trace exits at `cascadeMaxLod` — the footprint
-						// has grown to exactly the next cascade's cell — and its
-						// ambient rides `escapeAlpha`, patch 0021's `min3` of
-						// the axis composites, which is a deliberately
-						// CONSERVATIVE estimate of what the cone hit. The
-						// specular trace runs to `maxLod = 11`, i.e. until it
-						// leaves the BOX, and its ambient rides the raw
-						// `alpha` — the direction-weighted axis composite, which
-						// over-states occlusion at a coarse mip (that is 0021's
-						// whole finding). Carrying the true age there hands a
-						// cone that has crossed a whole cascade a correspondingly
-						// wide footprint, which is right geometry fed to an
-						// opacity estimate that is already too high: measured on
-						// `gi.cascades` case 7 (a smooth metal plate reflecting
-						// open space under a chain), the ambient in the
-						// reflection fell from 1.00 / 0.85 / 0.85 to
-						// 1.00 / 0.43 / 0.34 at one, two and four cascades.
-						// The honest cure is to give the specular escape the same
-						// `min3` estimate the diffuse one has — measured at
-						// 1.00 / 0.88 / 0.87, better than the pin at every
-						// roughness — but it moves the SINGLE-VOLUME reflection
-						// too, so it is a lane of its own with its own pictures,
-						// not a rider on this one.
-						0.0f,
-						j,
-						probes OGRE_SAMPLER_ARG( probeSampler ) OGRE_VCT_ANISO_PROBE_ARG PARAMS_ARG );
-
-					float cascadeFinalMultiplier = probeParams.fromPreviousProbeToNext[j - 1][0].w;
-					float invNumLods3 = probeParams.fromPreviousProbeToNext[j - 1][1].w;
-
-					float strength =
-						lerp( 0.5f, cascadeFinalMultiplier, saturate( newRes.lodLevel * invNumLods3 ) );
-
-					// JAHSHAKA PATCH 0074: the same double transmittance as the
-					// diffuse composite above, on the specular walk. voxelConeTraceSpec
-					// starts its accumulator at `irrLight.alpha`, so `newRes.colour`
-					// already carries ( 1 - irrLight.alpha ); the second factor was
-					// upstream's de-amplification of the doubled opacity 0033 fixed.
-					irrLight.colour += newRes.colour * strength;
-					// Jahshaka patch 0033 (amended; this line was `+=`): the same
-					// doubling the diffuse loop had. voxelConeTraceSpec starts its
-					// accumulator at `startingAlpha` -- this very `irrLight.alpha` --
-					// so what it returns is already the running total for the whole
-					// cone; adding it doubles the opacity at every hop, the walk exits
-					// through `irrLight.alpha < 0.95f` after one, and specAlpha below
-					// goes to 0 -- the ambient (the sky in a reflection) disappears at
-					// 2+ cascades. The colour composite above no longer reads the
-					// alpha at all (patch 0074).
-					irrLight.alpha = newRes.alpha;
-					irrLight.escapeAlpha = newRes.escapeAlpha;
-					irrLight.lodLevel = newRes.lodLevel;
-					irrLight.posLS = newRes.posLS;
-				}
+			JahConeResult irrLight = jahConeMarch( posLS, reflVecLS, specConeAngleTan, biasDirLS,
+												   reflVecLS,
+			@property( vct_enable_specular_sdf_quality && vct_num_probes <= 1 )
+												   JAH_MARCH_SPECULAR | JAH_MARCH_GAP_ALONG_DIR |
+													   JAH_MARCH_SDF );
+			@else
+												   JAH_MARCH_SPECULAR | JAH_MARCH_GAP_ALONG_DIR );
 			@end
 
 			float specAlpha = ( 1.0f - min( 1.0f, irrLight.alpha / 0.95f ) );
@@ -858,46 +439,8 @@
 		@end
 	}
 
-	INLINE float getPccVctBlendWeight( float3 inPsPos, float3 reflDir, float fDist,
-									   float roughness, float3 cubemapPosVS,
-									   float3 vctSpecPosVS, float vctSpecularW,
-									   float pccVctMinDistanceVar, float invPccVctInvDistanceVar,
-									   float pccCompressedDepth )
-	{
-		//Calculate interesectionPosVS as the intersection between the reflection ray and a cube
-		float3 interesectionPosVS = inPsPos + reflDir * fDist;
-
-		//Now increase interesectionPosVS accuracy (it will no longer be a box)
-		//by taking the compressed PCC depth stored in pccCompressedDepth
-		//The compressed PCC depth is in the form of:
-		//	interesectionPosVS = cubemapPosVS + reflDirLS * (pccCompressedDir * 2.0);
-		interesectionPosVS = cubemapPosVS.xyz +
-							 (interesectionPosVS - cubemapPosVS.xyz) * (pccCompressedDepth * 2.0);
-		float3 vctSpecPosToPccSpecPos = interesectionPosVS - vctSpecPosVS;
-		//Calculate distance to VCT pos and blend based on that
-		float distToVct = max3( abs( vctSpecPosToPccSpecPos ).x,
-								abs( vctSpecPosToPccSpecPos ).y,
-								abs( vctSpecPosToPccSpecPos ).z );
-		float vctLerp = (distToVct - pccVctMinDistanceVar) * invPccVctInvDistanceVar;
-		vctLerp = saturate( vctLerp );
-
-		//vctLerp has quantization artifacts due to 8-bit precision when interpolating via HW
-		//texture filtering present in vctSpecPosVS. They're very noticeable at non-zero roughness.
-		//Hide these artifacts by reusing the PCC compressed depth as a mask.
-		float pccErrorMask = ( pccCompressedDepth - 0.5f ) * ( pccCompressedDepth - 0.5f ) * 4.0f;
-		float roughThreshWeight = roughness - 0.02f;
-		roughThreshWeight = min( roughThreshWeight * 200.0f, 1.0f );
-		vctLerp = lerp( vctLerp, vctLerp * pccErrorMask, roughThreshWeight );
-
-		//At very high roughness, VCT (anisotropic) is much more accurate. Thus bias towards VCT
-		vctLerp = min( vctLerp + roughness * roughness * roughness, 1.0f );
-
-		//If no VCT probe was found, fallback to PCC
-		vctLerp = (vctSpecularW == 0) ? 0.0f : vctLerp;
-
-		return vctLerp;
-	}
 @end
+
 
 @piece( applyVoxelConeTracing )
 	// Jahshaka patch 0083: the cones get their own frame, and THE FRAME IS
@@ -951,9 +494,7 @@
 				@property( use_parallax_correct_cubemaps )
 					 vctSpecPosVS,
 				@end
-					 passBuf.vctProbeParams,
-					 vctProbes OGRE_SAMPLER_ARG( vctProbeSampler )
-					 OGRE_VCT_ANISO_ROOT_PROBE_ARG );
+					 passBuf.vctProbeParams );
 
 	@property( !vct_disable_diffuse )
 		@property( irradiance_field )

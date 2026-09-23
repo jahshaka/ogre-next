@@ -68,20 +68,12 @@ INLINE ushort2 getIrradianceFieldBorderBaseXY( ProbeIndex probeIdx PARAMS_ARG_DE
 	return retVal;
 }
 
-// @property( process_depth )
-
-#define float_ifd float2
-#define OGRE_imageLoadIFD( a, b ) OGRE_imageLoad2D( a, b ).xy
-#define OGRE_imageWriteIFD( a, b, c ) OGRE_imageWrite2D2( a, b, c )
-#define ifd_swizzle xyzw
-
-// @else
-
+// Jahshaka (PHOTON-READER-1): both atlases are four channels now (the depth
+// atlas carries the escape fraction beside its moments), so the border copy is
+// one form for both.
 #define float_ifd float4
 #define OGRE_imageLoadIFD( a, b ) OGRE_imageLoad2D( a, b ).xyzw
 #define OGRE_imageWriteIFD( a, b, c ) OGRE_imageWrite2D4( a, b, c )
-
-// @end
 
 /** Process two pixels each belonging to the top and bottom inner parts of the probes
 	i.e. it swaps:
