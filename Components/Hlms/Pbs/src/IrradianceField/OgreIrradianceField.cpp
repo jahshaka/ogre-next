@@ -162,8 +162,7 @@ namespace Ogre
         mDebugTessellation( 4u ),
         mDebugIfdProbeVisualizer( 0 ),
         mRoot( root ),
-        mSceneManager( sceneManager ),
-        mAlreadyWarned( false )
+        mSceneManager( sceneManager )
     {
         memset( mWorkBoxes, 0, sizeof( mWorkBoxes ) );
         mWindowOffset[0] = mWindowOffset[1] = mWindowOffset[2] = 0u;
@@ -187,6 +186,15 @@ namespace Ogre
 
         HlmsCompute *hlmsCompute = mRoot->getHlmsManager()->getComputeHlms();
         mGenerationJob = hlmsCompute->findComputeJobNoThrow( "IrradianceField/Gen" );
+        if( mGenerationJob )
+        {
+            // THE INTEGRATION MODES, ONE DEFINITION (Jahshaka, PHOTON-FIELD-ROTATE-1):
+            // the job compares sweep.x against these properties, written from the enum.
+            mGenerationJob->setProperty( "ifd_mode_fresh", IntegrateFresh );
+            mGenerationJob->setProperty( "ifd_mode_change", IntegrateChange );
+            mGenerationJob->setProperty( "ifd_mode_refine", IntegrateRefine );
+            mGenerationJob->setProperty( "ifd_mode_invalidate", IntegrateInvalidate );
+        }
 
         if( !mGenerationJob )
         {
@@ -399,15 +407,7 @@ namespace Ogre
         const uint32 irradProbeRes = mSettings.mIrradianceResolution;
         const uint32 numRaysPerProbe = mSettings.getNumRaysPerProbe();
 
-        // Jahshaka (PHOTON-FIELD-ROTATE-1): no ray belongs to a texel any more, so
-        // upstream's per-texel ray counts describe nothing (kept in the struct: it is the
-        // prefix the raster path's integration job declares).
-        mIfGenParams.invNumRaysPerPixel = 1.0f / float( numRaysPerProbe );
-        mIfGenParams.invNumRaysPerIrradiancePixel = 0.0f;
-        // Uploaded with the rest of the struct on every update, so it must hold
-        // something: the voxel branch never wrote it (only the raster branch's
-        // memset did), so the generation job read an uninitialised float here.
-        mIfGenParams.unused0 = 0.0f;
+        mIfGenParams.padding0 = 0u;
 
         // THE BIN'S CONE, DERIVED FROM THE RAY COUNT (Jahshaka, PHOTON-WRITER-1). The
         // probe's N rays tile the sphere, each standing for a bin of 4 pi / N sr, and the
@@ -422,15 +422,13 @@ namespace Ogre
         mIfGenParams.coneAngleTan =
             Math::Tan( Math::ACos( 1.0f - 2.0f / static_cast<float>( numRaysPerProbe ) ).valueRadians() );
         mIfGenParams.numProcessedProbes = 0u;
-        mIfGenParams.unused1 = 0.0f;
-        mIfGenParams.unused2 = 0.0f;
         fillChainParams();
         fillEnvironmentParams();
 
-        mIfGenParams.numProbes_threadsPerRow.x = mSettings.mNumProbes[0];
-        mIfGenParams.numProbes_threadsPerRow.y = mSettings.mNumProbes[1];
-        mIfGenParams.numProbes_threadsPerRow.z = mSettings.mNumProbes[2];
-        mIfGenParams.numProbes_threadsPerRow.w = 0u;
+        mIfGenParams.numProbes.x = mSettings.mNumProbes[0];
+        mIfGenParams.numProbes.y = mSettings.mNumProbes[1];
+        mIfGenParams.numProbes.z = mSettings.mNumProbes[2];
+        mIfGenParams.numProbes.w = 0u;
 
         const VctVoxelizerSourceBase *voxelizer = mVctLighting->getVoxelizer();
         Matrix4 irrProbeToVctTransform;
@@ -506,7 +504,6 @@ namespace Ogre
         mFieldOrigin -= probeBlockSize;
         mFieldSize += probeBlockSize * 2.0f;
 
-        mAlreadyWarned = false;
         mNumProbesProcessed = 0u;
         mWindowOffset[0] = mWindowOffset[1] = mWindowOffset[2] = 0u;
         setWholeWork();
@@ -1017,12 +1014,13 @@ namespace Ogre
         }
         else
         {
+            // The raster path's integration jobs, one probe per group (the voxel path
+            // never dispatches them).
             numThreadGroupsY = probesPerFrame / 65535u + 1u;
             numThreadGroupsX = probesPerFrame / numThreadGroupsY;
+            mDepthIntegrationJob->setNumThreadGroups( numThreadGroupsX, numThreadGroupsY, 1u );
+            mColourIntegrationJob->setNumThreadGroups( numThreadGroupsX, numThreadGroupsY, 1u );
         }
-        // The raster path's integration jobs, one probe per group.
-        mDepthIntegrationJob->setNumThreadGroups( numThreadGroupsX, numThreadGroupsY, 1u );
-        mColourIntegrationJob->setNumThreadGroups( numThreadGroupsX, numThreadGroupsY, 1u );
 
         if( !mSettings.isRaster() && mVctLighting )
         {
@@ -1037,7 +1035,6 @@ namespace Ogre
         }
 
         mIfGenParams.numProcessedProbes = mNumProbesProcessed;
-        mIfGenParams.numProbes_threadsPerRow.w = 0u;
         {
             // Jahshaka (PHOTON-WRITER-1): the work's boxes and the window's offset.
             uint32 firstPos = 0u;

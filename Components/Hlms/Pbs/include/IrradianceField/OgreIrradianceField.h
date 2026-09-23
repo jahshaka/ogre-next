@@ -177,22 +177,17 @@ namespace Ogre
     protected:
         struct IrradianceFieldGenParams
         {
-            float  invNumRaysPerPixel;
-            float  invNumRaysPerIrradiancePixel;
-            float  unused0;
-            uint32 probesPerRow;  // Used by integration CS
-
+            // Jahshaka (PHOTON-FIELD-ROTATE-1): upstream's per-texel ray counts
+            // (invNumRaysPerPixel / invNumRaysPerIrradiancePixel), the old cone start
+            // bias pair and the threads-per-row packing are gone - nothing reads them.
+            // One float4 of scalars, then the counts (w unused). The raster path's
+            // integration job declares the same prefix.
+            uint32 probesPerRow;  // groups per dispatch row (one probe per group)
             float  coneAngleTan;
             uint32 numProcessedProbes;
-            // Jahshaka (PHOTON-READER-1): these two were the cone march's start bias
-            // and its inverse, derived from cascade 0 alone. The generation job now
-            // marches the whole cascade chain through the one voxel reader, which
-            // takes each cascade's own inverse resolution from the chain block below.
-            float unused1;
-            float unused2;
+            uint32 padding0;
 
-            // float invFieldResolution;
-            uint4 numProbes_threadsPerRow;
+            uint4 numProbes;
 
             // Jahshaka (PHOTON-WRITER-1): THE WORK, as up to three disjoint boxes of
             // probe SLOTS (xyz = the box's first slot per axis, wrapping at the
@@ -328,7 +323,6 @@ namespace Ogre
 
         Root         *mRoot;
         SceneManager *mSceneManager;
-        bool          mAlreadyWarned;
 
         void fillDirections( float *RESTRICT_ALIAS outBuffer );
 
