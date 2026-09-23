@@ -167,6 +167,8 @@ namespace Ogre
     IrradianceField::IrradianceField( Root *root, SceneManager *sceneManager ) :
         IdObject( Id::generateNewId<IrradianceField>() ),
         mNumProbesProcessed( 0u ),
+        mNumWorkBoxes( 0u ),
+        mWorkTotal( 0u ),
         mFieldOrigin( Vector3::ZERO ),
         mFieldSize( Vector3::ZERO ),
         mDepthMaxIntegrationTapsPerPixel( 0u ),
@@ -194,6 +196,8 @@ namespace Ogre
         mSceneManager( sceneManager ),
         mAlreadyWarned( false )
     {
+        memset( mWorkBoxes, 0, sizeof( mWorkBoxes ) );
+        mWindowOffset[0] = mWindowOffset[1] = mWindowOffset[2] = 0u;
 #if OGRE_NO_JSON
         OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
                      "To use IrradianceField, Ogre must be build with JSON support "
@@ -559,6 +563,8 @@ namespace Ogre
 
         mAlreadyWarned = false;
         mNumProbesProcessed = 0u;
+        mWindowOffset[0] = mWindowOffset[1] = mWindowOffset[2] = 0u;
+        setWholeWork();
         createTextures();
         setIrradianceFieldGenParams();
 
@@ -707,6 +713,10 @@ namespace Ogre
     {
         mFieldOrigin = fieldOrigin;
         mFieldSize = fieldSize;
+        // Jahshaka (PHOTON-WRITER-1): a RE-PLACEMENT keeps no probe, so the window
+        // starts over at slot 0 and the work is the whole grid.
+        mWindowOffset[0] = mWindowOffset[1] = mWindowOffset[2] = 0u;
+        setWholeWork();
 
         // The same enlargement initialize() applies, for the same reason (limited
         // information at the borders), so that a moved field is placed exactly as a
@@ -859,11 +869,106 @@ namespace Ogre
         setIrradianceFieldGenParams();
     }
     //-------------------------------------------------------------------------
-    void IrradianceField::reset() { mNumProbesProcessed = 0u; }
+    void IrradianceField::reset()
+    {
+        setWholeWork();
+        mNumProbesProcessed = 0u;
+    }
+    //-------------------------------------------------------------------------
+    void IrradianceField::setWholeWork()
+    {
+        mNumWorkBoxes = 1u;
+        for( size_t i = 0u; i < 3u; ++i )
+        {
+            mWorkBoxes[0].lo[i] = 0u;
+            mWorkBoxes[0].size[i] = mSettings.mNumProbes[i];
+        }
+        mWorkTotal = mSettings.getTotalNumProbes();
+    }
+    //-------------------------------------------------------------------------
+    Vector3 IrradianceField::getProbeSpacing() const
+    {
+        return mFieldSize / mSettings.getNumProbes3f();
+    }
+    //-------------------------------------------------------------------------
+    void IrradianceField::scrollWindow( const int32 delta[3] )
+    {
+        OGRE_ASSERT_LOW( !mSettings.isRaster() );
+        const Vector3 spacing = getProbeSpacing();
+        uint32 enteredLo[3];   // per axis: the first ENTERED slot (valid where delta != 0)
+        uint32 enteredNum[3];
+        for( size_t a = 0u; a < 3u; ++a )
+        {
+            const int32 n = static_cast<int32>( mSettings.mNumProbes[a] );
+            const int32 d = delta[a];
+            OGRE_ASSERT_LOW( d > -n && d < n && "scrollWindow: a whole-grid move keeps nothing" );
+            mFieldOrigin[a] += Real( d ) * spacing[a];
+            // The new window's first probe is the old one's d-th: its slot moves by d.
+            const int32 newOffset = ( ( static_cast<int32>( mWindowOffset[a] ) + d ) % n + n ) % n;
+            mWindowOffset[a] = static_cast<uint32>( newOffset );
+            // The ENTERED planes, window-local: the far end for a positive move
+            // (locals n-d .. n-1), the near end for a negative one (0 .. -d-1).
+            const int32 firstLocal = d > 0 ? n - d : 0;
+            enteredLo[a] = static_cast<uint32>( ( firstLocal + newOffset ) % n );
+            enteredNum[a] = static_cast<uint32>( d > 0 ? d : -d );
+        }
+        // THE WORK: one box per moved axis, DISJOINT (an integration job convolves a
+        // probe's tile in place, so no probe may be integrated twice by one
+        // dispatch). Box x takes the entered x planes whole; box y the entered y
+        // planes minus box x's columns; box z the rest.
+        mNumWorkBoxes = 0u;
+        mWorkTotal = 0u;
+        uint32 keptLo[3], keptNum[3];   // per axis: the slots NOT entered on it
+        for( size_t a = 0u; a < 3u; ++a )
+        {
+            const uint32 n = mSettings.mNumProbes[a];
+            keptLo[a] = ( enteredLo[a] + enteredNum[a] ) % n;
+            keptNum[a] = n - enteredNum[a];
+        }
+        for( size_t a = 0u; a < 3u; ++a )
+        {
+            if( !enteredNum[a] )
+                continue;
+            ProbeBox &box = mWorkBoxes[mNumWorkBoxes++];
+            uint32 count = 1u;
+            for( size_t b = 0u; b < 3u; ++b )
+            {
+                if( b == a )
+                {
+                    box.lo[b] = enteredLo[b];
+                    box.size[b] = enteredNum[b];
+                }
+                else if( b < a )
+                {
+                    box.lo[b] = keptLo[b];      // an earlier box took its entered planes
+                    box.size[b] = keptNum[b];
+                }
+                else
+                {
+                    box.lo[b] = 0u;             // a later axis: all of it
+                    box.size[b] = mSettings.mNumProbes[b];
+                }
+                count *= box.size[b];
+            }
+            mWorkTotal += count;
+        }
+        mNumProbesProcessed = 0u;
+        // The probe-to-voxel transform reads the (moved) origin.
+        if( mVctLighting )
+            setIrradianceFieldGenParams();
+        if( mDebugIfdProbeVisualizer )
+        {
+            SceneNode *sceneNode = mDebugIfdProbeVisualizer->getParentSceneNode();
+            sceneNode->setPosition( mFieldOrigin );
+            sceneNode->getCreator()->notifyStaticDirty( sceneNode );
+        }
+    }
     //-------------------------------------------------------------------------
     void IrradianceField::update( uint32 probesPerFrame )
     {
-        const uint32 totalNumProbes = mSettings.getTotalNumProbes();
+        // Jahshaka (PHOTON-WRITER-1): the WORK, not the whole grid (the two are the
+        // same after reset()).
+        const uint32 totalNumProbes = mWorkTotal;
         if( mNumProbesProcessed >= totalNumProbes )
             return;
 
@@ -891,9 +996,14 @@ namespace Ogre
 
         const uint32 numRays = probesPerFrame * depthResolution * depthResolution * numRaysPerPixel;
 
-        OGRE_ASSERT_LOW( ( numRays % threadsPerGroup ) == 0u || mSettings.isRaster() );
-
-        const uint32 numWorkGroups = numRays / threadsPerGroup;
+        // Jahshaka (PHOTON-WRITER-1): ROUNDED UP on the voxel path. A scrolled plane's
+        // probe count need not fill the last group (upstream asserted it never had to:
+        // the whole field and its power-of-two batches always did), and a truncated
+        // dispatch silently drops the last probes' rays; the generation job writes
+        // nothing past the work's end instead (windowOffset.w).
+        const uint32 numWorkGroups = mSettings.isRaster()
+                                         ? numRays / threadsPerGroup
+                                         : ( numRays + threadsPerGroup - 1u ) / threadsPerGroup;
 
         // There's a leftover the first dispatch is not currently handling,
         // i.e. numThreadGroupsX * numThreadGroupsY * threadsPerGroup != numRays
@@ -923,6 +1033,31 @@ namespace Ogre
 
         mIfGenParams.numProcessedProbes = mNumProbesProcessed;
         mIfGenParams.numProbes_threadsPerRow.w = numThreadGroupsX * threadsPerGroup;
+        {
+            // Jahshaka (PHOTON-WRITER-1): the work's boxes and the window's offset.
+            uint32 firstPos = 0u;
+            for( size_t i = 0u; i < 3u; ++i )
+            {
+                const bool used = i < mNumWorkBoxes;
+                const ProbeBox &b = mWorkBoxes[i];
+                mIfGenParams.boxLo[i].x = used ? b.lo[0] : 0u;
+                mIfGenParams.boxLo[i].y = used ? b.lo[1] : 0u;
+                mIfGenParams.boxLo[i].z = used ? b.lo[2] : 0u;
+                mIfGenParams.boxLo[i].w = used ? firstPos : 0xFFFFFFFFu;
+                mIfGenParams.boxSize[i].x = used ? b.size[0] : 1u;
+                mIfGenParams.boxSize[i].y = used ? b.size[1] : 1u;
+                mIfGenParams.boxSize[i].z = used ? b.size[2] : 1u;
+                mIfGenParams.boxSize[i].w = 0u;
+                if( used )
+                    firstPos += b.size[0] * b.size[1] * b.size[2];
+            }
+            mIfGenParams.windowOffset.x = mWindowOffset[0];
+            mIfGenParams.windowOffset.y = mWindowOffset[1];
+            mIfGenParams.windowOffset.z = mWindowOffset[2];
+            // THE WORK'S END for this dispatch, in list positions: a ray past it
+            // writes nothing (the dispatch is rounded up to whole groups).
+            mIfGenParams.windowOffset.w = mNumProbesProcessed + probesPerFrame;
+        }
         mIfGenParams.probesPerRow = numIntegrationTGroupsX * 1u;  // There's one probe per group
         *ifGenParams = mIfGenParams;
 

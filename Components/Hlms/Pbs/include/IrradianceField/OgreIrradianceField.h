@@ -174,6 +174,21 @@ namespace Ogre
             // float invFieldResolution;
             uint4 numProbes_threadsPerRow;
 
+            // Jahshaka (PHOTON-WRITER-1): THE WORK, as up to three disjoint boxes of
+            // probe SLOTS (xyz = the box's first slot per axis, wrapping at the
+            // probe count; w = the box's first position in the work list, all ones
+            // for an unused box) and their sizes (xyz; w unused). A list position
+            // p maps to the box it falls in and from there to a slot. The whole
+            // field is one box at slot 0 with the grid's own size.
+            uint4 boxLo[3];
+            uint4 boxSize[3];
+            // ...and THE WINDOW: the field is a toroidal window over a probe lattice
+            // fixed in the world, and a probe's SLOT (its atlas tile) is its
+            // lattice coordinate modulo the probe count; xyz is the slot of the
+            // window's first probe (the window-local probe i lives at slot
+            // (i + offset) mod N). w unused.
+            uint4 windowOffset;
+
             float4x4 irrProbeToVctTransform;
 
             // Jahshaka (PHOTON-READER-1): THE CASCADE CHAIN the probe rays walk, in the
@@ -203,9 +218,25 @@ namespace Ogre
         };
 
         IrradianceFieldSettings mSettings;
-        /// Number of probes processed so far.
-        /// We process the entire field across multiple frames.
+        /// Number of probes processed so far, as a position in the WORK (the boxes
+        /// below). We process the work across multiple frames.
         uint32 mNumProbesProcessed;
+
+        /// Jahshaka (PHOTON-WRITER-1): the work the next update() calls walk - up to
+        /// three disjoint boxes of probe slots (reset(): the whole grid; a scroll:
+        /// the planes that entered the window) - and its probe count.
+        struct ProbeBox
+        {
+            uint32 lo[3];
+            uint32 size[3];
+        };
+        ProbeBox mWorkBoxes[3];
+        uint32   mNumWorkBoxes;
+        uint32   mWorkTotal;
+        /// The slot of the window's first probe, per axis (see IrradianceFieldGenParams).
+        uint32 mWindowOffset[3];
+
+        void setWholeWork();
 
         Vector3 mFieldOrigin;
         Vector3 mFieldSize;
@@ -324,6 +355,33 @@ namespace Ogre
             The volume's size, same meaning as initialize()'s.
         */
         void setFieldVolume( const Vector3 &fieldOrigin, const Vector3 &fieldSize );
+
+        /** Jahshaka (PHOTON-WRITER-1): SCROLLS the field's window by whole probe
+            spacings, keeping every probe that stays inside it.
+
+            The field is a toroidal window over a probe lattice fixed in the world: a
+            probe's atlas tile is its lattice coordinate modulo the probe count, so a
+            move of d spacings on an axis leaves N - |d| planes of probes exactly where
+            they were in the atlas and in the world - their values stand - and hands
+            the tiles of the |d| planes that left the window to the |d| planes that
+            entered it on the far side. Those are the only ones this makes the next
+            update() integrate: the work becomes the entered planes (at most three
+            disjoint boxes, one per moved axis), and a caller that must show them at
+            once converges them inline with update( getWorkProbeCount() ).
+        @remarks
+            A move of N or more spacings on any axis keeps nothing: use
+            setFieldVolume() and converge the whole field. The window's authored origin
+            moves by exactly d spacings; the caller owns snapping a target to it.
+        @param delta
+            The move, in probe spacings, per axis.
+        */
+        void scrollWindow( const int32 delta[3] );
+        /// The slot of the window's first probe per axis (a reader's modulo offset).
+        const uint32 *getWindowOffset() const { return mWindowOffset; }
+        /// The probe spacing (the enlarged volume's size over the probe counts).
+        Vector3 getProbeSpacing() const;
+        /// How many probes the current work holds (the whole grid after reset()).
+        uint32 getWorkProbeCount() const { return mWorkTotal; }
 
         /** Re-points the field at a VctLighting, and re-binds the generation job to the
             light voxel textures that object owns RIGHT NOW.
