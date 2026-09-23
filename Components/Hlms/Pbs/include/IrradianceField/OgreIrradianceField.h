@@ -60,9 +60,11 @@ namespace Ogre
     {
         /** Number of rays per pixel in terms of mDepthProbeResolution.
 
-            e.g. if mNumRaysPerPixel = 4, mDepthProbeResolution = 16 and mIrradianceResolution = 8,
-            then the depth texture has 4 rays per pixel, but the irradiance texture will have
-            16 rays per pixel
+            Jahshaka (PHOTON-FIELD-ROTATE-1): the probe shoots
+            mDepthProbeResolution^2 * mNumRaysPerPixel rays (getNumRaysPerProbe) in a
+            spherical-Fibonacci set rotated per integration, and EVERY texel of both
+            atlases integrates ALL of them (DDGI's estimator) - a ray belongs to no
+            texel. At most 1024 rays a probe (one work group per probe).
         */
         uint16 mNumRaysPerPixel;
         /// Square resolution of a single probe, depth variance, e.g. 8u means each probe is 8x8.
@@ -78,11 +80,6 @@ namespace Ogre
 
         /// Use rasterization to generate light & depth data, instead of voxelization
         RasterParams mRasterParams;
-
-    protected:
-        /// mSubsamples.size() == mNumRaysPerPixel
-        /// Contains the offsets for generating the rays
-        vector<Vector2>::type mSubsamples;
 
     public:
         IrradianceFieldSettings();
@@ -100,8 +97,6 @@ namespace Ogre
 
         bool isRaster() const;
 
-        void createSubsamples();
-
         uint32 getTotalNumProbes() const;
 
         void getDepthProbeFullResolution( uint32 &outWidth, uint32 &outHeight ) const;
@@ -113,11 +108,10 @@ namespace Ogre
         uint8 getBorderedIrradResolution() const;
         uint8 getBorderedDepthResolution() const;
 
-        uint32 getNumRaysPerIrradiancePixel() const;
+        /// Jahshaka (PHOTON-FIELD-ROTATE-1): mDepthProbeResolution^2 * mNumRaysPerPixel.
+        uint32 getNumRaysPerProbe() const;
 
         Vector3 getNumProbes3f() const;
-
-        const vector<Vector2>::type &getSubsamples() const { return mSubsamples; }
     };
 
     /**
@@ -153,6 +147,28 @@ namespace Ogre
         /// The longest cascade chain the generation job walks (VctLighting supports
         /// fewer than this). The shader's parameter block is sized by it.
         static const uint32 kMaxChainCascades = 8u;
+
+        /** Jahshaka (PHOTON-FIELD-ROTATE-1): HOW AN INTEGRATION TREATS A PROBE'S HISTORY.
+
+            A probe's value is the MEAN of its integrations since its history last
+            restarted: integration m (0-based) blends with weight 1 / (m + 1), and the
+            count m lives in the irradiance atlas's alpha (so the pixel's reader knows a
+            probe that has never been integrated: count 0). Each integration shoots the
+            probe's ray set under a fresh random rotation, so the mean converges on the
+            irradiance instead of on one fixed set's aliasing.
+        */
+        enum IntegrationMode
+        {
+            /// The probe has no history (a build, a re-placement, a probe that entered
+            /// the window): the integration IS the value, and the count restarts at 1.
+            IntegrateFresh,
+            /// The radiance the probe integrates changed (a light, a re-voxelisation in
+            /// place): the history keeps at most `keepOnChange` samples' weight.
+            IntegrateChange,
+            /// Nothing changed: a probe below the target sample count takes one more
+            /// sample, one at the target is skipped (its work group exits before a ray).
+            IntegrateRefine
+        };
 
     protected:
         struct IrradianceFieldGenParams
@@ -203,6 +219,13 @@ namespace Ogre
             // then the nine SH coefficients, world axes (w unused).
             float4 envGainMips;
             float4 envSh[9];
+
+            // Jahshaka (PHOTON-FIELD-ROTATE-1): THIS INTEGRATION'S RAY ROTATION (rows of
+            // a 3x3, w unused) - a uniformly random rotation drawn from the integration
+            // counter - and its history rule: x = IntegrationMode, y = the target
+            // sample count, z = keepOnChange, w = the integration counter.
+            float4 rayRotation[3];
+            uint4  sweep;
         };
 
         struct IfdBorderMirrorParams
@@ -238,6 +261,18 @@ namespace Ogre
 
         void setWholeWork();
 
+        /// Jahshaka (PHOTON-FIELD-ROTATE-1): the history rule of the current work, and
+        /// the policy it is applied with (setIntegrationPolicy).
+        IntegrationMode mWorkMode;
+        uint32          mTargetSamples;
+        uint32          mKeepOnChange;
+        bool            mRotateRays;
+        /// Counts every generation dispatch; seeds its ray rotation.
+        uint32 mIntegrationSerial;
+        /// Whole-grid refinements owed after the current work (every event - a build,
+        /// a re-placement, a scroll, a change - owes mTargetSamples - 1 of them).
+        uint32 mRefinesOwed;
+
         Vector3 mFieldOrigin;
         Vector3 mFieldSize;
 
@@ -258,6 +293,17 @@ namespace Ogre
 
         IrradianceFieldGenParams mIfGenParams;
         ConstBufferPacked       *mIfGenParamsBuffer;
+        /// Jahshaka (PHOTON-FIELD-ROTATE-1): ONE PARAMETER BUFFER PER DISPATCH OF A FRAME.
+        /// A dynamic buffer maps ONCE a frame (BufferPacked::map), and the dispatches
+        /// of one frame execute after it has been recorded, so every update() of a
+        /// frame but the last ran with the LAST one's parameters - its work, its ray
+        /// rotation, its history rule - as soon as a frame integrated twice (an inline
+        /// convergence and its refinements, a scroll and a refinement). The ring hands
+        /// each dispatch of a frame its own buffer; [0] is mIfGenParamsBuffer (the
+        /// raster path's integration jobs bind that one).
+        vector<ConstBufferPacked *>::type mIfGenParamsRing;
+        uint32                            mIfGenParamsRingFrame;
+        uint32                            mIfGenParamsRingNext;
         TexBufferPacked         *mDirectionsBuffer;
         TexBufferPacked         *mDepthTapsIntegrationBuffer;
         TexBufferPacked         *mColourTapsIntegrationBuffer;
@@ -409,7 +455,47 @@ namespace Ogre
         /// again.
         ///
         /// If major changes happens to VctLighting, then call initialize() again
+        ///
+        /// Jahshaka (PHOTON-FIELD-ROTATE-1): the whole grid, as a CHANGE (the history
+        /// keeps at most keepOnChange samples' weight).
         void reset();
+
+        /** Jahshaka (PHOTON-FIELD-ROTATE-1): the whole grid again, as a REFINEMENT: every
+            probe below the target sample count takes one more sample under a new ray
+            rotation; a probe at the target costs its work group one texel read.
+        */
+        void refine();
+
+        /** Jahshaka (PHOTON-FIELD-ROTATE-1): the estimator's history rule.
+        @param targetSamples
+            How many integrations a probe's mean takes before a refinement leaves it
+            alone (>= 1).
+        @param keepOnChange
+            How many samples' weight the history keeps when the radiance changed
+            (0 = the first integration after a change replaces the probe's value).
+        @param rotateRays
+            False shoots the same ray set every integration (a MEASUREMENT arm: the
+            static set's aliasing).
+        */
+        void setIntegrationPolicy( uint32 targetSamples, uint32 keepOnChange, bool rotateRays );
+        uint32 getTargetSamples() const { return mTargetSamples; }
+        IntegrationMode getWorkMode() const { return mWorkMode; }
+        /// Every probe of the current work has been integrated once.
+        bool isWorkDone() const { return mNumProbesProcessed >= mWorkTotal; }
+        /// Probes of the current work not integrated yet.
+        uint32 getWorkRemaining() const
+        {
+            return mNumProbesProcessed >= mWorkTotal ? 0u : mWorkTotal - mNumProbesProcessed;
+        }
+        /** Jahshaka (PHOTON-FIELD-ROTATE-1): THE FIELD'S CONVERGENCE SCHEDULE. Every event
+            that gives probes a new sample - initialize(), setFieldVolume(), scrollWindow(),
+            reset() - owes mTargetSamples - 1 whole-grid refinements after its own work;
+            once the current work is done this starts the next one (refine()) and returns
+            true, or returns false when none is owed (the field has converged and costs
+            nothing until the next event).
+        */
+        bool beginOwedRefinement();
+        uint32 getRefinesOwed() const { return mRefinesOwed; }
 
         void update( uint32 probesPerFrame = 200u );
 
