@@ -28,6 +28,13 @@ vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbes[@value( hl
 	@add( vctTexUnit, hlms_num_vct_cascades )
 @end
 
+// Jahshaka (PHOTON-ENV-1): the environment cube, after every volume, while the
+// lighting has one (IrradianceField::bindChainToGenerationJob).
+@property( jah_env )
+	vulkan_layout( ogre_t@value(vctTexUnit) ) uniform textureCube envCube;
+	@add( vctTexUnit, 1 )
+@end
+
 layout( vulkan( ogre_u0 ) vk_comma @insertpiece(uav0_pf_type) )
 uniform restrict writeonly image2D irradianceField;
 
@@ -35,8 +42,6 @@ layout( vulkan( ogre_u1 ) vk_comma @insertpiece(uav1_pf_type) )
 uniform restrict writeonly image2D irradianceFieldDepth;
 
 shared float4 g_diffuseDepth[@value( threads_per_group_x ) * @value( threads_per_group_y ) * @value( threads_per_group_z )];
-// Jahshaka (PHOTON-READER-1): each ray's escape fraction, reduced beside its depth.
-shared float g_escape[@value( threads_per_group_x ) * @value( threads_per_group_y ) * @value( threads_per_group_z )];
 
 layout( local_size_x = @value( threads_per_group_x ),
 		local_size_y = @value( threads_per_group_y ),

@@ -52,8 +52,9 @@
 @piece( BodyCS )
 	ProbeIndex probeIdx = getProbeIdx( gl_WorkGroupID.xy PARAMS_ARG );
 	ushort2 uv = getUv( probeIdx, gl_LocalInvocationID.xy );
-	// Jahshaka (PHOTON-READER-1): the depth atlas carries four channels (the
-	// moments and the escape fraction), so both atlases integrate all four.
+	// Jahshaka: all four channels, whatever the atlas holds (the irradiance atlas
+	// is RGBA16_FLOAT, the depth atlas RG32_FLOAT: a missing channel loads as 0/1
+	// and is written back unread).
 	float4 pixelValue = OGRE_imageLoad2D( irradianceField, uv.xy ).xyzw;
 
 	g_sharedValues[gl_LocalInvocationIndex] = pixelValue;

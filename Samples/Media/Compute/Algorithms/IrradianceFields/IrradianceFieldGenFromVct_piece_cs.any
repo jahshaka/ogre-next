@@ -24,6 +24,13 @@
 		// IrradianceField::kMaxChainCascades = 8.
 		float4 vctInvResMaxLod[8];
 		float4 vctFromPrev[14];
+
+		// Jahshaka (PHOTON-ENV-1): THE ONE ENVIRONMENT an escaping probe ray sees,
+		// in cascade 0's STORED units (IrradianceField::update divides by its
+		// decode multiplier): rgb = the environment light's gain on the cube,
+		// w = the cube's mip count; and its nine-band SH, world axes.
+		float4 envGainMips;
+		float4 envSh[9];
 	}
 	CONST_BUFFER_STRUCT_END( p );
 
@@ -66,6 +73,30 @@
 	#define JAH_VOX_FROM_PREV_OFFSET( c ) p.vctFromPrev[( (c) - 1 ) * 2 + 1]
 	@insertpiece( JahVoxelSample )
 	@insertpiece( JahVoxelMarch )
+
+	// THE ONE ENVIRONMENT (Jahshaka, PHOTON-ENV-1; jah_environment.glsl, wrapped
+	// into the piece JahEnvironment): the cube at the unit after every volume
+	// (IrradianceField::bindChainToGenerationJob, job property jah_env), sampled
+	// with the volumes' sampler.
+	@property( jah_env )
+		#define JAH_ENV_CUBE_ON true
+		#define JAH_ENV_SAMPLE( d, l ) OGRE_SampleLevel( envCube, probeSampler, d, l ).xyz
+	@else
+		#define JAH_ENV_CUBE_ON false
+		#define JAH_ENV_SAMPLE( d, l ) float3( 0, 0, 0 )
+	@end
+	#define JAH_ENV_MIPS p.envGainMips.w
+	#define JAH_ENV_GAIN p.envGainMips.xyz
+	#define JAH_ENV_SH_C0 p.envSh[0].xyz
+	#define JAH_ENV_SH_C1 p.envSh[1].xyz
+	#define JAH_ENV_SH_C2 p.envSh[2].xyz
+	#define JAH_ENV_SH_C3 p.envSh[3].xyz
+	#define JAH_ENV_SH_C4 p.envSh[4].xyz
+	#define JAH_ENV_SH_C5 p.envSh[5].xyz
+	#define JAH_ENV_SH_C6 p.envSh[6].xyz
+	#define JAH_ENV_SH_C7 p.envSh[7].xyz
+	#define JAH_ENV_SH_C8 p.envSh[8].xyz
+	@insertpiece( JahEnvironment )
 
 	#define RayIndex uint
 	#define ProbeIndex uint
@@ -185,33 +216,30 @@
 	// the Chebyshev visibility test, and an unbounded miss distance (the chain's
 	// exit is ~8x further) blows up the variance of every texel that mixes hits
 	// and misses - a probe beside a wall, rays over its top - which is where the
-	// test has to bite (DDGI bounds a miss the same way). The escape channel below
-	// keeps the ray's true opacity.
-	float4 diffuse = float4( ray.colour,
+	// test has to bite (DDGI bounds a miss the same way).
+	// THE SKY IS PART OF THE PROBE'S IRRADIANCE (Jahshaka, PHOTON-ENV-1). The share
+	// of this ray the voxels did not stop — `1 - min( 1, opacity / 0.95 )`, the
+	// same escape the pixel's cones weight theirs by — sees the ONE ENVIRONMENT in
+	// the ray's direction at the ray's own aperture (the solid angle 2 pi / N of a
+	// probe's N rays), and the cosine integration below carries it into the
+	// irradiance atlas beside the bounce: one integral of everything the probe
+	// sees. THE OPACITY IS THE RAY'S OWN COMPOSITE (`alpha`), NOT THE MARCH'S
+	// OCCUPANCY ESTIMATE, and that is physics: the occupancy estimate exists for a
+	// cone that STARTS ON A SURFACE (in the anisotropic volumes the directional
+	// composite of its own slab's cell reads opaque at every coarser mip). A probe
+	// ray starts in free space and CROSSES what it meets, and for a ray crossing a
+	// wall the directional composite IS the transmittance — measured on
+	// gi.ddgi_ambient's sealed room (PHOTON-READER-1): the occupancy estimate let
+	// 11/255 of sky through the walls, the composite 1/255. The probe's directions
+	// are world directions (the march reads them as cascade 0's, upstream's own
+	// approximation for a box that is not a cube); the environment reads them as
+	// what they are.
+	const float escape = 1.0 - min( 1.0, ray.alpha / 0.95 );
+	const float3 sky = escape * jahEnvCone( normalize( dir ), p.coneAngleTan );
+	float4 diffuse = float4( ray.colour + sky,
 							 min( ray.travelledC0 + length( startBias ), 1.414213562 ) *
 								 dot( abs( dir ), float3( p.numProbes.xyz ) ) );
 	g_diffuseDepth[gl_LocalInvocationIndex] = diffuse;
-	// THE ESCAPE FRACTION: the share of this ray the voxels did not stop, which is
-	// the share of the sky it sees - the quantity the pixel's cones weight their
-	// ambient by (`light.w`), in the same form, 1 - min( 1, opacity / 0.95 ).
-	// Stored, integrated over the cosine lobe with the depth moments, and read by
-	// the pixel as the probe's sky visibility.
-	//
-	// THE OPACITY IS THE RAY'S OWN COMPOSITE (`alpha`), NOT THE MARCH'S OCCUPANCY
-	// ESTIMATE (`escapeAlpha`), and that is physics, not taste. The occupancy
-	// estimate exists for a cone that STARTS ON A SURFACE: in the anisotropic
-	// volumes the directional composite of the cell holding its own slab reads
-	// opaque at every coarser mip, and the cone would occlude itself. A probe ray
-	// starts in free space and CROSSES what it meets; for a ray crossing a wall
-	// the directional composite IS the transmittance, and the occupancy estimate
-	// (the min over three axis composites, about 1/N for a slab one layer thick
-	// in an N-layer cell) lets it through the wall. Measured on gi.ddgi_ambient's
-	// sealed room (PHOTON-READER-1): the occupancy estimate moved the floor by
-	// 11/255 with the sky term on (84/255 at eight times its strength); the
-	// ray's composite by 1/255 (3/255) - every interior probe stores exactly 0,
-	// and what remains is the probe cage's leak from the probes outside the walls.
-	float escape = 1.0 - min( 1.0, ray.alpha / 0.95 );
-	g_escape[gl_LocalInvocationIndex] = escape;
 
 	__sharedOnlyBarrier;
 
@@ -227,15 +255,13 @@
 			float4 otherVal = g_diffuseDepth[gl_LocalInvocationIndex + i];
 			diffuse.xyzw += otherVal.xyzw;
 			sqDepth += otherVal.w * otherVal.w;
-			escape += g_escape[gl_LocalInvocationIndex + i];
 		}
 
 		//We can already write depth
 		diffuse.w *= p.invNumRaysPerPixel;
 		sqDepth *= p.invNumRaysPerPixel;
-		escape *= p.invNumRaysPerPixel;
 		OGRE_imageWrite2D4( irradianceFieldDepth, irradDepthXY.zw,
-							float4( diffuse.w, sqDepth, escape, 0.0 ) );
+							float4( diffuse.w, sqDepth, 0.0, 0.0 ) );
 
 		g_diffuseDepth[gl_LocalInvocationIndex].xyz = diffuse.xyz;
 	}

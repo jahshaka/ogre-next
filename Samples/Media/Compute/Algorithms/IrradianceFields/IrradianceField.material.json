@@ -7,7 +7,7 @@
             "thread_groups" : [1, 1, 1],
 
             "source" : "IrradianceFieldGenFromVct_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "sRGB.any", "JahVoxelSample_piece_all.any", "JahVoxelMarch_piece_all.any", "IrradianceFieldGenFromVct_piece_cs.any"],
+            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "sRGB.any", "JahVoxelSample_piece_all.any", "JahVoxelMarch_piece_all.any", "JahEnvironment_piece_all.any", "IrradianceFieldGenFromVct_piece_cs.any"],
             "inform_shader_of_texture_data_change" : true,
 
             "uav_units" : 2,
