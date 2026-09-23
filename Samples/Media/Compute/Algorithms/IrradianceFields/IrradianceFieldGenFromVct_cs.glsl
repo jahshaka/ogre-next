@@ -35,13 +35,19 @@ vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbes[@value( hl
 	@add( vctTexUnit, 1 )
 @end
 
+// Jahshaka (PHOTON-FIELD-ROTATE-1): READ and written - every texel blends with its
+// own history (the probe's mean over its integrations).
 layout( vulkan( ogre_u0 ) vk_comma @insertpiece(uav0_pf_type) )
-uniform restrict writeonly image2D irradianceField;
+uniform restrict image2D irradianceField;
 
 layout( vulkan( ogre_u1 ) vk_comma @insertpiece(uav1_pf_type) )
-uniform restrict writeonly image2D irradianceFieldDepth;
+uniform restrict image2D irradianceFieldDepth;
 
-shared float4 g_diffuseDepth[@value( threads_per_group_x ) * @value( threads_per_group_y ) * @value( threads_per_group_z )];
+// One work group per probe: every ray's radiance and depth, and its direction.
+shared float4 g_rayColourDepth[@value( num_rays_per_probe )];
+shared float4 g_rayDir[@value( num_rays_per_probe )];
+// The probe's history: x = the samples the blend keeps, y = 1 when the probe is skipped.
+shared float2 g_probeHistory;
 
 layout( local_size_x = @value( threads_per_group_x ),
 		local_size_y = @value( threads_per_group_y ),

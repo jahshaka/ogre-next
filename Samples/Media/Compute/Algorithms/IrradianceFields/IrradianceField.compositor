@@ -8,23 +8,15 @@ compositor_node IrradianceField/Gen
 
 	target colour_if
 	{
+		// Jahshaka (PHOTON-FIELD-ROTATE-1): the generation job integrates every texel
+		// from every ray of its probe and blends it with the texel's history, so it
+		// READS both atlases, and upstream's two per-texel integration passes are the
+		// raster path's only (IrradianceField/IntegrationOnly, below).
 		pass compute
 		{
 			job IrradianceField/Gen
-			uav 0 colour_if write
-			uav 1 depth_if write
-		}
-
-		pass compute
-		{
-			job IrradianceField/Integration/Depth
-			uav 0 depth_if read write
-		}
-
-		pass compute
-		{
-			job IrradianceField/Integration/Colour
 			uav 0 colour_if read write
+			uav 1 depth_if read write
 		}
 
 		pass compute
