@@ -38,11 +38,12 @@
 		float4 envGainMips;
 		float4 envSh[9];
 
-		// Jahshaka (PHOTON-FIELD-ROTATE-1): this integration's ray rotation (rows) and
-		// its history rule: x = the mode (0 fresh, 1 change, 2 refine, 3 invalidate), y = the target
-		// sample count, z = the samples a change keeps, w = the integration counter
+		// Jahshaka (PHOTON-FIELD-ROTATE-1): the world lattice coordinate of the
+		// window's first probe (xyz, two's complement), and the history rule: x = the
+		// mode (0 fresh, 1 change, 2 refine, 3 invalidate), y = the target sample
+		// count, z = the samples a change keeps, w = 1 to rotate the rays
 		// (IrradianceField::update).
-		float4 rayRotation[3];
+		uint4 latticeOrigin;
 		uint4 sweep;
 	}
 	CONST_BUFFER_STRUCT_END( p );
@@ -133,6 +134,36 @@
 		return normalize( n );
 	}
 
+	// PCG hash (Jarzynski and Olano 2020, "Hash Functions for GPU Rendering").
+	INLINE uint jahIfdPcg( uint v )
+	{
+		uint state = v * 747796405u + 2891336453u;
+		uint word = ( ( state >> ( ( state >> 28u ) + 4u ) ) ^ state ) * 277803737u;
+		return ( word >> 22u ) ^ word;
+	}
+
+	// THE PROBE'S RAY ROTATION FOR ITS SAMPLE m: a uniformly random rotation
+	// (Shoemake's quaternion from three uniforms) hashed from the probe's WORLD
+	// lattice coordinate and m, so a probe at one lattice point integrates the same
+	// K rotations whatever happened before - a converged field is a deterministic
+	// function of the world. Rows of the rotation matrix.
+	INLINE void jahIfdRotation( uint3 lattice, uint m, out float3 r0, out float3 r1, out float3 r2 )
+	{
+		uint h = jahIfdPcg( lattice.x ^ jahIfdPcg( lattice.y ^ jahIfdPcg( lattice.z ^ jahIfdPcg( m ) ) ) );
+		float u1 = float( jahIfdPcg( h ) ) * ( 1.0 / 4294967296.0 );
+		float u2 = float( jahIfdPcg( h + 1u ) ) * ( 1.0 / 4294967296.0 );
+		float u3 = float( jahIfdPcg( h + 2u ) ) * ( 1.0 / 4294967296.0 );
+		float s1 = sqrt( 1.0 - u1 );
+		float s2 = sqrt( u1 );
+		float w = s2 * cos( 6.283185307 * u3 );
+		float x = s1 * sin( 6.283185307 * u2 );
+		float y = s1 * cos( 6.283185307 * u2 );
+		float z = s2 * sin( 6.283185307 * u3 );
+		r0 = float3( 1.0 - 2.0 * ( y * y + z * z ), 2.0 * ( x * y - w * z ), 2.0 * ( x * z + w * y ) );
+		r1 = float3( 2.0 * ( x * y + w * z ), 1.0 - 2.0 * ( x * x + z * z ), 2.0 * ( y * z - w * x ) );
+		r2 = float3( 2.0 * ( x * z - w * y ), 2.0 * ( y * z + w * x ), 1.0 - 2.0 * ( x * x + y * y ) );
+	}
+
 	// The first interior texel of probe probeIdx's tile in an atlas of fullWidth
 	// texels whose tiles are res + 2 wide (upstream's layout, one texel of border).
 	INLINE uint2 jahIfdTileOrigin( uint probeIdx, uint res, uint fullWidth )
@@ -196,19 +227,26 @@
 	if( history.y != 0.0 )
 		return;
 
-	float3 probeCenter = float3( jahFieldLocal( slot3, p.windowOffset.xyz, p.numProbes.xyz ) );
+	uint3 probeLocal = jahFieldLocal( slot3, p.windowOffset.xyz, p.numProbes.xyz );
+	float3 probeCenter = float3( probeLocal );
 	float3 posLS = mul( float4( probeCenter, 1.0f ), p.irrProbeToVctTransform ).xyz;
 
+	// This sample's rotation: the probe's world lattice point and its sample index
+	// (history.x, the samples the blend keeps, IS this sample's index).
+	float3 rot0 = float3( 1, 0, 0 );
+	float3 rot1 = float3( 0, 1, 0 );
+	float3 rot2 = float3( 0, 0, 1 );
+	if( p.sweep.w != 0u )
+		jahIfdRotation( p.latticeOrigin.xyz + probeLocal, uint( history.x ), rot0, rot1, rot2 );
+
 	// EVERY RAY OF THE PROBE: the spherical-Fibonacci set (IrradianceField::fillDirections)
-	// under this integration's random rotation - so the set's gaps land somewhere new
-	// every integration and the mean over integrations converges on the irradiance,
-	// where a fixed set converged on its own aliasing.
+	// under this sample's random rotation - so the set's gaps land somewhere new every
+	// sample and the mean over a probe's samples converges on the irradiance, where a
+	// fixed set converged on its own aliasing.
 	for( uint r = lid; r < @value( num_rays_per_probe )u; r += @value( threads_per_group_x )u )
 	{
 		float3 setDir = bufferFetch( directionsBuffer, int( r ) ).xyz;
-		float3 dir = normalize( float3( dot( p.rayRotation[0].xyz, setDir ),
-										dot( p.rayRotation[1].xyz, setDir ),
-										dot( p.rayRotation[2].xyz, setDir ) ) );
+		float3 dir = normalize( float3( dot( rot0, setDir ), dot( rot1, setDir ), dot( rot2, setDir ) ) );
 
 		// THE START BIAS (0070's rule, the ray's own direction as the bias direction).
 		// A probe sits at a lattice point, and one standing in or beside a surface's
