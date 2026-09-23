@@ -151,6 +151,9 @@
 
 	float3 ifdIrradiance = float3( 0, 0, 0 );
 	float sumIfdWeight = 0;
+	// Jahshaka (PHOTON-FIELD-ROTATE-1): the weight of the probes that HOLD a value -
+	// the composite below divides by it, while sumIfdWeight stays the whole cage's.
+	float sumIfdValidWeight = 0;
 
 	// Iterate over adjacent probe cage
 	// ...UNLESS THE HOST DECLINED IT. The loop's body keeps its own indentation so
@@ -243,10 +246,23 @@
 			ifdSpaceNormal, probeIdx, passBuf.irradianceField.irradBorderedRes,
 			passBuf.irradianceField.irradFullWidth, passBuf.irradianceField.irradInvFullResolution );
 
-		float3 irrColour = OGRE_SampleLevel( ifdColour, ifdSampler, ifdColourUV, 0 ).xyz;
+		float4 irrSample = OGRE_SampleLevel( ifdColour, ifdSampler, ifdColourUV, 0 );
+		float3 irrColour = irrSample.xyz;
 //		irrColour = sqrt(irrColour);
-		ifdIrradiance += irrColour * weight;
 		sumIfdWeight += weight;
+		// A PROBE NO INTEGRATION HAS REACHED HAS NO SAY (Jahshaka, PHOTON-FIELD-ROTATE-1).
+		// The atlas's alpha is the probe's sample count (the generation job's mean;
+		// every texel of the tile, border included, so the bilinear fetch returns it
+		// whole), and a re-placed field clears it to 0 and integrates the new
+		// placement over several frames: until a probe's first integration its weight
+		// is 0. The cage's value is then the mean of the probes that hold one, and the
+		// host's per-probe hook below sees the validated weight - a cage with no valid
+		// probe in front of the surface reads as having no probe there, which is what
+		// hands its pixel to the host's fallback. A converged field (every count >= 1)
+		// computes exactly what it always did.
+		weight *= saturate( irrSample.w );
+		ifdIrradiance += irrColour * weight;
+		sumIfdValidWeight += weight;
 
 		// A host piece may accumulate its own per-probe quantities here, with this
 		// probe's index, its normalised direction and its final weight all in scope
@@ -271,9 +287,9 @@
 	// own quantities there and reads them in the post hook below, which runs for
 	// every pixel because the pixels the field does NOT answer are exactly the ones
 	// a host's fallback is for.
-	if( ifdCageEnabled != 0.0 )
+	if( ifdCageEnabled != 0.0 && sumIfdValidWeight > 0.0 )
 	{
-		pixelData.envColourD.xyz += ifdIrradiance * ( ifdIrradianceScale / sumIfdWeight );
+		pixelData.envColourD.xyz += ifdIrradiance * ( ifdIrradianceScale / sumIfdValidWeight );
 	}
 
 	// ...and a host piece may add its own diffuse-GI terms after it (a fallback for
