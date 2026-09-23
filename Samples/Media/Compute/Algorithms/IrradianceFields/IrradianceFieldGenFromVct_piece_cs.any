@@ -4,18 +4,15 @@
 @piece( HeaderCS )
 	CONST_BUFFER_STRUCT_BEGIN( IrradianceFieldGenParams, 0 )
 	{
-		float invNumRaysPerPixel;
-		float invNumRaysPerIrradiancePixel;
-		float unused0;
-		uint probesPerRow; // Used by integration CS, not by us
-
+		// Jahshaka (PHOTON-FIELD-ROTATE-1): one float4 of scalars (groups per
+		// dispatch row, the environment's bin cone, the work's first position, a pad),
+		// then the probe counts (w unused).
+		uint probesPerRow;
 		float coneAngleTan;
 		uint numProcessedProbes;
-		float unused1;
-		float unused2;
+		uint padding0;
 
-		//float invFieldResolution;
-		uint4 numProbes_threadsPerRow;
+		uint4 numProbes;
 
 		// Jahshaka (PHOTON-WRITER-1): the work's boxes and the window's offset
 		// (IrradianceField::scrollWindow; jah_field_window.glsl says what they mean).
@@ -40,7 +37,7 @@
 
 		// Jahshaka (PHOTON-FIELD-ROTATE-1): the world lattice coordinate of the
 		// window's first probe (xyz, two's complement), and the history rule: x = the
-		// mode (0 fresh, 1 change, 2 refine, 3 invalidate), y = the target sample
+		// mode (IrradianceField::IntegrationMode, as the job properties ifd_mode_fresh / _change / _refine / _invalidate), y = the target sample
 		// count, z = the samples a change keeps, w = 1 to rotate the rays
 		// (IrradianceField::update).
 		uint4 latticeOrigin;
@@ -52,8 +49,6 @@
 	// its sibling and the pixel's reader (the build wraps jah_field_window.glsl).
 	@insertpiece( JahFieldWindow )
 
-	#define numProbes numProbes_threadsPerRow.xyz
-	#define threadsPerRow numProbes_threadsPerRow.w
 
 	struct Probe
 	{
@@ -196,10 +191,10 @@
 	uint2 depthTile = jahIfdTileOrigin( probeIdx, @value( depth_resolution )u, @value( depth_full_width )u );
 	uint lid = gl_LocalInvocationIndex;
 
-	// THE INVALIDATION (mode 3, a re-placement): no rays - the probe's irradiance
+	// THE INVALIDATION (a re-placement): no rays - the probe's irradiance
 	// tile to value 0 and sample count 0, so the pixel's reader gives it no weight
 	// until an integration reaches it. The same for every thread of the group.
-	if( p.sweep.x == 3u )
+	if( p.sweep.x == @value( ifd_mode_invalidate )u )
 	{
 		for( uint t = lid; t < @value( irrad_resolution )u * @value( irrad_resolution )u;
 			 t += @value( threads_per_group_x )u )
@@ -218,8 +213,10 @@
 	if( lid == 0u )
 	{
 		float held = OGRE_imageLoad2D( irradianceField, irradTile ).w;
-		float kept = p.sweep.x == 0u ? 0.0 : ( p.sweep.x == 1u ? min( held, float( p.sweep.z ) ) : held );
-		float skip = ( p.sweep.x == 2u && held >= float( p.sweep.y ) ) ? 1.0 : 0.0;
+		float kept = p.sweep.x == @value( ifd_mode_fresh )u
+						 ? 0.0
+						 : ( p.sweep.x == @value( ifd_mode_change )u ? min( held, float( p.sweep.z ) ) : held );
+		float skip = ( p.sweep.x == @value( ifd_mode_refine )u && held >= float( p.sweep.y ) ) ? 1.0 : 0.0;
 		g_probeHistory = float2( kept, skip );
 	}
 	__sharedOnlyBarrier;
@@ -299,7 +296,15 @@
 		// exit. A miss has no distance; the moments feed the Chebyshev visibility
 		// test, and an unbounded miss distance blows up the variance of every texel
 		// that mixes hits and misses (DDGI bounds a miss the same way).
-		g_rayColourDepth[r] = float4( ray.colour + sky,
+		// NO NON-FINITE SAMPLE ENTERS THE MEAN (F5; the tree's NaN rule - the test is
+		// on the BITS, a self-compare folds to true on this compiler): a NaN or Inf
+		// radiance would poison the probe's running mean until the next change, so it
+		// counts as black (the environment's inputs are refused at the host too).
+		float3 rayColour = ray.colour + sky;
+		uint3 rayBits = floatBitsToUint( rayColour ) & uint3( 0x7FFFFFFFu, 0x7FFFFFFFu, 0x7FFFFFFFu );
+		if( rayBits.x >= 0x7F800000u || rayBits.y >= 0x7F800000u || rayBits.z >= 0x7F800000u )
+			rayColour = float3( 0, 0, 0 );
+		g_rayColourDepth[r] = float4( rayColour,
 									  min( ray.travelledC0 + length( startBias ), 1.414213562 ) *
 										  dot( abs( dir ), float3( p.numProbes.xyz ) ) );
 		g_rayDir[r] = float4( dir, 0.0 );

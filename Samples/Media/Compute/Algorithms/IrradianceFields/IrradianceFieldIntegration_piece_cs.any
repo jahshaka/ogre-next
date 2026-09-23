@@ -4,18 +4,13 @@
 @piece( HeaderCS )
 	CONST_BUFFER_STRUCT_BEGIN( IrradianceFieldGenParams, 0 )
 	{
-		float invNumRaysPerPixel;
-		float invNumRaysPerIrradiancePixel;
-		float unused0;
+		// Jahshaka (PHOTON-FIELD-ROTATE-1): the generation job's prefix, shared.
 		uint probesPerRow;
-
 		float coneAngleTan;
 		uint numProcessedProbes;
-		float unused1;
-		float unused2;
+		uint padding0;
 
-		//float invFieldResolution;
-		uint4 numProbes_threadsPerRow;
+		uint4 numProbes;
 
 		// Jahshaka (PHOTON-WRITER-1): the work's boxes and the window's offset, the
 		// same prefix the generation job declares (jah_field_window.glsl).
@@ -39,8 +34,8 @@
 		uint listPos = workGroupID.x + workGroupID.y * p.probesPerRow + p.numProcessedProbes;
 		uint3 slot = jahFieldWorkSlot( listPos, p.boxLo[0], p.boxLo[1], p.boxLo[2],
 									   p.boxSize[0], p.boxSize[1], p.boxSize[2],
-									   p.numProbes_threadsPerRow.xyz );
-		return jahFieldSlotIndex( slot, p.numProbes_threadsPerRow.xyz );
+									   p.numProbes.xyz );
+		return jahFieldSlotIndex( slot, p.numProbes.xyz );
 	}
 
 	INLINE ushort2 getUv( ProbeIndex probeIdx, ushort2 localInvocationId )
