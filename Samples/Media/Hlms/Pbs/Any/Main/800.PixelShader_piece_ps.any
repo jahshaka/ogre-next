@@ -175,6 +175,7 @@
 	@property( (hlms_normal || hlms_qtangent) && !hlms_prepass && needs_view_dir )
 		@insertpiece( DeclClearCoatFuncs )
 
+		@insertpiece( JahDiffuseAlbedo )
 		@insertpiece( DeclareBRDF )
 		@insertpiece( DeclareBRDF_InstantRadiosity )
 		@insertpiece( DeclareBRDF_AreaLightApprox )

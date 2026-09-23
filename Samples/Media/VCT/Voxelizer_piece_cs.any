@@ -36,7 +36,9 @@
 		float4 emissive;
 		uint diffuseTexIdx;
 		uint emissiveTexIdx;
-		uint padding0;
+		// Jahshaka (PHOTON-WRITER-1): the datablock's perceptual roughness
+		// (VctMaterial's row), merged per voxel into the emissive volume's alpha.
+		float roughness;
 		uint padding1;
 	};
 
@@ -326,6 +328,7 @@
 	int3  accNormalRaw		= int3( 0, 0, 0 );
 	int3  accNormalFolded	= int3( 0, 0, 0 );
 	uint3 accEmissive		= uint3( 0u, 0u, 0u );
+	uint  accRoughness		= 0u;	// PHOTON-WRITER-1: the fourteenth sum
 
 	// THE RECORDS OF THIS (octant, bucket), as the host's gather wrote them on the
 	// device: (start, count) into the instance buffer. Dynamically uniform - every
@@ -390,6 +393,8 @@
 
 							accAlbedo		+= voxelMergeQuantize4( finalDiffuse );
 							accEmissive		+= voxelMergeQuantize3( finalEmissive );
+							accRoughness	+= voxelMergeQuantize3( float3( material.roughness,
+																			0.0f, 0.0f ) ).x;
 
 							float3 triNormal = tri_barycentric_normal( voxelAabb.center, tri );
 							triNormal = normalize( triNormal );
@@ -444,12 +449,14 @@
 	{
 		uint3 voxelCel = uint3( gl_GlobalInvocationID.xyz ) + uint3( p_voxelPixelOrigin );
 
-		// Thirteen scalar texels per voxel: albedo rgba, the raw normal xyz, the
-		// emissive rgb, the folded normal xyz. Only what carries something.
+		// Fourteen scalar texels per voxel: albedo rgba, the raw normal xyz, the
+		// emissive rgb, the folded normal xyz, the roughness (PHOTON-WRITER-1).
+		// Only what carries something.
 		uint4 sumAlbedo		= uint4( 0u, 0u, 0u, 0u );
 		uint4 sumNormal		= uint4( 0u, 0u, 0u, 0u );
 		uint4 sumEmissive	= uint4( 0u, 0u, 0u, 0u );
 		uint4 sumFolded		= uint4( 0u, 0u, 0u, 0u );
+		uint  sumRoughness	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 13u ) ).x;
 		@foreach( 4, c )
 			sumAlbedo[@c]	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, @c ) ).x;
 		@end
@@ -470,6 +477,7 @@
 		@foreach( 3, c )
 			sumEmissive[@c]	= voxelMergeAddSat( sumEmissive[@c], accEmissive[@c] );
 		@end
+		sumRoughness	= voxelMergeAddSat( sumRoughness, accRoughness );
 		// Two's complement: a signed sum kept in a uint wraps the same way in
 		// every order, which is the whole point of doing this in integers — and a
 		// unit vector's quantised component is 4,096, so half a million triangles
@@ -481,6 +489,8 @@
 			OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, @c ),
 								uint4( sumAlbedo[@c], 0u, 0u, 0u ) );
 		@end
+		OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 13u ),
+							uint4( sumRoughness, 0u, 0u, 0u ) );
 		@foreach( 3, c )
 			OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 4u + @c ),
 								uint4( sumNormal[@c], 0u, 0u, 0u ) );
@@ -494,7 +504,7 @@
 		float invAccum = 1.0f / ( VOXEL_MERGE_SCALE * totalTris );
 		float4 voxelAlbedo		= voxelMergeAlbedo( sumAlbedo, invAccum );
 		float4 voxelNormal		= voxelMergeNormal( sumNormal, sumFolded, invAccum );
-		float4 voxelEmissive	= voxelMergeEmissive( sumEmissive, invAccum );
+		float4 voxelEmissive	= voxelMergeEmissive( sumEmissive, sumRoughness, invAccum );
 
 		@property( syntax != hlsl || typed_uav_load )
 			OGRE_imageWrite3D4( voxelAlbedoTex, voxelCelUvw, voxelAlbedo );

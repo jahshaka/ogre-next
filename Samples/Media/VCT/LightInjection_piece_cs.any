@@ -42,6 +42,9 @@
 	#define c_invPI 0.318309886f
 
 	@insertpiece( DeclAreaLtcLightFuncs )
+	// Jahshaka (PHOTON-WRITER-1): the diffuse lobe's directional albedo, the
+	// function the pixel's environment lobe reads (jah_diffuse_albedo.glsl).
+	@insertpiece( JahDiffuseAlbedo )
 	@insertpiece( DeclSRgbFuncs )
 	// JAHSHAKA PATCH 0080: THE STORE'S ENCODING FOLLOWS ITS FORMAT.
 	// `uav0_orig_pf_srgb` is the property HlmsComputeJob derives from the pixel
@@ -94,6 +97,10 @@
 	normalVal.xyz = normalize( normalVal.xyz );
 
 	float3 blockColour = emissiveVal.xyz;
+	// THE VOXEL'S ROUGHNESS (PHOTON-WRITER-1): the merged perceptual roughness of
+	// the surfaces in this voxel, in the emissive volume's alpha
+	// (VoxelMerge_piece_cs.any, voxelMergeEmissive).
+	float voxelRoughness = emissiveVal.w;
 
 	if( anyInvocationARB( albedoVal.a > 0 ) )
 	{
@@ -141,6 +148,16 @@
 			@property( hlms_lights_area_ltc )
 				}
 			@end
+
+			// THE ALBEDO THE SURFACE REALLY HAS FOR THIS LAMP (PHOTON-WRITER-1): the
+			// normalised Disney diffuse reflects jahDiffuseAlbedo( cos theta_l, r )
+			// of the Lambertian answer, summed over every outgoing direction - what
+			// an isotropic voxel must hold for its surface. The cosine is the lamp's
+			// direction against the voxel's normal (for an LTC area light, its
+			// straight direction), abs for a double-sided voxel like NdotL's own.
+			float cosAlbedo = dot( normalVal.xyz, lightDir );
+			cosAlbedo = normalVal.a > 0 ? abs( cosAlbedo ) : saturate( cosAlbedo );
+			float lobeAlbedo = jahDiffuseAlbedo( cosAlbedo, voxelRoughness );
 
 			//lightDir is in world space, it needs to be in UV space (which may be stretched)
 			lightDir *= p_dirCorrectionRatio.xyz;
@@ -219,7 +236,7 @@
 			// (1.0, 0.31, 0.31) bleeds pink. With the PI gone the stored value
 			// is rho * NdotL * D / D_max, at most exactly 1 -- the whole 8-bit
 			// range, used and never exceeded, and the bleed keeps its hue.
-			blockColour += c_invPI * NdotL * light.diffuse.xyz * alpha * albedoVal.xyz;
+			blockColour += c_invPI * NdotL * lobeAlbedo * light.diffuse.xyz * alpha * albedoVal.xyz;
 		}
 	}
 

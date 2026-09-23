@@ -64,6 +64,8 @@
 	#define JAH_ENV_SH_C7 p_envSh[7].xyz
 	#define JAH_ENV_SH_C8 p_envSh[8].xyz
 	@insertpiece( JahEnvironment )
+	// Jahshaka (PHOTON-WRITER-1): the diffuse lobe's albedo (jah_diffuse_albedo.glsl).
+	@insertpiece( JahDiffuseAlbedo )
 
 	INLINE void computeVctProbe( OGRE_INOUT_REF( float3, outDiffuse ),
 								 float3 posLS, float3 geomNormal, float3x3 TBN )
@@ -184,7 +186,15 @@
 
 		float3 vctDiffuse = float3( 0, 0, 0 );
 		computeVctProbe( vctDiffuse, voxelUvwPos, normalVal.xyz, TBN );
-		currentLight.xyz += albedoVal.xyz * vctDiffuse.xyz * p_iterationDampening;
+		// THE BOUNCE RE-EMITS WHAT THE SURFACE RENDERS (PHOTON-WRITER-1): a voxel lit
+		// by the diffuse gather of its surroundings reflects the normalised Disney
+		// lobe's HEMISPHERICAL albedo of it (jahDiffuseAlbedoHemi, the lobe's
+		// directional albedo averaged over a uniform incoming hemisphere), at the
+		// voxel's own roughness (the emissive volume's alpha).
+		const float voxelRoughness =
+			OGRE_Load3D( voxelEmissiveTex, gl_GlobalInvocationID.xyz, 0 ).w;
+		currentLight.xyz += albedoVal.xyz * vctDiffuse.xyz * p_iterationDampening *
+							jahDiffuseAlbedoHemi( voxelRoughness );
 	}
 
 	wshort3 voxelCelUvw = wshort3( gl_GlobalInvocationID.xyz );

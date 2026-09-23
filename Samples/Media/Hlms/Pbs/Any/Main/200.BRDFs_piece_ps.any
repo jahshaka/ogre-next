@@ -11,16 +11,13 @@
 @piece( getSpecularFresnelWithRoughness )pixelData.F0 + pow( _h( 1.0 ) - pixelData.NdotV, _h( 5.0 ) ) * (max( make_float_fresnel( _h( 1.0 ) - pixelData.perceptualRoughness ), pixelData.F0 ) - pixelData.F0)@end
 @piece( getDiffuseFresnelWithRoughness )max( make_float_fresnel( _h( 1.0 ) - pixelData.perceptualRoughness ), pixelData.F0 ) - pixelData.F0 + pow( _h( 1.0 ) - NdotL, _h( 5.0 ) ) * pixelData.F0@end
 
-// THE DIFFUSE LOBE'S ENERGY FACTOR, stated ONCE (Jahshaka, PHOTON-ENV-1; MEASURE-1a
-// decision b). The direct lobe is the normalised Disney diffuse (Frostbite), whose
-// energy factor lerp( 1, 1 / 1.51, perceptual roughness ) keeps its grazing-angle
-// retro-reflection energy-conserving - 0.662 at roughness 1. Upstream applied it to
-// the DIRECT lobe only, so everything that reaches envColourD - the sky's SH outside
-// a volume, the voxel cones' diffuse and their escape to the sky, the irradiance
-// field, the screen-probe gather - sat on a scale 1.51 times brighter than the sun
-// on the same matte surface. Every one of them is multiplied by this in BRDF_EnvMap
-// (the one place envColourD becomes light), so a matte surface lit by the sky, by a
-// bounce and by the sun is on ONE scale.
+// THE DIFFUSE LOBE'S ENERGY FACTOR (Jahshaka, PHOTON-ENV-1; MEASURE-1a decision b).
+// The direct lobe is the normalised Disney diffuse (Frostbite), whose energy factor
+// lerp( 1, 1 / 1.51, perceptual roughness ) keeps its grazing-angle retro-reflection
+// energy-conserving - 0.662 at roughness 1. The ENVIRONMENT lobe carries the same
+// lobe's exact integral instead, jahDiffuseAlbedo (PHOTON-WRITER-1; BRDF_EnvMap
+// below), so a matte surface lit by the sky, by a bounce and by the sun is on ONE
+// scale.
 @piece( jahDiffuseEnergyFactor )lerp( _h( 1.0 ), _h( 1.0 / 1.51 ), pixelData.perceptualRoughness )@end
 
 @property( !fresnel_scalar )
@@ -314,8 +311,16 @@ midf3 BRDF_IR( midf3 lightDir, midf3 lightDiffuse, PixelData pixelData )
 		midf fresnelD = _h( 1.0f );
 	@end
 
-        midf3 Rd = pixelData.envColourD * pixelData.diffuse.xyz * _h( 3.141592654 ) * fresnelD * envBRDF.z *
-                   @insertpiece( jahDiffuseEnergyFactor );
+        // THE LOBE'S EXACT ALBEDO FOR THE ENVIRONMENT (Jahshaka, PHOTON-WRITER-1):
+        // jahDiffuseAlbedo is the normalised Disney diffuse integrated over a uniform
+        // incoming hemisphere, a function of the view angle and the roughness - the
+        // same function the DFG table's third channel holds (envBRDF.z), carried as a
+        // fit because the table is bound only with an area light. It replaces
+        // envBRDF.z times the constant energy factor, which counted the factor TWICE
+        // wherever the table was bound (0.688 x 0.662 at r = 1, normal view) and used
+        // the constant alone everywhere else.
+        midf3 Rd = pixelData.envColourD * pixelData.diffuse.xyz * _h( 3.141592654 ) * fresnelD *
+                   _h( jahDiffuseAlbedo( float( pixelData.NdotV ), float( pixelData.perceptualRoughness ) ) );
         midf3 Rs = pixelData.envColourS * pixelData.specular.xyz *
     @property( industry_compatible )
                     ( pixelData.F0 * envBRDF.x + envBRDF.y );

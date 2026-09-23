@@ -39,14 +39,15 @@
 #define VOXEL_MERGE_SCALE 4096.0f
 #define VOXEL_MERGE_CLAMP 16.0f
 
-	/// ONE VOXEL'S THIRTEEN ACCUMULATOR TEXELS ARE ADJACENT IN Z: albedo sum at
-	/// z*13+0..3 (rgba), RAW normal sum at +4..6 (xyz, two's complement),
-	/// emissive sum at +7..9 (rgb), FOLDED normal sum at +10..12 (xyz). Thirteen
-	/// and not sixteen because only thirteen carry anything — a fourth channel on
-	/// the three vectors would be 25 MB read and written for nothing at 128^3.
+	/// ONE VOXEL'S FOURTEEN ACCUMULATOR TEXELS ARE ADJACENT IN Z: albedo sum at
+	/// z*14+0..3 (rgba), RAW normal sum at +4..6 (xyz, two's complement),
+	/// emissive sum at +7..9 (rgb), FOLDED normal sum at +10..12 (xyz), and the
+	/// ROUGHNESS sum at +13 (PHOTON-WRITER-1). Fourteen and not sixteen because
+	/// only fourteen carry anything — a fourth channel on the three vectors would
+	/// be 25 MB read and written for nothing at 128^3.
 	/// Interleaved rather than stacked planes so the shader needs no knowledge of
 	/// the volume's depth (a voxelisation dispatch covers one OCTANT and does not
-	/// know it), and so a voxel's thirteen texels share a cache line's worth of
+	/// know it), and so a voxel's fourteen texels share a cache line's worth of
 	/// the 3D swizzle.
 	///
 	/// R32_UINT AND NOT RGBA32_UINT, AND THE REASON IS A MEASUREMENT, NOT A HANG
@@ -65,7 +66,7 @@
 	/// more per 64^3 volume, resident.
 	INLINE uint3 voxelMergeUvw( uint3 voxelCel, uint chan )
 	{
-		return uint3( voxelCel.x, voxelCel.y, voxelCel.z * 13u + chan );
+		return uint3( voxelCel.x, voxelCel.y, voxelCel.z * 14u + chan );
 	}
 
 	/// THE TWO NORMAL SUMS, AND WHY THERE ARE TWO.
@@ -215,9 +216,13 @@
 		// it reads to pick abs(NdotL) over saturate(NdotL).
 		return float4( normalOut * 0.5f + 0.5f, doubleSided ? 1.0f : 0.0f );
 	}
-	INLINE float4 voxelMergeEmissive( uint4 sumEmissive, float invAccum )
+	// Jahshaka (PHOTON-WRITER-1): .w carries the voxel's MEAN ROUGHNESS (the
+	// fourteenth sum, the materials' perceptual roughness per triangle), which the
+	// light injection and the bounce read to make the voxel emit what its surface
+	// renders. Nothing read the old constant 0 in .w.
+	INLINE float4 voxelMergeEmissive( uint4 sumEmissive, uint sumRoughness, float invAccum )
 	{
-		return float4( float3( sumEmissive.xyz ) * invAccum, 0.0f );
+		return float4( float3( sumEmissive.xyz ) * invAccum, float( sumRoughness ) * invAccum );
 	}
 
 @end

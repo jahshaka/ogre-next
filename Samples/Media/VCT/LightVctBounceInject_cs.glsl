@@ -35,6 +35,12 @@ vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbes[@value( hl
 vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D directVoxel;
 @add( vctTexUnit, 1 )
 
+// JAHSHAKA (PHOTON-WRITER-1): THE VOXELISER'S EMISSIVE VOLUME, right after
+// `directVoxel` (VctLighting::setupBounceTextures): its alpha is the voxel's merged
+// roughness, which the bounce's re-emission reads. A plain Load3D, no sampler.
+vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D voxelEmissiveTex;
+@add( vctTexUnit, 1 )
+
 // JAHSHAKA (PHOTON-ENV-1): THE ONE ENVIRONMENT, at the unit after `directVoxel`
 // (VctLighting::setupBounceTextures binds it last, and only while the host set a
 // cube - the job property jah_env). Sampled with vctProbeSampler.
