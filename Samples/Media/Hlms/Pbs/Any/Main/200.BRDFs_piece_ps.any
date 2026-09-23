@@ -11,15 +11,6 @@
 @piece( getSpecularFresnelWithRoughness )pixelData.F0 + pow( _h( 1.0 ) - pixelData.NdotV, _h( 5.0 ) ) * (max( make_float_fresnel( _h( 1.0 ) - pixelData.perceptualRoughness ), pixelData.F0 ) - pixelData.F0)@end
 @piece( getDiffuseFresnelWithRoughness )max( make_float_fresnel( _h( 1.0 ) - pixelData.perceptualRoughness ), pixelData.F0 ) - pixelData.F0 + pow( _h( 1.0 ) - NdotL, _h( 5.0 ) ) * pixelData.F0@end
 
-// THE DIFFUSE LOBE'S ENERGY FACTOR (Jahshaka, PHOTON-ENV-1; MEASURE-1a decision b).
-// The direct lobe is the normalised Disney diffuse (Frostbite), whose energy factor
-// lerp( 1, 1 / 1.51, perceptual roughness ) keeps its grazing-angle retro-reflection
-// energy-conserving - 0.662 at roughness 1. The ENVIRONMENT lobe carries the same
-// lobe's exact integral instead, jahDiffuseAlbedo (PHOTON-WRITER-1; BRDF_EnvMap
-// below), so a matte surface lit by the sky, by a bounce and by the sun is on ONE
-// scale.
-@piece( jahDiffuseEnergyFactor )lerp( _h( 1.0 ), _h( 1.0 / 1.51 ), pixelData.perceptualRoughness )@end
-
 @property( !fresnel_scalar )
 	@piece( getMaxFresnelS )fresnelS@end
 @else
@@ -152,6 +143,9 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
 
 @property( BRDF_Default )
 @piece( DeclareBRDF )
+// The diffuse lobe is Jahshaka's JahBrdf (Hlms/Pbs/Any/JahBrdf_piece_all.any),
+// the one text the surface cache's card job calls too.
+@insertpiece( JahBrdf )
 //Default BRDF
 INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, PixelData pixelData PASSBUF_ARG_DECL )
 {
@@ -208,11 +202,9 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
 
 	//Diffuse BRDF (*Normalized* Disney, see course_notes_moving_frostbite_to_pbr.pdf
 	//"Moving Frostbite to Physically Based Rendering" Sebastien Lagarde & Charles de Rousiers)
-	midf energyBias	= pixelData.perceptualRoughness * _h( 0.5 );
-	midf energyFactor	= @insertpiece( jahDiffuseEnergyFactor );
-	midf fd90			= energyBias + _h( 2.0 ) * VdotH * VdotH * pixelData.perceptualRoughness;
-	midf lightScatter	= _h( 1.0 ) + (fd90 - _h( 1.0 )) * pow( _h( 1.0 ) - NdotL, _h( 5.0 ) );
-	midf viewScatter	= _h( 1.0 ) + (fd90 - _h( 1.0 )) * pow( _h( 1.0 ) - pixelData.NdotV, _h( 5.0 ) );
+	//lightScatter * viewScatter * energyFactor: jahDisneyDiffuse (JahBrdf).
+	midf diffuseLobe	= _h( jahDisneyDiffuse( float( NdotL ), float( pixelData.NdotV ), float( VdotH ),
+											float( pixelData.perceptualRoughness ) ) );
 
 	@property( fresnel_has_diffuse )
 		@property( fresnel_separate_diffuse )
@@ -225,7 +217,7 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
 	@end
 
 	//We should divide Rd by PI, but it is already included in kD
-	midf3 Rd = (lightScatter * viewScatter * energyFactor * fresnelD) * pixelData.diffuse.xyz;
+	midf3 Rd = (diffuseLobe * fresnelD) * pixelData.diffuse.xyz;
 
 	@property( clear_coat )
 		midf3 color = Rd + Rs;

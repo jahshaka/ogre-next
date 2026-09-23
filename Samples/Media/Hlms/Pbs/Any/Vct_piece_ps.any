@@ -38,69 +38,9 @@
 @end
 
 @piece( DeclVctFuncs )
-	/// Jahshaka patch 0083: THE CONE BASIS IS A FUNCTION OF THE NORMAL AND OF
-	/// NOTHING ELSE. `buildConeBasis` returns an orthonormal frame whose third
-	/// axis is `n`, built by Frisvad's method (JGT 2012) -- continuous over the
-	/// whole sphere but for ONE direction, where the branch below hands back a
-	/// fixed frame instead of dividing by zero.
-	///
-	/// `n` is expected in a CAMERA-INDEPENDENT space (the caller hands it the
-	/// normal taken to cubemap space), because a frame is only worth building
-	/// once it cannot turn with the head.
-	///
-	/// AND IT IS BUILT ABOUT THAT SPACE'S OWN AXES, which is a decision that was
-	/// measured rather than argued. Frisvad's construction is written about
-	/// (0,0,1) and its one special direction is the antipode, so a fixed
-	/// pre-rotation would move that direction anywhere -- onto a body diagonal,
-	/// say, which no axis-aligned surface has. That was tried, and it COSTS
-	/// LIGHT: the six cones of an axis-aligned surface then all point at odd
-	/// angles, where every sample is a three-way blend of the anisotropic voxel
-	/// volumes instead of a near-direct read of one, and the bounce comes out
-	/// systematically dimmer. Measured on gi.field_follows' own bar -- the red a
-	/// wall bounces onto grey ground beyond cascade 0 -- 0.0174 with the axes,
-	/// 0.0105 with the body diagonal: forty per cent of the bounce, gone, on
-	/// every surface in every scene.
-	///
-	/// WHAT THAT BUYS AND WHAT IT COSTS. Keeping the axes keeps the common case
-	/// (walls, floors, ceilings) on the voxel volumes' own axes. The price is
-	/// that the special direction is a world axis: a surface whose normal is
-	/// within a hair of it takes the branch's fixed frame while its neighbours
-	/// take a rapidly turning one. The two properties cannot be separated --
-	/// "the frame is axis-aligned for axis normals" and "the reference direction
-	/// is an axis" are the same statement -- so this is a trade, and it is made
-	/// on the side the measurement points to.
-	///
-	/// The two frames this REPLACES were both unstable, and the instability is
-	/// visible because the diffuse cone set is not azimuthally symmetric against
-	/// an anisotropic voxel field: rotate the frame about the normal and the six
-	/// cones read different axis volumes.
-	///   * the material's TANGENT frame (what the normal_map permutations used):
-	///     a per-VERTEX attribute authored for texturing, interpolated from a
-	///     different vertex triple in each triangle of a quad, so one flat face
-	///     shaded as two triangles with a hard kink along its own diagonal, with
-	///     per-pixel grain across each, and the same box shaded differently after
-	///     being turned on its own axis.
-	///   * the DDX fallback (what the rest used), whose own comment above said it
-	///     "isn't fully stable due to how DDX works and due to floating point
-	///     precision".
-	INLINE float3x3 buildConeBasis( float3 n )
-	{
-		float3 t;
-		float3 b;
-		if( n.z < -0.9999999 )
-		{
-			t = float3( 0.0, -1.0, 0.0 );
-			b = float3( -1.0, 0.0, 0.0 );
-		}
-		else
-		{
-			float a = 1.0 / ( 1.0 + n.z );
-			float c = -n.x * n.y * a;
-			t = float3( 1.0 - n.x * n.x * a, c, -n.x );
-			b = float3( c, 1.0 - n.y * n.y * a, -n.y );
-		}
-		return buildFloat3x3( t, b, n );
-	}
+	// THE CONE FRAME (fork change 0083) is jahConeBasis in Jahshaka's JahVoxelCones
+	// piece (jah_voxel_cones.glsl), with its rationale; applyVoxelConeTracing below
+	// builds it in the camera-independent cubemap frame and composes it into view space.
 
 
 	INLINE float3 toVctProbeSpacePos( float3 pos, VctProbeParams probeParams )
@@ -273,6 +213,23 @@
 		return float3( c.x, c.y, -c.z );
 	}
 
+	// THE ONE DIFFUSE CONE INTEGRATOR, BOUND TO THE PIXEL SHADER (PHOTON-CARDS-2): the
+	// cone frame, the two cone sets, their weights and apertures, the start bias and
+	// the escape weight are ONE plain-GLSL file,
+	// irisgl/engine/src/rayquery/include/jah_voxel_cones.glsl, wrapped by Jahshaka's
+	// build into the library piece JahVoxelCones - the text the surface cache's card
+	// job and the bounce-injection job run too. The pixel's cone frame is in VIEW
+	// space; the integrator takes a view direction to the volume's normalised space
+	// and to the world (the environment's axes) through these two macros.
+	@property( vct_cone_dirs == 6 )
+		#define JAH_CONES_SIX 1
+	@else
+		#define JAH_CONES_SIX 0
+	@end
+	#define JAH_CONES_TO_LS( d ) toVctProbeSpaceDir( d, passBuf.vctProbeParams )
+	#define JAH_CONES_TO_WORLD( d ) jahViewToWorldDir( d )
+	@insertpiece( JahVoxelCones )
+
 	INLINE void computeVctProbe
 	(
 		OGRE_INOUT_REF( float3, outDiffuse ), OGRE_INOUT_REF( float4, outSpecular ),
@@ -285,54 +242,12 @@
 	{
 		float3 posLS = toVctProbeSpacePos( pos, probeParams );
 
-		// Bias away from current position in order to avoid self-occlusion (specular reflections
-		// won't work otherwise).
-		//
-		// JAHSHAKA PATCH 0070 - ONE CELL, WHICHEVER WAY THE SURFACE FACES.
-		//
-		// Upstream wrote `(dirLS / maxVal) * vctInvResolution * lerp( 15.0f, 1.0f, maxVal )`,
-		// where maxVal is the largest component of the normal in probe space: 1 for a
-		// normal down an axis and 1/sqrt(3) = 0.577 for a body-diagonal one. That makes
-		// the bias ONE voxel for an axis-aligned surface and lerp(15,1,0.577)/0.577 =
-		// TWELVE voxels for a diagonal one - 8 cm against 94 cm on a 7.8 cm cascade. The
-		// stated reason is staircase aliasing on axis-aligned steps, and on a box it is
-		// invisible because every face has maxVal 1.
-		//
-		// On a CURVED surface it is a seam by construction. A sphere's normal sweeps
-		// every direction, so the start point of every cone - the six diffuse ones and
-		// the specular one - travels from one voxel to twelve and back across the six
-		// arcs where two components of the normal are equal in magnitude. A downward
-		// diagonal normal on the lower half of a sphere starts its specular cone most of
-		// a metre INSIDE the floor and reads the floor's contact shadow; the upward one
-		// beside it starts above the sphere's own lit voxels and reads those. A bright
-		// warped streak beside a dark smear, curved along the arc - which is what the
-		// owner's smoke of push 41 reported on a plain sphere in an empty scene, at a
-		// roughness where the screen-space and ray-traced arms are both gated off and
-		// this cone IS the whole reflection.
-		//
-		// The bias is a geometric statement - "leave the surface's own voxel before
-		// sampling" - and a geometric statement cannot depend on how the surface happens
-		// to sit against the lattice. So: ONE CELL along the normal, measured along the
-		// normal, everywhere. An axis-aligned surface is unchanged (it always got one);
-		// everything else stops sweeping.
-		//
-		// THE STEP IS COMPONENTWISE, which is the whole of "one cell" and is not a
-		// detail. `vctInvResolution_cascadeMaxLod[i].xyz` is the inverse RESOLUTION per
-		// axis, so multiplying a UNIT direction by it componentwise gives a displacement
-		// whose length is exactly one cell for every direction on an isotropic volume,
-		// and the natural per-axis cell on an anisotropic one. Taking a SCALAR step of
-		// `dot( abs( d ), invRes )` instead - the obvious-looking "the cell size along
-		// this direction" - is the L1 norm, which is one cell down an axis and sqrt(3) =
-		// 1.73 cells along a body diagonal: a smaller sweep than upstream's twelve, but
-		// the same defect, and a sphere would still band along the same six arcs. This
-		// is also exactly what the bounce-injection compute twin does
-		// (LightVctBounceInject_piece_cs.any, `geomNormal * p_invVoxelResolution`), so
-		// the two marches finally agree.
+		// THE START BIAS: one cell of cascade 0 along the normal, whichever way the
+		// surface faces (fork change 0070; the rationale is JahVoxelCones'). The
+		// specular cone starts from the same point.
 		float3 dirLS = toVctProbeSpaceDir( pixelData.geomNormal.xyz, probeParams );
-		// The normal as a DIRECTION in probe space, so the step below is a length in
-		// cells rather than a length in "whatever component happened to be biggest".
-		float3 biasDirLS = dirLS * ( 1.0f / max( length( dirLS ), 1e-6f ) );
-		posLS += biasDirLS * probeParams.vctInvResolution_cascadeMaxLod[0].xyz;
+		float3 biasDirLS = jahConeBiasDir( dirLS );
+		posLS = jahConeStart( posLS, biasDirLS );
 
 		@property( vct_num_probes > 1 )
 			/*float3 blendv = abs( posLS * 2.0f - 1.0f );
@@ -343,62 +258,12 @@
 		@end
 
 		@property( !vct_disable_diffuse )
-			@property( vct_cone_dirs == 6 )
-				float3 cone_dirs[6] =
-					OGRE_ARRAY_START( float3 )
-						float3( 0.0, 0.0, 1.0 ),
-						float3( 0.866025, 0.0, 0.5 ),
-						float3( 0.267617, 0.823639, 0.5 ),
-						float3( -0.700629, 0.509037, 0.5 ),
-						float3( -0.700629, -0.509037, 0.5 ),
-						float3( 0.267617, -0.823639, 0.5 )
-					OGRE_ARRAY_END;
-
-				float coneWeights[6] = OGRE_ARRAY_START( float ) 0.25, 0.15, 0.15, 0.15, 0.15, 0.15 OGRE_ARRAY_END;
-				float coneAngleTan = 0.577;
-			@else
-				float3 cone_dirs[4] =
-					OGRE_ARRAY_START( float3 )
-						float3( 0.707107, 0.0, 0.707107 ),
-						float3( 0.0, 0.707107, 0.707107 ),
-						float3( -0.707107, 0.0, 0.707107 ),
-						float3( 0.0, -0.707107, 0.707107 )
-					OGRE_ARRAY_END;
-
-				float coneWeights[4] = OGRE_ARRAY_START( float ) 0.25, 0.25, 0.25, 0.25 OGRE_ARRAY_END;
-				float coneAngleTan = 0.98269;
-			@end
-
-			//Radiance / diffuse
-			float3 light = float3( 0.0f, 0.0f, 0.0f );
-			// THE ENVIRONMENT EACH CONE ESCAPES TO, in radiance (not in the voxel
-			// volume's normalised units, so it is added after the decode below).
-			float3 jahEnvD = float3( 0.0f, 0.0f, 0.0f );
-			for( int i=0; i<@value( vct_cone_dirs ); ++i )
-			{
-				float3 dirVS = mul( TBN, cone_dirs[i] );
-				float3 dir = toVctProbeSpaceDir( dirVS, probeParams );
-
-				// THE WHOLE WALK, cascade 0 and every hop out (JahVoxelMarch; the
-				// rules and their fork-change numbers are in its header).
-				JahConeResult result = jahConeMarch( posLS, dir, coneAngleTan, biasDirLS, dirLS,
-				@property( vct_cone_dirs == 4 )
-													 JAH_MARCH_LODSTEP );
-				@else
-													 0u );
-				@end
-
-				light += coneWeights[i] * result.colour;
-				// THE ESCAPE: the share of this cone the voxels did not stop (the
-				// ESCAPE opacity, not the colour's - they differ only where the
-				// anisotropic volumes are read; JahVoxelMarch, the escape estimate)
-				// sees the environment IN THIS CONE'S DIRECTION AT THIS CONE'S
-				// APERTURE. Not the normal's SH, and not a two-band pole
-				// approximation of it: a cone that looks at the horizon glow sees
-				// the horizon glow.
-				jahEnvD += coneWeights[i] * ( 1.0f - min( 1.0f, result.escapeAlpha / 0.95f ) ) *
-						   jahEnvCone( jahViewToWorldDir( dirVS ), coneAngleTan );
-			}
+			// THE DIFFUSE CONES (JahVoxelCones): the voxels' share, and each cone's
+			// escape reading the one environment in that cone's direction at that
+			// cone's aperture - radiance, added after the voxels' decode below.
+			float3 light;
+			float3 jahEnvD;
+			jahDiffuseCones( posLS, biasDirLS, dirLS, TBN, light, jahEnvD );
 		@end
 
 		float blendWeight = probeParams.blendFade * blend * probeParams.multiplier;
@@ -508,7 +373,7 @@
 	float3x3 jahConeToView = passBuf.invViewMatCubemap;
 	float3x3 jahConeBasis =
 		mul( jahConeToView,
-			 buildConeBasis( mul( float3( pixelData.geomNormal ), jahConeToView ) ) );
+			 jahConeBasis( mul( float3( pixelData.geomNormal ), jahConeToView ) ) );
 
 	@property( use_parallax_correct_cubemaps )
 		float3 vctSpecPosVS = float3( 0, 0, 0 );

@@ -1,0 +1,64 @@
+@piece( JahBrdf )
+// THE DIFFUSE LOBE AND THE PUNCTUAL LIGHT'S TERMS, WRITTEN ONCE (Jahshaka,
+// PHOTON-CARDS-2 part A; the CARDS-1 audit's F3). HlmsPbs's BRDF_Default
+// (Main/200.BRDFs_piece_ps.any) and the surface cache's card job (Jahshaka's
+// Hlms/Jahshaka/JahCardLight_cs.glsl, which lists this file by name) both call
+// these functions; the card job used to carry a transcription of each.
+//
+// IT LIVES IN THE FORK'S OWN PBS MEDIA (Hlms/Pbs/Any, parsed by every HlmsPbs
+// and reachable by name from a compute job's piece list), beside
+// JahDiffuseAlbedo and for the same reason: BRDF_Default runs in EVERY HlmsPbs,
+// the ones registered without Jahshaka's Hlms library included.
+//
+// Plain GLSL in float (the Vulkan backend is the only one this fork ships
+// media for); BRDF_Default converts its midf arguments at the call.
+
+// THE ENERGY FACTOR of the normalised Disney diffuse (Frostbite, "Moving
+// Frostbite to Physically Based Rendering", Lagarde and de Rousiers): the
+// grazing retro-reflection the fd90 term adds is paid back by a factor that
+// runs from 1 at perceptual roughness 0 to 1 / 1.51 = 0.662 at 1. The DIRECT
+// lobe carries it; the ENVIRONMENT lobe carries the lobe's exact integral
+// instead (jahDiffuseAlbedo, JahDiffuseAlbedo_piece_all.any).
+float jahDiffuseEnergyFactor( float perceptualRoughness )
+{
+	return mix( 1.0, 1.0 / 1.51, perceptualRoughness );
+}
+
+// THE NORMALISED DISNEY DIFFUSE LOBE, without the albedo and without NdotL:
+// lightScatter x viewScatter x the energy factor, with
+//   fd90 = 0.5 r + 2 r (V.H)^2,  scatter( x ) = 1 + ( fd90 - 1 ) ( 1 - x )^5.
+// Multiplied by kD (the diffuse colour already divided by pi) and by NdotL x
+// the light's irradiance it is BRDF_Default's diffuse term. At V = N — a
+// surface-cache texel, which stores the view-independent diffuse — pass
+// NdotV = 1 and V.H = N.H: viewScatter is then exactly 1.
+float jahDisneyDiffuse( float NdotL, float NdotV, float VdotH, float perceptualRoughness )
+{
+	float energyBias = perceptualRoughness * 0.5;
+	float energyFactor = jahDiffuseEnergyFactor( perceptualRoughness );
+	float fd90 = energyBias + 2.0 * VdotH * VdotH * perceptualRoughness;
+	float lightScatter = 1.0 + ( fd90 - 1.0 ) * pow( 1.0 - NdotL, 5.0 );
+	float viewScatter = 1.0 + ( fd90 - 1.0 ) * pow( 1.0 - NdotV, 5.0 );
+	return lightScatter * viewScatter * energyFactor;
+}
+
+// A POINT OR SPOT LIGHT'S DISTANCE ATTENUATION at distance d inside its range:
+// 1 / ( 0.5 + ( linear + quadratic d ) d ), times the fade to zero at the range
+// (fork change 0018: ( range - d ) / range, so a light never ends in a hard
+// edge). `attenuation` is the pass buffer's light attenuation vector:
+// ( range, linear, quadratic, 1 / range ).
+float jahLightAttenuation( float d, vec4 attenuation )
+{
+	float atten = 1.0 / ( 0.5 + ( attenuation.y + attenuation.z * d ) * d );
+	return atten * max( ( attenuation.x - d ) * attenuation.w, 0.0 );
+}
+
+// A SPOT LIGHT'S CONE: 0 outside the outer angle, a falloff-shaped ramp to 1
+// at the inner one. `spotParams` = ( 1 / ( cos inner/2 - cos outer/2 ),
+// cos outer/2, falloff ); `spotCosAngle` = the cosine between the spot's
+// direction and the direction from the light to the point.
+float jahSpotAttenuation( float spotCosAngle, vec3 spotParams )
+{
+	float spotAtten = clamp( ( spotCosAngle - spotParams.y ) * spotParams.x, 0.0, 1.0 );
+	return pow( spotAtten, spotParams.z );
+}
+@end
