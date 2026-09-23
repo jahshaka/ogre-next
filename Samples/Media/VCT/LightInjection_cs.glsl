@@ -27,6 +27,16 @@ uniform restrict writeonly image3D lightVoxel;
 	uniform restrict writeonly image3D directVoxel;
 @end
 
+// JAHSHAKA (CLOUDS-2D-2): THE CLOUD LAYER'S FIELD -- the host binds it at t3
+// and sets `jah_cloud_shadow` when a 2D cloud layer shades the sun
+// (OgreScene::bindCloudInjection). Its three parameters are declared in the
+// Params block below whether or not it is bound, so the job's parameter list
+// is one list; without the property nothing reads them.
+@property( jah_cloud_shadow )
+	vulkan_layout( ogre_t3 ) uniform texture2D jahCloudField;
+	vulkan( layout( ogre_s3 ) uniform sampler jahCloudSampler );
+@end
+
 layout( local_size_x = @value( threads_per_group_x ),
 		local_size_y = @value( threads_per_group_y ),
 		local_size_z = @value( threads_per_group_z ) ) in;
@@ -38,6 +48,11 @@ layout( local_size_x = @value( threads_per_group_x ),
 
 @insertpiece( HeaderCS )
 
+@property( jah_cloud_shadow )
+	#define JAH_CLOUD_TAU( uv ) textureLod( sampler2D( jahCloudField, jahCloudSampler ), uv, 0.0 ).x
+	@insertpiece( JahCloudShadow )
+@end
+
 vulkan( layout( ogre_P0 ) uniform Params { )
 	uniform uint numLights;
 	uniform float4 rayMarchStepSize_bakingMultiplier;
@@ -45,6 +60,12 @@ vulkan( layout( ogre_P0 ) uniform Params { )
 	uniform float3 voxelCellSize;
 	uniform float4 dirCorrectionRatio_thinWallCounter;
 	uniform float3 invVoxelResolution;
+	// JAHSHAKA (CLOUDS-2D-2): the cloud layer's map (1 / tile, strength,
+	// scroll xz), its sun throw (toSun.xz / toSun.y, altitude, 1 / mu_s) and
+	// this volume's world origin (the voxel centres are origin-relative).
+	uniform float4 jahCloudMap;
+	uniform float4 jahCloudSun;
+	uniform float4 jahCloudOrigin;
 vulkan( }; )
 
 #define p_numLights numLights

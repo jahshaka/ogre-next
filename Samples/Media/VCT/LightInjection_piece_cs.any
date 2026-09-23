@@ -236,6 +236,15 @@
 			// (1.0, 0.31, 0.31) bleeds pink. With the PI gone the stored value
 			// is rho * NdotL * D / D_max, at most exactly 1 -- the whole 8-bit
 			// range, used and never exceeded, and the bleed keeps its hue.
+			// JAHSHAKA (CLOUDS-2D-2): A DIRECTIONAL LIGHT CROSSES THE CLOUD SHEET on
+			// its way to this voxel -- the same transmittance the pixel's direct
+			// term takes (the piece JahCloudShadow), at the voxel's world centre,
+			// so a voxel and the surface it stands for are darkened by one factor.
+			@property( jah_cloud_shadow )
+				if( light.pos.w == 0.0f )
+					alpha *= jahCloudTransmittance( voxelAabbCenter + jahCloudOrigin.xyz,
+													jahCloudMap, jahCloudSun );
+			@end
 			blockColour += c_invPI * NdotL * lobeAlbedo * light.diffuse.xyz * alpha * albedoVal.xyz;
 		}
 	}

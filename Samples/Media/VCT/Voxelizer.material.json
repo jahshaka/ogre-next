@@ -39,7 +39,7 @@
             "threads_per_group" : [4, 4, 4],
 
             "source" : "LightInjection_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "AreaLights_LTC_piece_ps.any", "sRGB.any", "JahDiffuseAlbedo_piece_all.any", "LightInjection_piece_cs.any"],
+            "pieces" : ["CrossPlatformSettings_piece_all", "AreaLights_LTC_piece_ps.any", "sRGB.any", "JahDiffuseAlbedo_piece_all.any", "JahCloudShadow_piece_all.any", "LightInjection_piece_cs.any"],
             "inform_shader_of_texture_data_change" : true,
 
             "thread_groups_based_on_uav" : 0,
@@ -55,7 +55,8 @@
 
             "properties" :
             {
-                "hlms_lights_area_ltc" : 1
+                "hlms_lights_area_ltc" : 1,
+                "jah_cloud_shadow" : 0
             },
 
             "params" :
@@ -64,7 +65,10 @@
                 ["rayMarchStepSize_bakingMultiplier",   [1,1,1,1],  "float"],
                 ["voxelCellSize",           [1,1,1],    "float"],
                 ["dirCorrectionRatio_thinWallCounter", [1,1,1,1],   "float"],
-                ["invVoxelResolution",      [1,1,1],    "float"]
+                ["invVoxelResolution",      [1,1,1],    "float"],
+                ["jahCloudMap",             [0,0,0,0],  "float"],
+                ["jahCloudSun",             [0,0,0,1],  "float"],
+                ["jahCloudOrigin",          [0,0,0,0],  "float"]
             ],
 
             "params_glsl" :
