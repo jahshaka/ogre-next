@@ -179,11 +179,19 @@
 		float r = max( length( dir ), 1e-6 );
 		dir *= 1.0 / r;
 
-		// Ignore probes that are behind us, but don't black them out completely
-		// as detailed surface may otherwise have very few probes ppointing at it
+		// A PROBE BEHIND THE SHADED POINT'S TANGENT PLANE HAS NO SAY (Jahshaka,
+		// PHOTON-WRITER-1). Upstream kept a floor of 0.2 for it so a detailed surface
+		// never runs out of probes - but the cage always holds a probe on the point's
+		// own side (the sample point is inside the cage and in front of its plane), the
+		// sum is normalised, and a probe behind an opaque surface measured the other
+		// side's light: under a thin floor it is the underside, and the floor of 0.2
+		// handed it a sixth of a front probe's weight (the chain's field over an open
+		// floor read 0.729 of its analytic sky visibility with it, 0.927 without; the
+		// depth moments cannot reject it - their cosine-wide integration averages a
+		// probe's upward texel over its grazing rays, so the Chebyshev test passes).
 		float weight;
 		weight = dot( dir, ifdSpaceNormal ) * 200.0;
-		weight = saturate( weight ) + 0.2;
+		weight = saturate( weight );
 
 		// Compute the trilinear weights based on the grid cell vertex to smoothly
 		// transition between probes. Avoid ever going entirely to zero because that

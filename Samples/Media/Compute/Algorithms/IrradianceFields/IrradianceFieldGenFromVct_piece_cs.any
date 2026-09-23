@@ -205,7 +205,21 @@
 	float3 startBias = dir * JAH_VOX_INVRES( 0 );
 	// JAH_MARCH_NO_ESCAPE: this job reads the ray's own composite, never the
 	// march's occupancy estimate (why: the escape, below).
-	JahConeResult ray = jahConeMarch( posLS + startBias, dir, p.coneAngleTan, float3( 0, 0, 0 ),
+	//
+	// A RAY, NOT A CONE (Jahshaka, PHOTON-WRITER-1): aperture ZERO, so the march
+	// crosses the voxels at the store's own resolution (its diameter floor is one
+	// cell of the cascade it is in). The probe's irradiance is the cosine sum over
+	// its N rays - a Riemann sum whose per-bin estimator is the radiance along the
+	// bin's centre - and a cone's composite transmittance is not that: its
+	// footprint grows into geometry the axis never meets, so it OVER-OCCLUDES, most
+	// where the footprint lies along a surface - the grazing directions over a
+	// floor, where a low sun's sky is brightest. Measured on the two target rows
+	// (the chain's field over an open floor, and the low sun's cascade-0 face):
+	// the bin's own cone (tan 0.1686) 0.530 of the analytic sky / a 2.56-2.70x
+	// face step; upstream's tan 0.0437 0.662 / 1.67-1.77x; a ray 0.729 / 1.18-1.31x
+	// (with the reader's backface rule 0.927 / 1.08-1.19x). The bin's cone stays
+	// where it IS the right estimate: the environment, below.
+	JahConeResult ray = jahConeMarch( posLS + startBias, dir, 0.0, float3( 0, 0, 0 ),
 									  float3( 0, 0, 0 ),
 									  JAH_MARCH_GAP_ALONG_DIR | JAH_MARCH_NO_ESCAPE );
 	// THE DEPTH STAYS CASCADE-0-LOCAL AND IS MEASURED FROM THE PROBE: the march's
@@ -220,8 +234,9 @@
 	// THE SKY IS PART OF THE PROBE'S IRRADIANCE (Jahshaka, PHOTON-ENV-1). The share
 	// of this ray the voxels did not stop — `1 - min( 1, opacity / 0.95 )`, the
 	// same escape the pixel's cones weight theirs by — sees the ONE ENVIRONMENT in
-	// the ray's direction at the ray's own aperture (the solid angle 2 pi / N of a
-	// probe's N rays), and the cosine integration below carries it into the
+	// the ray's direction prefiltered over the ray's own BIN (the cone of solid
+	// angle 4 pi / N, coneAngleTan - IrradianceField derives it from the ray
+	// count), and the cosine integration below carries it into the
 	// irradiance atlas beside the bounce: one integral of everything the probe
 	// sees. THE OPACITY IS THE RAY'S OWN COMPOSITE (`alpha`), NOT THE MARCH'S
 	// OCCUPANCY ESTIMATE, and that is physics: the occupancy estimate exists for a
