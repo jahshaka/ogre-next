@@ -162,6 +162,7 @@ namespace Ogre
         ParallaxCorrectedCubemapBase *mParallaxCorrectedCubemap;
         float                         mPccVctMinDistance;
         float                         mInvPccVctInvDistance;
+        float                         mPccVctMaxDistance;  ///< JAHSHAKA: as passed, for the getter
 
         uint32 mCurrentPassBuffer;  ///< Resets to zero every new frame.
 
@@ -466,6 +467,14 @@ namespace Ogre
         {
             return mParallaxCorrectedCubemap;
         }
+        /// JAHSHAKA: the two distances setParallaxCorrectedCubemap was given, so a second
+        /// PBS-family Hlms can be told exactly what this one holds.
+        float getPccVctMinDistance() const { return mPccVctMinDistance; }
+        float getPccVctMaxDistance() const { return mPccVctMaxDistance; }
+        /// JAHSHAKA: the IBL mip count this Hlms uploads (automatic or forced).
+        float getMaxSpecIblMipmap() const { return mMaxSpecIblMipmap; }
+        /// JAHSHAKA: non-null once loadLtcMatrix() ran.
+        TextureGpu *getLtcMatrixTexture() const { return mLtcMatrixTexture; }
 
         void setIrradianceVolume( IrradianceVolume *irradianceVolume )
         {

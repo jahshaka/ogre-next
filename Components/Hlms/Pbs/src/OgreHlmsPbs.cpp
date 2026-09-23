@@ -279,6 +279,7 @@ namespace Ogre
         mParallaxCorrectedCubemap( 0 ),
         mPccVctMinDistance( 1.0f ),
         mInvPccVctInvDistance( 1.0f ),
+        mPccVctMaxDistance( 2.0f ),
         mCurrentPassBuffer( 0 ),
         mGridBuffer( 0 ),
         mGlobalLightListBuffer( 0 ),
@@ -4075,6 +4076,7 @@ namespace Ogre
         mParallaxCorrectedCubemap = pcc;
         mPccVctMinDistance = pccVctMinDistance;
         mInvPccVctInvDistance = 1.0f / ( pccVctMaxDistance - pccVctMinDistance );
+        mPccVctMaxDistance = pccVctMaxDistance;
     }
     //-----------------------------------------------------------------------------------
     void HlmsPbs::setAreaLightMasks( TextureGpu *areaLightMask ) { mAreaLightMasks = areaLightMask; }
