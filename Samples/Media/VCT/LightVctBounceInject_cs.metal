@@ -21,7 +21,7 @@ struct Params
 	float3 invVoxelResolution;
 	float iterationDampening;
 
-	float4 startBias_invStartBias_cascadeMaxLod[@value( hlms_num_vct_cascades )];
+	float4 vctInvResMaxLod[@value( hlms_num_vct_cascades )];
 
 	@property( hlms_num_vct_cascades > 1 )
 		float4 fromPreviousProbeToNext[@value( hlms_num_vct_cascades ) - 1][2];
@@ -34,7 +34,7 @@ struct Params
 #define p_voxelCellSize p.voxelCellSize
 #define p_invVoxelResolution p.invVoxelResolution
 #define p_iterationDampening p.iterationDampening
-#define p_vctStartBias_invStartBias_cascadeMaxLod p.startBias_invStartBias_cascadeMaxLod
+#define p_vctInvResMaxLod p.vctInvResMaxLod
 #define p_vctFromPreviousProbeToNext p.fromPreviousProbeToNext
 
 @insertpiece( HeaderCS )

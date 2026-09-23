@@ -162,22 +162,33 @@
 
 	// THE START BIAS (0070's rule, the ray's own direction as the bias direction).
 	// A probe sits at a lattice point, and one standing in or beside a surface's
-	// own cell would otherwise meet that cell's opacity on its first sample - a
-	// grazing ray on an open floor stopped by the floor it is lying on. The pixel's
-	// cones leave their surface's cell by one cell along the normal before they
-	// sample; a probe ray leaves its own cell by one cell (of cascade 0, where every
-	// ray starts) along the ray, componentwise, so the step is one cell long in
-	// every direction.
+	// own cell would otherwise meet that cell's opacity on its first sample. The
+	// ray leaves by one cell of cascade 0 along itself, componentwise, and the
+	// march then takes its own first step (one cell measured along the ray, the L1
+	// cell) before it samples: THE FIRST SAMPLE IS TWO CELLS FROM THE PROBE along an
+	// axis and up to 2.73 along a diagonal - the pixel cone's geometry (surface,
+	// one cell along the normal, the march's step). Measured at 0 / 1 / 2 extra
+	// cells (PHOTON-READER-1): gi.ddgi_ambient's floor 0.914 / 0.915 / 0.915 of its
+	// truth, the sealed room 1 / 1 / 3 codes, gi.leak_room's thin walls within
+	// 0.004 of each other at 0 and 1 - nothing overrules the pixel's geometry.
 	float3 startBias = dir * JAH_VOX_INVRES( 0 );
+	// JAH_MARCH_NO_ESCAPE: this job reads the ray's own composite, never the
+	// march's occupancy estimate (why: the escape, below).
 	JahConeResult ray = jahConeMarch( posLS + startBias, dir, p.coneAngleTan, float3( 0, 0, 0 ),
-									  float3( 0, 0, 0 ), JAH_MARCH_GAP_ALONG_DIR );
+									  float3( 0, 0, 0 ),
+									  JAH_MARCH_GAP_ALONG_DIR | JAH_MARCH_NO_ESCAPE );
 	// THE DEPTH STAYS CASCADE-0-LOCAL AND IS MEASURED FROM THE PROBE: the march's
 	// age converted back into cascade 0's normalised units (travelledC0 = the age
 	// in the last cascade's units over the product of the per-hop scales along the
-	// ray), plus the start bias's own length, then into the units the pixel shader
-	// compares against, as before.
+	// ray), plus the start bias's own length - and BOUNDED at cascade 0's diagonal,
+	// 1.414, the old march's own exit. A miss has no distance; the moments feed
+	// the Chebyshev visibility test, and an unbounded miss distance (the chain's
+	// exit is ~8x further) blows up the variance of every texel that mixes hits
+	// and misses - a probe beside a wall, rays over its top - which is where the
+	// test has to bite (DDGI bounds a miss the same way). The escape channel below
+	// keeps the ray's true opacity.
 	float4 diffuse = float4( ray.colour,
-							 ( ray.travelledC0 + length( startBias ) ) *
+							 min( ray.travelledC0 + length( startBias ), 1.414213562 ) *
 								 dot( abs( dir ), float3( p.numProbes.xyz ) ) );
 	g_diffuseDepth[gl_LocalInvocationIndex] = diffuse;
 	// THE ESCAPE FRACTION: the share of this ray the voxels did not stop, which is

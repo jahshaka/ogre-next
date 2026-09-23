@@ -14,9 +14,8 @@
 	// Every rule and its fork-change number is written there once; what is here
 	// is the binding.
 	//
-	// INVRES: the volumes are cubic (the engine always sets one resolution on
-	// all three axes), so the per-axis inverse resolution the reader wants is the
-	// one this job is already given, `startBias` = 1 / the smallest axis.
+	// The chain's parameters are VctLighting::getCascadeChainParams' arrays (the one
+	// definition the pixel pass buffer and the field's generation job read too).
 	#define JAH_VOX_MAX_CASCADES @value( hlms_num_vct_cascades )
 	#define JAH_VOX_COUNT @value( hlms_num_vct_cascades )
 	#define JAH_VOX_SAMPLE_ISO( c, u, l ) OGRE_SampleLevel( vctProbes[c], vctProbeSampler, u, l )
@@ -30,8 +29,8 @@
 		#define JAH_VOX_HAS_ANISO 0
 		#define JAH_VOX_ANISO false
 	@end
-	#define JAH_VOX_INVRES( c ) float3( p_vctStartBias_invStartBias_cascadeMaxLod[c].x, p_vctStartBias_invStartBias_cascadeMaxLod[c].x, p_vctStartBias_invStartBias_cascadeMaxLod[c].x )
-	#define JAH_VOX_MAXLOD( c ) p_vctStartBias_invStartBias_cascadeMaxLod[c].z
+	#define JAH_VOX_INVRES( c ) p_vctInvResMaxLod[c].xyz
+	#define JAH_VOX_MAXLOD( c ) p_vctInvResMaxLod[c].w
 	@property( hlms_num_vct_cascades > 1 )
 		#define JAH_VOX_FROM_PREV_SCALE( c ) p_vctFromPreviousProbeToNext[(c) - 1][0]
 		#define JAH_VOX_FROM_PREV_OFFSET( c ) p_vctFromPreviousProbeToNext[(c) - 1][1]
@@ -82,7 +81,7 @@
 			// bounce carries radiance only; what escapes is the sky's, and the
 			// sky is never injected into the voxels (the pixel adds it).
 			JahConeResult result = jahConeMarch( posLS, dir, coneAngleTan, geomNormal.xyz,
-												 geomNormal.xyz, 0u );
+												 geomNormal.xyz, JAH_MARCH_NO_ESCAPE );
 			light += coneWeights[i] * result.colour;
 		}
 

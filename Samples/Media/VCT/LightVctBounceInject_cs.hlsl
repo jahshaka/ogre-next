@@ -44,7 +44,7 @@ uniform float3 voxelCellSize;
 uniform float3 invVoxelResolution;
 uniform float iterationDampening;
 
-uniform float4 startBias_invStartBias_cascadeMaxLod[@value( hlms_num_vct_cascades )];
+uniform float4 vctInvResMaxLod[@value( hlms_num_vct_cascades )];
 
 @property( hlms_num_vct_cascades > 1 )
 	uniform float4 fromPreviousProbeToNext[@value( hlms_num_vct_cascades ) - 1][2];
@@ -56,7 +56,7 @@ uniform float4 startBias_invStartBias_cascadeMaxLod[@value( hlms_num_vct_cascade
 #define p_voxelCellSize voxelCellSize
 #define p_invVoxelResolution invVoxelResolution
 #define p_iterationDampening iterationDampening
-#define p_vctStartBias_invStartBias_cascadeMaxLod startBias_invStartBias_cascadeMaxLod
+#define p_vctInvResMaxLod vctInvResMaxLod
 #define p_vctFromPreviousProbeToNext fromPreviousProbeToNext
 
 @insertpiece( HeaderCS )
