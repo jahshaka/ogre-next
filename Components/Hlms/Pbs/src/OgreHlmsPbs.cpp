@@ -201,7 +201,6 @@ namespace Ogre
     const IdString PbsProperty::VctAnisotropic = IdString( "vct_anisotropic" );
     const IdString PbsProperty::VctEnableSpecularSdfQuality =
         IdString( "vct_enable_specular_sdf_quality" );
-    const IdString PbsProperty::VctAmbientSphere = IdString( "vct_ambient_hemisphere" );
     const IdString PbsProperty::IrradianceField = IdString( "irradiance_field" );
     const IdString PbsProperty::ObbRestraintApprox = IdString( "obb_restraint_approx" );
 
@@ -1726,9 +1725,6 @@ namespace Ogre
         OGRE_ASSERT_LOW( ( !mRefractionsTexture || ( mRefractionsTexture && mDepthTextureNoMsaa ) ) &&
                          "Refractions texture requires a depth texture!" );
 
-        const bool vctNeedsAmbientHemi =
-            !casterPass && mVctLighting && mVctLighting->needsAmbientHemisphere();
-
         AmbientLightMode ambientMode = mAmbientLightMode;
         ColourValue upperHemisphere = sceneManager->getAmbientLightUpperHemisphere();
         ColourValue lowerHemisphere = sceneManager->getAmbientLightLowerHemisphere();
@@ -1844,7 +1840,6 @@ namespace Ogre
                 setProperty( kNoTid, PbsProperty::VctAnisotropic, mVctLighting->isAnisotropic() );
                 setProperty( kNoTid, PbsProperty::VctEnableSpecularSdfQuality,
                              mVctLighting->shouldEnableSpecularSdfQuality() );
-                setProperty( kNoTid, PbsProperty::VctAmbientSphere, vctNeedsAmbientHemi );
 
                 //'Static' reflections on cubemaps look horrible
                 if( mParallaxCorrectedCubemap && mParallaxCorrectedCubemap->isRendering() )
@@ -2067,15 +2062,13 @@ namespace Ogre
 
             // vec3 ambientUpperHemi + float envMapScale
             if( ( ambientMode >= AmbientFixed && ambientMode <= AmbientHemisphereRimSquared ) ||
-                envMapScale != 1.0f || vctNeedsAmbientHemi )
+                envMapScale != 1.0f )
             {
                 mapSize += 4 * 4;
             }
 
             // vec3 ambientLowerHemi + padding + vec3 ambientHemisphereDir + padding
-            if( ( ambientMode >= AmbientHemisphereNormal &&
-                  ambientMode <= AmbientHemisphereRimSquared ) ||
-                vctNeedsAmbientHemi )
+            if( ambientMode >= AmbientHemisphereNormal && ambientMode <= AmbientHemisphereRimSquared )
             {
                 mapSize += 8 * 4;
             }
@@ -2470,7 +2463,7 @@ namespace Ogre
 
             // vec3 ambientUpperHemi + padding
             if( ( ambientMode >= AmbientFixed && ambientMode <= AmbientHemisphereRimSquared ) ||
-                envMapScale != 1.0f || vctNeedsAmbientHemi )
+                envMapScale != 1.0f )
             {
                 *passBufferPtr++ = static_cast<float>( upperHemisphere.r );
                 *passBufferPtr++ = static_cast<float>( upperHemisphere.g );
@@ -2479,9 +2472,7 @@ namespace Ogre
             }
 
             // vec3 ambientLowerHemi + padding + vec3 ambientHemisphereDir + padding
-            if( ( ambientMode >= AmbientHemisphereNormal &&
-                  ambientMode <= AmbientHemisphereRimSquared ) ||
-                vctNeedsAmbientHemi )
+            if( ambientMode >= AmbientHemisphereNormal && ambientMode <= AmbientHemisphereRimSquared )
             {
                 *passBufferPtr++ = static_cast<float>( lowerHemisphere.r );
                 *passBufferPtr++ = static_cast<float>( lowerHemisphere.g );

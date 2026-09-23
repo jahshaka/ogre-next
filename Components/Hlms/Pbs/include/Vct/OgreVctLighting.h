@@ -117,8 +117,17 @@ namespace Ogre
         float mBakingMultiplier;
         float mInvBakingMultiplier;
 
-        float mUpperHemisphere[3];
-        float mLowerHemisphere[3];
+        /// THE ONE ENVIRONMENT, FOR THE BOUNCE (Jahshaka, PHOTON-ENV-1): what a bounce
+        /// cone that escapes the voxels sees - the host's disc-free sky cube (or null:
+        /// no sky) read at the cone's aperture, times the environment light's gain, or
+        /// with no cube the environment's nine-band SH in the cone's direction. It
+        /// REPLACES the two-colour hemisphere pair this class used to hand the pixel
+        /// shader (upstream's setAmbient): every escape in the renderer now reads one
+        /// environment (jah_environment.glsl), and the pixel shader binds its own copy
+        /// of it per pass. Set by the host before update(); read only by the bounce job.
+        TextureGpu *mEnvCube;
+        float       mEnvGain[3];
+        float       mEnvSh[27];  ///< world basis {1,y,z,x,xy,yz,3z^2-1,zx,x^2-y^2}, radiance units
 
         float mDefaultLightDistThreshold;
         bool  mAnisotropic;
@@ -140,6 +149,8 @@ namespace Ogre
         ShaderParams::Param                      *mBounceIterationDampening;
         ShaderParams::Param                      *mBounceInvResMaxLod;
         ShaderParams::Param *mBounceFromPreviousProbeToNext;  ///< Used when cascades > 1
+        ShaderParams::Param *mBounceEnvGainMips;  ///< Jahshaka (PHOTON-ENV-1): rgb gain / multiplier, w mips
+        ShaderParams::Param *mBounceEnvSh;        ///< Jahshaka (PHOTON-ENV-1): nine float4, / multiplier
         ShaderParams        *mBounceShaderParams;
 
         ResourceTransitionArray mResourceTransitions;
@@ -354,8 +365,6 @@ namespace Ogre
         /// This function notifies us that buildRelative to update some of our references
         void resetTexturesFromBuildRelative();
 
-        bool needsAmbientHemisphere() const;
-
         size_t getNumCascades() const { return mExtraCascades.size() + 1u; }
 
         /** THE CASCADE CHAIN'S PARAMETERS, the one definition every reader of the chain
@@ -405,20 +414,23 @@ namespace Ogre
         void setAnisotropic( bool bAnisotropic );
         bool isAnisotropic() const { return mAnisotropic; }
 
-        /** Extremely similar version of SceneManager::setAmbientLight
-            In fact the hemisphereDir parameter is shared and set in SceneManager::setAmbientLight
-
-            Setting upperHemisphere = lowerHemisphere can cause shader recompilations.
-
-            These values are used when cone tracing reaches the end of the probe without hitting
-            anything, which usually means the sky must be visible.
-        @param upperHemisphere
-            upperHemisphere should be set to the sky colour, which is usually set to a value *much*
-            brighter than the ambient light (i.e. use the clear colour instead of the ambient colour)
-        @param lowerHemisphere
-            lowerHemisphere should be set to the ground colour
+        /** THE ENVIRONMENT A BOUNCE CONE ESCAPES TO (Jahshaka, PHOTON-ENV-1). Replaces
+            upstream's setAmbient hemisphere pair, which the pixel shader used to add
+            wherever a cone escaped: the pixel shader now reads the environment itself
+            (the host binds the cube per pass), and this class keeps only what its own
+            BOUNCE job needs - the sky enters the voxels once, as what an escaping bounce
+            cone sees at injection (the sky is never injected as a source).
+        @param cube
+            The disc-free, GGX-prefiltered environment cube, or null (no sky: the SH
+            below is the whole environment). Not owned; the host keeps it alive and
+            calls this again before it dies.
+        @param gain
+            The environment light's gain per channel (applied to the cube only).
+        @param sh
+            27 floats: the environment's nine-band SH in WORLD axes and radiance units,
+            the gain already applied (the host's own ambient coefficients).
         */
-        void setAmbient( const ColourValue &upperHemisphere, const ColourValue &lowerHemisphere );
+        void setEnvironment( TextureGpu *cube, const ColourValue &gain, const float sh[27] );
 
         TextureGpu **getLightVoxelTextures() { return mLightVoxel; }
         /// JAHSHAKA PATCH: THE DIRECT TERM'S VOLUME (patch 0076's D term), or null

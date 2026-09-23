@@ -113,14 +113,17 @@ namespace Ogre
         mBounceIterationDampening( 0 ),
         mBounceInvResMaxLod( 0 ),
         mBounceFromPreviousProbeToNext( 0 ),
+        mBounceEnvGainMips( 0 ),
+        mBounceEnvSh( 0 ),
         mBounceShaderParams( 0 ),
         mSpecularSdfQuality( 0.875f ),
         mMultiplier( 1.0f ),
         mDebugVoxelVisualizer( 0 )
     {
         memset( mLightVoxel, 0, sizeof( mLightVoxel ) );
-        memset( mUpperHemisphere, 0, sizeof( mUpperHemisphere ) );
-        memset( mLowerHemisphere, 0, sizeof( mLowerHemisphere ) );
+        mEnvCube = 0;
+        memset( mEnvGain, 0, sizeof( mEnvGain ) );
+        memset( mEnvSh, 0, sizeof( mEnvSh ) );
 
         OGRE_ASSERT_LOW( mVoxelizer->getAlbedoVox() &&
                          "VctVoxelizer::build must've been called before creating VctLighting!" );
@@ -156,13 +159,16 @@ namespace Ogre
 
         mBounceShaderParams = &mLightVctBounceInject->getShaderParams( "default" );
 
-        mLocalBounceShaderParams.reserve( 7u );
+        // RESERVED FOR EVERY PARAM BELOW: the members are pointers INTO this vector.
+        mLocalBounceShaderParams.reserve( 9u );
 
         mBounceVoxelCellSize = addLocalBounceShaderParam( "voxelCellSize" );
         mBounceInvVoxelResolution = addLocalBounceShaderParam( "invVoxelResolution" );
         mBounceIterationDampening = addLocalBounceShaderParam( "iterationDampening" );
         mBounceInvResMaxLod = addLocalBounceShaderParam( "vctInvResMaxLod" );
         mBounceFromPreviousProbeToNext = addLocalBounceShaderParam( "fromPreviousProbeToNext" );
+        mBounceEnvGainMips = addLocalBounceShaderParam( "envGainMips" );
+        mBounceEnvSh = addLocalBounceShaderParam( "envSh" );
 
         createTextures();
     }
@@ -575,6 +581,12 @@ namespace Ogre
             numNeededTexUnits = 6u + 4u * static_cast<uint8>( numExtraCascades ) + 1u;
         else
             numNeededTexUnits = 3u + static_cast<uint8>( numExtraCascades ) + 1u;
+        // Jahshaka (PHOTON-ENV-1): +1 for the environment cube, at the very last unit
+        // (after `directVoxel`) and only while one is set - the job's `jah_env`
+        // property says so to the shader, and it is re-asserted per dispatch with
+        // the rest of these bindings (the job is shared by name).
+        if( mEnvCube )
+            ++numNeededTexUnits;
 
         HlmsManager *hlmsManager = mVoxelizer->getHlmsManager();
         const RenderSystemCapabilities *caps = hlmsManager->getRenderSystem()->getCapabilities();
@@ -649,6 +661,19 @@ namespace Ogre
         // OpenGL path's samplerblock loop above deliberately skips it).
         texSlot.texture = mLightDirect;
         mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
+
+        // Jahshaka (PHOTON-ENV-1): the environment cube, sampled with the probes'
+        // trilinear sampler (a separate sampler object on Vulkan).
+        {
+            const int32 envOn = mEnvCube ? 1 : 0;
+            if( mLightVctBounceInject->getProperty( "jah_env" ) != envOn )
+                mLightVctBounceInject->setProperty( "jah_env", envOn );
+        }
+        if( mEnvCube )
+        {
+            texSlot.texture = mEnvCube;
+            mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
+        }
 
         DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
         uavSlot.access = ResourceAccess::Write;
@@ -789,6 +814,27 @@ namespace Ogre
             mBounceFromPreviousProbeToNext->setManualValue( 0.0f );
             mBounceFromPreviousProbeToNext->isDirty = false;
         }
+        // THE ENVIRONMENT, in this volume's STORED units (Jahshaka, PHOTON-ENV-1): the
+        // voxels hold radiance divided by the decode multiplier the pixel shader
+        // applies (fillConstBufferData's `multiplier`), so the sky an escaping bounce
+        // cone adds is divided by the same number here and decodes to radiance.
+        {
+            const float finalMultiplier = mInvBakingMultiplier * mMultiplier;
+            const float invFinal = finalMultiplier > 0.0f ? 1.0f / finalMultiplier : 0.0f;
+            const float mips = mEnvCube ? float( mEnvCube->getNumMipmaps() ) : 1.0f;
+            const float gainMips[4] = { mEnvGain[0] * invFinal, mEnvGain[1] * invFinal,
+                                        mEnvGain[2] * invFinal, mips };
+            mBounceEnvGainMips->setManualValue( gainMips, 4u );
+            float sh[36];
+            for( size_t i = 0u; i < 9u; ++i )
+            {
+                for( size_t c = 0u; c < 3u; ++c )
+                    sh[i * 4u + c] = mEnvSh[i * 3u + c] * invFinal;
+                sh[i * 4u + 3u] = 0.0f;
+            }
+            mBounceEnvSh->setManualValue( sh, 36u );
+        }
+
         mBounceShaderParams->mParams.swap( mLocalBounceShaderParams );
         mBounceShaderParams->setDirty();
 
@@ -1161,11 +1207,6 @@ namespace Ogre
         renderSystem->debugAnnotationPop();
     }
     //-------------------------------------------------------------------------
-    bool VctLighting::needsAmbientHemisphere() const
-    {
-        return memcmp( mUpperHemisphere, mLowerHemisphere, sizeof( mUpperHemisphere ) ) != 0;
-    }
-    //-------------------------------------------------------------------------
     void VctLighting::resetTexturesFromBuildRelative()
     {
         if( mDebugVoxelVisualizer )
@@ -1199,7 +1240,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     size_t VctLighting::getConstBufferSize() const
     {
-        size_t retVal = 10u * 4u * sizeof( float );
+        size_t retVal = 8u * 4u * sizeof( float );
         retVal += ( 4u + 4u * 2u ) * sizeof( float ) * mExtraCascades.size();
         return retVal;
     }
@@ -1327,7 +1368,6 @@ namespace Ogre
         const float mipDiff = ( maxMipmapCount - 8.0f ) * 0.5f;
 
         const float finalMultiplier = mInvBakingMultiplier * mMultiplier;
-        const float invFinalMultiplier = 1.0f / finalMultiplier;
 
         const size_t numCascades = mExtraCascades.size() + 1u;
 
@@ -1350,18 +1390,6 @@ namespace Ogre
         *passBufferPtr++ = Math::lerp( 0.1875f, 0.3125f, mSpecularSdfQuality ) * smallestRes;
         *passBufferPtr++ = 1.0f;
         *passBufferPtr++ = finalMultiplier;
-
-        // float4 ambientUpperHemi
-        *passBufferPtr++ = mUpperHemisphere[0] * invFinalMultiplier;
-        *passBufferPtr++ = mUpperHemisphere[1] * invFinalMultiplier;
-        *passBufferPtr++ = mUpperHemisphere[2] * invFinalMultiplier;
-        *passBufferPtr++ = 0.0f;
-
-        // float4 ambientLowerHemi
-        *passBufferPtr++ = mLowerHemisphere[0] * invFinalMultiplier;
-        *passBufferPtr++ = mLowerHemisphere[1] * invFinalMultiplier;
-        *passBufferPtr++ = mLowerHemisphere[2] * invFinalMultiplier;
-        *passBufferPtr++ = 0.0f;
 
         Matrix4 xform, invXForm;
         xform.makeTransform( -mVoxelizer->getVoxelOrigin() / mVoxelizer->getVoxelSize(),
@@ -1430,14 +1458,16 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    void VctLighting::setAmbient( const ColourValue &upperHemisphere,
-                                  const ColourValue &lowerHemisphere )
+    void VctLighting::setEnvironment( TextureGpu *cube, const ColourValue &gain, const float sh[27] )
     {
-        for( size_t i = 0; i < 3u; ++i )
-        {
-            mUpperHemisphere[i] = static_cast<float>( upperHemisphere[i] );
-            mLowerHemisphere[i] = static_cast<float>( lowerHemisphere[i] );
-        }
+        mEnvCube = cube;
+        mEnvGain[0] = static_cast<float>( gain.r );
+        mEnvGain[1] = static_cast<float>( gain.g );
+        mEnvGain[2] = static_cast<float>( gain.b );
+        if( sh )
+            memcpy( mEnvSh, sh, sizeof( mEnvSh ) );
+        else
+            memset( mEnvSh, 0, sizeof( mEnvSh ) );
     }
     //-------------------------------------------------------------------------
     TextureGpu **VctLighting::getLightVoxelTextures( const size_t cascadeIdx )
