@@ -42,14 +42,25 @@ float jahDisneyDiffuse( float NdotL, float NdotV, float VdotH, float perceptualR
 }
 
 // A POINT OR SPOT LIGHT'S DISTANCE ATTENUATION at distance d inside its range:
-// 1 / ( 0.5 + ( linear + quadratic d ) d ), times the fade to zero at the range
-// (fork change 0018: ( range - d ) / range, so a light never ends in a hard
-// edge). `attenuation` is the pass buffer's light attenuation vector:
-// ( range, linear, quadratic, 1 / range ).
+// 1 / ( 0.5 + ( linear + quadratic d ) d ). `attenuation` is the pass buffer's
+// light attenuation vector: ( range, linear, quadratic, 1 / range ).
+float jahLightDistanceAttenuation( float d, vec4 attenuation )
+{
+	return 1.0 / ( 0.5 + ( attenuation.y + attenuation.z * d ) * d );
+}
+
+// ...and its FADE to zero at the range (fork change 0018: ( range - d ) / range,
+// so a light never ends in a hard edge). 800.PixelShader applies it under
+// hlms_forward_fade_attenuation_range, which the engine always sets.
+float jahLightRangeFade( float d, vec4 attenuation )
+{
+	return max( ( attenuation.x - d ) * attenuation.w, 0.0 );
+}
+
+// The two together: what a point or spot light's irradiance is scaled by.
 float jahLightAttenuation( float d, vec4 attenuation )
 {
-	float atten = 1.0 / ( 0.5 + ( attenuation.y + attenuation.z * d ) * d );
-	return atten * max( ( attenuation.x - d ) * attenuation.w, 0.0 );
+	return jahLightDistanceAttenuation( d, attenuation ) * jahLightRangeFade( d, attenuation );
 }
 
 // A SPOT LIGHT'S CONE: 0 outside the outer angle, a falloff-shaped ramp to 1

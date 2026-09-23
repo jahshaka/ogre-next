@@ -19,6 +19,7 @@
 
 @property( BRDF_BlinnPhong )
 @piece( DeclareBRDF )
+@insertpiece( JahBrdf )
 //Blinn-Phong
 INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, PixelData pixelData PASSBUF_ARG_DECL )
 {
@@ -59,6 +60,7 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
 		//Note: For blinn-phong we use larger denominators otherwise specular blows out of proportion
 		float_fresnel Rs = ( fresnelS * blinnPhong ) / max( _h( 4.0 ) * pixelData.NdotV * NdotL, _h( 0.75 ) );
 		//Make diffuse look closer to Default.
+		// (Upstream's, NOT jahDiffuseEnergyFactor: it lerps on pixelData.roughness = the GGX ALPHA, not the perceptual roughness Default's lobe uses.)
 		fresnelD *= lerp( _h( 1.0 ), _h( 1.0 / 1.51 ), pixelData.roughness );
     @else
 		midf Rs = blinnPhong;
@@ -73,6 +75,7 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
 
 @property( BRDF_CookTorrance )
 @piece( DeclareBRDF )
+@insertpiece( JahBrdf )
 //Cook-Torrance
 INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, PixelData pixelData PASSBUF_ARG_DECL )
 {
@@ -144,7 +147,9 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
 @property( BRDF_Default )
 @piece( DeclareBRDF )
 // The diffuse lobe is Jahshaka's JahBrdf (Hlms/Pbs/Any/JahBrdf_piece_all.any),
-// the one text the surface cache's card job calls too.
+// the one text the surface cache's card job calls too. EVERY BRDF's DeclareBRDF
+// inserts it, because the light loops (800.PixelShader's DoPointLights and
+// DoSpotLights) call its attenuation and spot-cone functions whatever the BRDF.
 @insertpiece( JahBrdf )
 //Default BRDF
 INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, PixelData pixelData PASSBUF_ARG_DECL )
