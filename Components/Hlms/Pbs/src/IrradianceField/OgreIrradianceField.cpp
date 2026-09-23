@@ -34,8 +34,6 @@ THE SOFTWARE.
 #include "Vct/OgreVctVoxelizerSourceBase.h"
 
 #include "Compositor/OgreCompositorManager2.h"
-#include "Compute/OgreComputeTools.h"
-#include "OgreRenderSystem.h"
 #include "Compositor/OgreCompositorWorkspace.h"
 #include "OgreRoot.h"
 
@@ -139,7 +137,6 @@ namespace Ogre
         mRotateRays( true ),
         mIntegrationSerial( 0u ),
         mRefinesOwed( 0u ),
-        mComputeTools( 0 ),
         mFieldOrigin( Vector3::ZERO ),
         mFieldSize( Vector3::ZERO ),
         mDepthMaxIntegrationTapsPerPixel( 0u ),
@@ -190,7 +187,6 @@ namespace Ogre
             vaoManager->createConstBuffer( sizeof( IfdBorderMirrorParams ), BT_DEFAULT, 0, false );
 
         HlmsCompute *hlmsCompute = mRoot->getHlmsManager()->getComputeHlms();
-        mComputeTools = new ComputeTools( hlmsCompute );
         mGenerationJob = hlmsCompute->findComputeJobNoThrow( "IrradianceField/Gen" );
 
         if( !mGenerationJob )
@@ -216,9 +212,6 @@ namespace Ogre
 
         delete mIfRaster;
         mIfRaster = 0;
-
-        delete mComputeTools;
-        mComputeTools = 0;
 
         VaoManager *vaoManager = mRoot->getRenderSystem()->getVaoManager();
         for( ConstBufferPacked *buffer : mIfGenParamsRing )
@@ -836,18 +829,20 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void IrradianceField::invalidateAllProbes()
     {
-        if( !mIrradianceTex || !mComputeTools ||
-            mIrradianceTex->getResidencyStatus() != GpuResidency::Resident )
-        {
+        if( !mIrradianceTex || !mVctLighting || !mGenerationWorkspace )
             return;
-        }
-        // Zero everywhere: the count (alpha) is what the reader weights by, and a
-        // zero value keeps a stray read of an invalid texel black rather than stale.
-        const float clearValue[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        ResourceTransitionArray transitions;
-        mComputeTools->prepareForUavClear( transitions, mIrradianceTex );
-        mRoot->getRenderSystem()->executeResourceTransition( transitions );
-        mComputeTools->clearUavFloat( mIrradianceTex, clearValue );
+        // THE GENERATION JOB'S OWN DISPATCH in its Invalidate mode (no rays: every
+        // probe's tile to value 0, count 0), not ComputeTools' clear - a clear job
+        // compiled on the first re-placement is a shader compile on a frame the
+        // user sees (vr.warmup counts them). The whole grid, then the caller's work
+        // (the whole grid, fresh) from its start.
+        setWholeWork();
+        mNumProbesProcessed = 0u;
+        mWorkMode = IntegrateInvalidate;
+        update( mWorkTotal );
+        setWholeWork();
+        mNumProbesProcessed = 0u;
+        mWorkMode = IntegrateFresh;
     }
     //-------------------------------------------------------------------------
     void IrradianceField::reset()

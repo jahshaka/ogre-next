@@ -167,7 +167,11 @@ namespace Ogre
             IntegrateChange,
             /// Nothing changed: a probe below the target sample count takes one more
             /// sample, one at the target is skipped (its work group exits before a ray).
-            IntegrateRefine
+            IntegrateRefine,
+            /// No rays: every probe of the work gets sample count 0 and value 0 (a
+            /// re-placement's invalidation; the generation job's own dispatch, so no
+            /// other shader is ever compiled for it).
+            IntegrateInvalidate
         };
 
     protected:
@@ -272,9 +276,6 @@ namespace Ogre
         /// Whole-grid refinements owed after the current work (every event - a build,
         /// a re-placement, a scroll, a change - owes mTargetSamples - 1 of them).
         uint32 mRefinesOwed;
-        /// Clears the irradiance atlas (setFieldVolume's invalidation).
-        ComputeTools *mComputeTools;
-
         /// Jahshaka (PHOTON-FIELD-ROTATE-1): every probe's sample count to 0 - the
         /// pixel's reader weights a probe by its count (saturated), so a probe no
         /// integration has reached since is no probe at all and the reader's
