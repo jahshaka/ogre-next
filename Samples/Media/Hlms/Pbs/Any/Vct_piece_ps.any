@@ -433,8 +433,28 @@
 			// for the sky). Radiance, weighted by the share of the cone the voxels
 			// did not stop, beside the voxels' own share decoded by the volume's
 			// multiplier.
-			float3 jahEnvS = jahEnvCone( jahViewToWorldDir( pixelData.reflDir ), specConeAngleTan ) *
-							 specAlpha;
+			// AT THE SURFACE'S OWN ROUGHNESS, not at the cone's aperture: the
+			// prefiltered chain holds exactly this GGX lobe (jahEnvLobe), the mip
+			// the convolution stored this roughness at and HlmsPbs reads (audit F3).
+			//
+			// ONE SPECULAR ENVIRONMENT PER PIXEL. Where the datablock carries an
+			// environment cube and no probe array holds the slot (use_envprobe_map
+			// without parallax-corrected cubemaps), HlmsPbs's CubemapGlobal adds
+			// that cube, unoccluded, to every pixel, the cone's included - so the
+			// escape adds NOTHING there (adding it counted the sky twice: 1.6-1.95x
+			// on an open metal plate, gi.env_cone). Everywhere else - a probe-array
+			// pass, a material with no cube - the escape IS the specular
+			// environment, weighted by the share the voxels did not stop. (The
+			// escape as THE environment everywhere - occluded sky reflections inside
+			// rooms - waits for the specular walk to stop over-reading its own
+			// surface at a coarse mip: a gold dragon read (33,21,3) with the cube
+			// removed. REFLECT-1 / PCC-1, beside gi.volume_edge_spec_target.)
+		@property( use_envprobe_map && !use_parallax_correct_cubemaps )
+			float3 jahEnvS = float3( 0.0f, 0.0f, 0.0f );
+		@else
+			float3 jahEnvS = jahEnvLobe( jahViewToWorldDir( pixelData.reflDir ),
+										 float( pixelData.perceptualRoughness ) ) * specAlpha;
+		@end
 
 			// JAHSHAKA PATCH 0077: THE FUDGE IS GONE, AT ITS CAUSE.
 			// Upstream's comment here read "0.31831 = 1 / PI, but I'm not sure why

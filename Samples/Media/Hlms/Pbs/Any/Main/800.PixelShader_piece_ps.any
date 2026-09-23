@@ -1,8 +1,14 @@
 // The mapping below is a quadratic fit for log2(perceptualRoughness)+iblRoughnessOneLevel when
 // iblRoughnessOneLevel is 4. We found empirically that this mapping works very well for
 // a 256 cubemap with 5 levels used. But also scales well for other iblRoughnessOneLevel values.
-@piece( envSpecularRoughness ) pixelData.perceptualRoughness * midf_c( passBuf.envMapNumMipmaps ) * ( _h( 2.0 ) - pixelData.perceptualRoughness ) @end
-@piece( envSpecularRoughnessClearCoat ) pixelData.clearCoatPerceptualRoughness * midf_c( passBuf.envMapNumMipmaps ) * ( _h( 2.0 ) - pixelData.clearCoatPerceptualRoughness ) @end
+// Jahshaka (PHOTON-ENV-1, audit F3): the IBL convolution stores perceptual roughness
+// r at mip (N - 1) r (2 - r) of an N-mip chain (CompositorPassIblSpecular:
+// lod = mip / (N - 1), lodToPerceptualRoughness inverts r (2 - r)), and
+// envMapNumMipmaps is N, the COUNT. Upstream read N r (2 - r): one mip rougher
+// than the convolution put the roughness (12.5 % of a 9-mip chain), and a
+// specular step against every reader that maps the chain exactly.
+@piece( envSpecularRoughness ) pixelData.perceptualRoughness * ( midf_c( passBuf.envMapNumMipmaps ) - _h( 1.0 ) ) * ( _h( 2.0 ) - pixelData.perceptualRoughness ) @end
+@piece( envSpecularRoughnessClearCoat ) pixelData.clearCoatPerceptualRoughness * ( midf_c( passBuf.envMapNumMipmaps ) - _h( 1.0 ) ) * ( _h( 2.0 ) - pixelData.clearCoatPerceptualRoughness ) @end
 
 @piece( DefaultHeaderPS )
 	// START UNIFORM DECLARATION

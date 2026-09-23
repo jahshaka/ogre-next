@@ -524,7 +524,8 @@
 		if( jahProbesHere == _h( 0.0 ) && jahNoCone )
 		{
 			midf3 jahSkyDirLS = mul( pixelData.reflDir, midf3x3_c( passBuf.invViewMatCubemap ) );
-			midf jahSkyLod = pixelData.perceptualRoughness * midf_c( passBuf.jahEnv.w ) *
+			// (N - 1) r (2 - r): the mip the convolution stores roughness r at (audit F3).
+			midf jahSkyLod = pixelData.perceptualRoughness * ( midf_c( passBuf.jahEnv.w ) - _h( 1.0 ) ) *
 							 ( _h( 2.0 ) - pixelData.perceptualRoughness );
 			pixelData.envColourS.xyz = OGRE_SampleLevelF16( jahEnvCube, jahEnvSampler,
 															float3( jahSkyDirLS ),
@@ -532,7 +533,7 @@
 									   midf3_c( passBuf.jahEnv.xyz );
 			@property( clear_coat )
 				midf jahSkyCoatLod = pixelData.clearCoatPerceptualRoughness *
-									 midf_c( passBuf.jahEnv.w ) *
+									 ( midf_c( passBuf.jahEnv.w ) - _h( 1.0 ) ) *
 									 ( _h( 2.0 ) - pixelData.clearCoatPerceptualRoughness );
 				pixelData.clearCoatEnvColourS = OGRE_SampleLevelF16( jahEnvCube,
 																	 jahEnvSampler,
