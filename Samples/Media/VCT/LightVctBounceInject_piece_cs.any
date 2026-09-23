@@ -67,15 +67,29 @@
 	// Jahshaka (PHOTON-WRITER-1): the diffuse lobe's albedo (jah_diffuse_albedo.glsl).
 	@insertpiece( JahDiffuseAlbedo )
 
+	// THE ONE DIFFUSE CONE INTEGRATOR (Jahshaka, PHOTON-CARDS-2; jah_voxel_cones.glsl,
+	// wrapped into the piece JahVoxelCones): the cone frame, the six-cone set, its
+	// weights and aperture, the start bias and the escape weight - the text the pixel
+	// shader and the surface cache's card job run. This job used to carry its own
+	// integrator: a cross-product frame about world X (a different azimuth from the
+	// pixel's for every normal), and the volume's normalised axes taken for the
+	// world's (true only for a cubic box). The frame is now built from the WORLD
+	// normal, and a world direction reaches the volume's normalised space through the
+	// box's size (the cell size over the inverse resolution).
+	#define JAH_CONES_SIX 1
+	#define JAH_CONES_TO_LS( d ) normalize( ( d ) * ( p_invVoxelResolution / p_voxelCellSize ) )
+	#define JAH_CONES_TO_WORLD( d ) ( d )
+	@insertpiece( JahVoxelCones )
+
+	/// The bounce gathered at a voxel: posLS = the voxel's centre in the volume's
+	/// normalised space, nWorld = its (unit) world normal. The result is in the
+	/// volume's stored units: the environment's gain and SH arrive divided by the
+	/// decode multiplier (VctLighting::runBounce).
 	INLINE void computeVctProbe( OGRE_INOUT_REF( float3, outDiffuse ),
-								 float3 posLS, float3 geomNormal, float3x3 TBN )
+								 float3 posLS, float3 nWorld )
 	{
-		// JAHSHAKA PATCH 0070 - ONE CELL, WHICHEVER WAY THE SURFACE FACES: the
-		// start bias, exactly the pixel shader's (Vct_piece_ps.any's
-		// computeVctProbe carries the rationale). The normal is normalised so the
-		// componentwise step is one cell long in every direction.
-		geomNormal.xyz *= 1.0f / max( length( geomNormal.xyz ), 1e-6f );
-		posLS = posLS + geomNormal.xyz * p_invVoxelResolution;
+		const float3 normalLS = jahConeBiasDir( nWorld * ( p_invVoxelResolution / p_voxelCellSize ) );
+		posLS = jahConeStart( posLS, normalLS );
 
 		if( posLS.x < 0.0 || posLS.x > 1.0 ||
 			posLS.y < 0.0 || posLS.y > 1.0 ||
@@ -84,44 +98,10 @@
 			return;
 		}
 
-		float3 cone_dirs[6] =
-			OGRE_ARRAY_START( float3 )
-				float3( 0.0, 0.0, 1.0 ),
-				float3( 0.866025, 0.0, 0.5 ),
-				float3( 0.267617, 0.823639, 0.5 ),
-				float3( -0.700629, 0.509037, 0.5 ),
-				float3( -0.700629, -0.509037, 0.5 ),
-				float3( 0.267617, -0.823639, 0.5 )
-			OGRE_ARRAY_END;
-
-		float coneWeights[6] = OGRE_ARRAY_START( float ) 0.25, 0.15, 0.15, 0.15, 0.15, 0.15 OGRE_ARRAY_END;
-		float coneAngleTan = 0.577;
-
-		//Radiance / diffuse
-		float3 light = float3( 0.0f, 0.0f, 0.0f );
-		for( int i = 0; i < 6; ++i )
-		{
-			float3 dir = mul( TBN, cone_dirs[i] );
-			dir = normalize( dir );
-
-			// The whole walk, the pixel shader's diffuse rules exactly: the
-			// hop's bias is one cell of the new cascade along the voxel's normal.
-			JahConeResult result = jahConeMarch( posLS, dir, coneAngleTan, geomNormal.xyz,
-												 geomNormal.xyz, 0u );
-			light += coneWeights[i] * result.colour;
-			// ...AND WHAT IT DOES NOT HIT IS THE SKY, weighted exactly as the
-			// pixel's own cones weight theirs: the ESCAPE estimate (a bounce cone
-			// starts on a surface, as the pixel's does), in the cone's own
-			// direction at its own aperture. The volume's normalised axes are the
-			// world's axes scaled per axis by the box, so the direction is carried
-			// back to the world by the box's size (cell size over inverse
-			// resolution) before the environment is read.
-			const float3 dirWorld = normalize( dir * ( p_voxelCellSize / p_invVoxelResolution ) );
-			light += coneWeights[i] * ( 1.0f - min( 1.0f, result.escapeAlpha / 0.95f ) ) *
-					 jahEnvCone( dirWorld, coneAngleTan );
-		}
-
-		outDiffuse.xyz = light;
+		float3 light;
+		float3 envD;
+		jahDiffuseCones( posLS, normalLS, normalLS, jahConeBasisWorld( nWorld ), light, envD );
+		outDiffuse.xyz = light + envD;
 	}
 
 	@insertpiece( DeclSRgbFuncs )
@@ -178,14 +158,8 @@
 		normalVal.xyz = normalVal.xyz * 2.0f - 1.0f;
 		normalVal.xyz = normalize( normalVal.xyz );
 
-		float3 vTangent = cross( normalVal.xyz, float3( 1, 0, 0 ) );
-		if( abs( 1.0 - abs( dot( normalVal.xyz, float3( 1, 0, 0 ) ) ) ) < 1e-6f )
-			vTangent = cross( normalVal.xyz, float3( 0, 1, 0 ) );
-		float3 vBinormal = cross( vTangent, normalVal.xyz );
-		float3x3 TBN = buildFloat3x3( vTangent, vBinormal, normalVal.xyz );
-
 		float3 vctDiffuse = float3( 0, 0, 0 );
-		computeVctProbe( vctDiffuse, voxelUvwPos, normalVal.xyz, TBN );
+		computeVctProbe( vctDiffuse, voxelUvwPos, normalVal.xyz );
 		// THE BOUNCE RE-EMITS WHAT THE SURFACE RENDERS (PHOTON-WRITER-1): a voxel lit
 		// by the diffuse gather of its surroundings reflects the normalised Disney
 		// lobe's HEMISPHERICAL albedo of it (jahDiffuseAlbedoHemi, the lobe's
