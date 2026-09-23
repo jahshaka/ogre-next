@@ -38,6 +38,25 @@
 	@insertpiece( JahVoxelSample )
 	@insertpiece( JahVoxelMarch )
 
+	// THE ONE ENVIRONMENT (Jahshaka, PHOTON-ENV-1; jah_environment.glsl, wrapped
+	// into the piece JahEnvironment): what an escaping bounce cone sees. The sky is
+	// NEVER injected into the voxels as a source (it would be counted again by every
+	// pixel whose own cone escapes); it enters ONCE, here, as the light an escaping
+	// bounce cone brings to the voxel it leaves. The gain and the SH arrive already
+	// divided by this volume's decode multiplier, so the result is in the volume's
+	// stored units like the cone's own colour.
+	@property( jah_env )
+		#define JAH_ENV_CUBE_ON true
+		#define JAH_ENV_SAMPLE( d, l ) OGRE_SampleLevel( envCube, vctProbeSampler, d, l ).xyz
+	@else
+		#define JAH_ENV_CUBE_ON false
+		#define JAH_ENV_SAMPLE( d, l ) float3( 0, 0, 0 )
+	@end
+	#define JAH_ENV_MIPS p_envGainMips.w
+	#define JAH_ENV_GAIN p_envGainMips.xyz
+	#define JAH_ENV_SH( n ) jahEnvShWorld( n, p_envSh[0].xyz, p_envSh[1].xyz, p_envSh[2].xyz, p_envSh[3].xyz, p_envSh[4].xyz, p_envSh[5].xyz, p_envSh[6].xyz, p_envSh[7].xyz, p_envSh[8].xyz )
+	@insertpiece( JahEnvironment )
+
 	INLINE void computeVctProbe( OGRE_INOUT_REF( float3, outDiffuse ),
 								 float3 posLS, float3 geomNormal, float3x3 TBN )
 	{
@@ -77,12 +96,19 @@
 
 			// The whole walk, the pixel shader's diffuse rules exactly: the
 			// hop's bias is one cell of the new cascade along the voxel's normal.
-			// The escape estimate comes back with it and is NOT used here - the
-			// bounce carries radiance only; what escapes is the sky's, and the
-			// sky is never injected into the voxels (the pixel adds it).
 			JahConeResult result = jahConeMarch( posLS, dir, coneAngleTan, geomNormal.xyz,
-												 geomNormal.xyz, JAH_MARCH_NO_ESCAPE );
+												 geomNormal.xyz, 0u );
 			light += coneWeights[i] * result.colour;
+			// ...AND WHAT IT DOES NOT HIT IS THE SKY, weighted exactly as the
+			// pixel's own cones weight theirs: the ESCAPE estimate (a bounce cone
+			// starts on a surface, as the pixel's does), in the cone's own
+			// direction at its own aperture. The volume's normalised axes are the
+			// world's axes scaled per axis by the box, so the direction is carried
+			// back to the world by the box's size (cell size over inverse
+			// resolution) before the environment is read.
+			const float3 dirWorld = normalize( dir * ( p_voxelCellSize / p_invVoxelResolution ) );
+			light += coneWeights[i] * ( 1.0f - min( 1.0f, result.escapeAlpha / 0.95f ) ) *
+					 jahEnvCone( dirWorld, coneAngleTan );
 		}
 
 		outDiffuse.xyz = light;

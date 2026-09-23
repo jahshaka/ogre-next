@@ -35,6 +35,14 @@ vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbes[@value( hl
 vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D directVoxel;
 @add( vctTexUnit, 1 )
 
+// JAHSHAKA (PHOTON-ENV-1): THE ONE ENVIRONMENT, at the unit after `directVoxel`
+// (VctLighting::setupBounceTextures binds it last, and only while the host set a
+// cube - the job property jah_env). Sampled with vctProbeSampler.
+@property( jah_env )
+	vulkan_layout( ogre_t@value(vctTexUnit) ) uniform textureCube envCube;
+	@add( vctTexUnit, 1 )
+@end
+
 vulkan( layout( ogre_s2 ) uniform sampler vctProbeSampler );
 
 layout( vulkan( ogre_u0 ) vk_comma @insertpiece(uav0_pf_type) )
@@ -57,6 +65,12 @@ vulkan( layout( ogre_P0 ) uniform Params { )
 		// Unused, but declare them to shut up warnings of setting non-existant params
 		uniform float4 fromPreviousProbeToNext[1][2];
 	@end
+
+	// JAHSHAKA (PHOTON-ENV-1): the environment in THIS volume's stored units
+	// (VctLighting::runBounce divides by the decode multiplier): rgb = the cube's
+	// gain, w = its mip count; and the nine-band SH in world axes.
+	uniform float4 envGainMips;
+	uniform float4 envSh[9];
 vulkan( }; )
 
 #define p_voxelCellSize voxelCellSize
@@ -64,6 +78,8 @@ vulkan( }; )
 #define p_iterationDampening iterationDampening
 #define p_vctInvResMaxLod vctInvResMaxLod
 #define p_vctFromPreviousProbeToNext fromPreviousProbeToNext
+#define p_envGainMips envGainMips
+#define p_envSh envSh
 
 @insertpiece( HeaderCS )
 

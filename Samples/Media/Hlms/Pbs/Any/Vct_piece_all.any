@@ -18,9 +18,6 @@
 		float blendFade;
 		float multiplier;
 
-		float4 ambientUpperHemi; // .w is padding
-		float4 ambientLowerHemi; // .w is padding
-
 		float4 xform_row0;
 		float4 xform_row1;
 		float4 xform_row2;

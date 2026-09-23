@@ -47,7 +47,7 @@
 	@end
 @end
 
-@property( ambient_hemisphere || vct_ambient_hemisphere )
+@property( ambient_hemisphere )
 	@piece( DoAmbientHeader )
 		midf ambientWD =
 			dot( midf3_c( passBuf.ambientHemisphereDir.xyz ), pixelData.normal ) * _h( 0.5 ) + _h( 0.5 );
@@ -63,7 +63,16 @@
 			if( vctSpecular.w == 0 )
 			{
 		@end
-				float3 wsNormal = mul( passBuf.invViewMatCubemap, pixelData.normal );
+				// Jahshaka (PHOTON-ENV-1): VECTOR-FIRST, like every other environment
+				// read in this shader (the env-probe samples in 800.PixelShader, the
+				// cone basis of Vct_piece_ps.any). `invViewMatCubemap` is the view->
+				// cubemap rotation written row by row into a column-major matrix, so
+				// the vector-first product applies it and the matrix-first one applied
+				// its TRANSPOSE: the SH was evaluated at a view-dependent normal, exact
+				// only for a camera turned about a single axis (measured, gi.env_one
+				// case f: one upward face read 0.267 / 0.247 / 0.177 from three poses
+				// with yaw and pitch; one value after).
+				float3 wsNormal = mul( pixelData.normal, passBuf.invViewMatCubemap );
 				wsNormal.x = -wsNormal.x;
 				pixelData.envColourD += irradianceSH( wsNormal PASSBUF_ARG );
 		@property( vct_num_probes )

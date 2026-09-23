@@ -212,19 +212,49 @@
 	@insertpiece( JahVoxelSample )
 	@insertpiece( JahVoxelMarch )
 
+	// THE ONE ENVIRONMENT, BOUND TO THE PIXEL SHADER (PHOTON-ENV-1). What every
+	// escape sees - a diffuse cone's, the specular cone's, and the fallbacks the
+	// irradiance field and the screen-probe gather hand a pixel - is ONE plain-GLSL
+	// file, irisgl/engine/src/rayquery/include/jah_environment.glsl, wrapped by
+	// Jahshaka's build into the library piece JahEnvironment: the disc-free sky
+	// cube read at the mip whose lobe matches the cone, or (no cube bound) the SH
+	// in the cone's direction. The cube and its gain come from the pass slot
+	// Jahshaka's Hlms listener claims (jah_env); the SH is HlmsPbs's own, whose
+	// frame is the world turned half a turn about Y (OgreScene::setAmbientSh).
+	// This replaces the two-band hemisphere pair every escape used to be filled
+	// with (the pair is gone from VctLighting and from this pass buffer).
+	@property( jah_env )
+		#define JAH_ENV_CUBE_ON true
+		#define JAH_ENV_SAMPLE( d, l ) float3( OGRE_SampleLevelF16( jahEnvCube, jahEnvSampler, d, l ).xyz )
+		#define JAH_ENV_MIPS passBuf.jahEnv.w
+		#define JAH_ENV_GAIN passBuf.jahEnv.xyz
+	@else
+		#define JAH_ENV_CUBE_ON false
+		#define JAH_ENV_SAMPLE( d, l ) float3( 0, 0, 0 )
+		#define JAH_ENV_MIPS 1.0
+		#define JAH_ENV_GAIN float3( 0, 0, 0 )
+	@end
+	@property( ambient_sh )
+		#define JAH_ENV_SH( n ) float3( irradianceSH( float3( -( n ).x, ( n ).y, -( n ).z ) PASSBUF_ARG ) )
+	@else
+		#define JAH_ENV_SH( n ) float3( 0, 0, 0 )
+	@end
+	@insertpiece( JahEnvironment )
+
+	/// A view-space direction in WORLD axes: the camera-independent frame the
+	/// environment is stored in. `invViewMatCubemap` read vector-first takes a
+	/// view-space direction to the left-handed cubemap frame (the same line the
+	/// env-probe piece uses); undoing the frame's z flip gives the world.
+	INLINE float3 jahViewToWorldDir( float3 dirVS )
+	{
+		float3 c = mul( dirVS, passBuf.invViewMatCubemap );
+		return float3( c.x, c.y, -c.z );
+	}
+
 	INLINE void computeVctProbe
 	(
 		OGRE_INOUT_REF( float3, outDiffuse ), OGRE_INOUT_REF( float4, outSpecular ),
-	@property( jah_sky_env_probe )
-		// Jahshaka patch 0048: what the SPECULAR cone escape contributed, so the
-		// piece downstream can swap it for the real sky. See the accumulation.
-		OGRE_INOUT_REF( float3, jahEscapeColour ), OGRE_INOUT_REF( float, jahEscapeWeight ),
-		OGRE_INOUT_REF( float, jahConeWeight ),
-	@end
 		PixelData pixelData, float3 pos, float3x3 TBN,
-	@property( vct_ambient_hemisphere )
-		float ambientWD, float ambientWS,
-	@end
 	@property( use_parallax_correct_cubemaps )
 		OGRE_INOUT_REF( float3, vctSpecPosVS ),
 	@end
@@ -318,10 +348,14 @@
 			@end
 
 			//Radiance / diffuse
-			float4 light = float4( 0.0f, 0.0f, 0.0f, 0.0f );
+			float3 light = float3( 0.0f, 0.0f, 0.0f );
+			// THE ENVIRONMENT EACH CONE ESCAPES TO, in radiance (not in the voxel
+			// volume's normalised units, so it is added after the decode below).
+			float3 jahEnvD = float3( 0.0f, 0.0f, 0.0f );
 			for( int i=0; i<@value( vct_cone_dirs ); ++i )
 			{
-				float3 dir = toVctProbeSpaceDir( mul( TBN, cone_dirs[i] ), probeParams );
+				float3 dirVS = mul( TBN, cone_dirs[i] );
+				float3 dir = toVctProbeSpaceDir( dirVS, probeParams );
 
 				// THE WHOLE WALK, cascade 0 and every hop out (JahVoxelMarch; the
 				// rules and their fork-change numbers are in its header).
@@ -332,27 +366,25 @@
 													 0u );
 				@end
 
-				light.xyz += coneWeights[i] * result.colour;
-				// THE ESCAPE WEIGHT: how much of this cone left the voxels unstopped,
-				// which is the share of the sky it sees. The ESCAPE opacity, not the
-				// colour's (the two differ only where the anisotropic volumes are
-				// read — JahVoxelMarch, the escape estimate).
-				light.w += coneWeights[i] * ( 1.0f - min( 1.0f, result.escapeAlpha / 0.95f ) );
+				light += coneWeights[i] * result.colour;
+				// THE ESCAPE: the share of this cone the voxels did not stop (the
+				// ESCAPE opacity, not the colour's - they differ only where the
+				// anisotropic volumes are read; JahVoxelMarch, the escape estimate)
+				// sees the environment IN THIS CONE'S DIRECTION AT THIS CONE'S
+				// APERTURE. Not the normal's SH, and not a two-band pole
+				// approximation of it: a cone that looks at the horizon glow sees
+				// the horizon glow.
+				jahEnvD += coneWeights[i] * ( 1.0f - min( 1.0f, result.escapeAlpha / 0.95f ) ) *
+						   jahEnvCone( jahViewToWorldDir( dirVS ), coneAngleTan );
 			}
-			@property( vct_ambient_hemisphere )
-				//Add ambient light after all cones have been weighted
-				light.xyz += lerp( probeParams.ambientLowerHemi.xyz,
-								   probeParams.ambientUpperHemi.xyz, ambientWD ) * light.w;
-			@else
-				//Add ambient light after all cones have been weighted
-				light.xyz += probeParams.ambientUpperHemi.xyz * light.w;
-			@end
 		@end
 
 		float blendWeight = probeParams.blendFade * blend * probeParams.multiplier;
 
 		@property( !vct_disable_diffuse )
-			outDiffuse.xyz += light.xyz * blendWeight;
+			// The voxels' share decoded by the volume's multiplier; the
+			// environment's share is radiance already.
+			outDiffuse.xyz += light.xyz * blendWeight + jahEnvD * ( probeParams.blendFade * blend );
 		@end
 
 		//Irradiance / specular
@@ -372,13 +404,15 @@
 
 			float specAlpha = ( 1.0f - min( 1.0f, irrLight.alpha / 0.95f ) );
 
-			@property( vct_ambient_hemisphere )
-				float3 jahAmbientTerm = lerp( probeParams.ambientLowerHemi.xyz,
-											  probeParams.ambientUpperHemi.xyz, ambientWS );
-			@else
-				float3 jahAmbientTerm = probeParams.ambientUpperHemi.xyz;
-			@end
-			irrLight.colour.xyz += jahAmbientTerm * specAlpha;
+			// THE SPECULAR CONE'S ESCAPE SEES THE ENVIRONMENT IN THE REFLECTED
+			// DIRECTION AT THE CONE'S OWN APERTURE (PHOTON-ENV-1) - the rule that
+			// ogre-patch 0048 used to apply downstream as a swap (the cone added a
+			// flat ambient, exported what it added, and the probe piece traded it
+			// for the sky). Radiance, weighted by the share of the cone the voxels
+			// did not stop, beside the voxels' own share decoded by the volume's
+			// multiplier.
+			float3 jahEnvS = jahEnvCone( jahViewToWorldDir( pixelData.reflDir ), specConeAngleTan ) *
+							 specAlpha;
 
 			// JAHSHAKA PATCH 0077: THE FUDGE IS GONE, AT ITS CAUSE.
 			// Upstream's comment here read "0.31831 = 1 / PI, but I'm not sure why
@@ -392,44 +426,8 @@
 			// With the injection fixed the voxel holds radiance, a specular cone
 			// returns radiance, and the pre-integrated BRDF downstream wants
 			// exactly that: no factor.
-			outSpecular += float4( irrLight.colour.xyz * blendWeight, blend );
-
-			@property( jah_sky_env_probe )
-				// JAHSHAKA PATCH 0048: WHAT THE CONE COULD NOT ANSWER FOR.
-				//
-				// `specAlpha` is the share of this cone that left the voxel
-				// volume without hitting anything, and the line above fills that
-				// share with the scene's FLAT ambient -- a 0-band copy of the
-				// sky, divided by pi with the rest of the cone's result. The
-				// piece downstream replaces exactly that term with the sky
-				// cubemap in the direction the surface reflects, for pixels no
-				// probe box covers. To replace it, it must know precisely what
-				// was added and at what weight, per cascade and with the same
-				// blendWeight that scaled it -- so both are exported
-				// rather than reconstructed, and the cone's own HIT colour is
-				// never touched.
-				// (JAHSHAKA PATCH 0077: the 1/pi this comment argued about is
-				// gone from both sides -- see below.)
-				// THE REMOVAL IS EXACTLY WHAT WAS ADDED, WHICHEVER UNITS THAT IS
-				// IN -- that is the whole of the units question, and it is why
-				// this term is EXPORTED rather than reconstructed here. What was
-				// added above is the flat ambient scaled by the cone's own
-				// escape composite and by blendWeight, so this is that same
-				// product, and the swap downstream is exact.
-				// JAHSHAKA PATCH 0077 removed the 1/pi that used to appear in
-				// BOTH lines (upstream's eye-tuned cancellation of the
-				// injection's missing 1/pi, fixed at the cause in
-				// LightInjection_piece_cs.any). The two conventions the older
-				// comment here described as "differing by pi in this pin" now
-				// agree: the voxel volume, the cubemaps and the flat ambient are
-				// all radiance. The sky's WEIGHT is still the escape fraction
-				// itself -- at a full escape the pixel sees exactly the sky it
-				// would see with no voxel volume at all, which is the calibrated
-				// answer (scripting.e2e.default_ground's grazing margin).
-				jahEscapeColour += jahAmbientTerm * specAlpha * blendWeight;
-				jahEscapeWeight += specAlpha * blendWeight;
-				jahConeWeight   += blendWeight;
-			@end
+			outSpecular += float4( irrLight.colour.xyz * blendWeight +
+								   jahEnvS * ( probeParams.blendFade * blend ), blend );
 
 			@property( use_parallax_correct_cubemaps )
 				vctSpecPosVS = fromVctToViewSpace( irrLight.posLS.xyz, probeParams );
@@ -476,21 +474,8 @@
 
 	float3 vctDiffuse = float3( 0, 0, 0 );
 	float4 vctSpecular = float4( 0, 0, 0, 0 );
-	@property( jah_sky_env_probe )
-		// Jahshaka patch 0048: the cone's escape, read by the probe piece which
-		// runs later in this same scope.
-		float3 jahEscapeColour = float3( 0, 0, 0 );
-		float jahEscapeWeight = 0.0f;
-		float jahConeWeight = 0.0f;
-	@end
 	computeVctProbe( vctDiffuse, vctSpecular,
-	@property( jah_sky_env_probe )
-					 jahEscapeColour, jahEscapeWeight, jahConeWeight,
-	@end
 					 pixelData, inPs.pos, jahConeBasis,
-				@property( vct_ambient_hemisphere )
-					 ambientWD, ambientWS,
-				@end
 				@property( use_parallax_correct_cubemaps )
 					 vctSpecPosVS,
 				@end
