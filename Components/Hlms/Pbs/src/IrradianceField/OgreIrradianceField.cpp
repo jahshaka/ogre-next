@@ -457,6 +457,7 @@ namespace Ogre
         mIfGenParams.unused1 = 0.0f;
         mIfGenParams.unused2 = 0.0f;
         fillChainParams();
+        fillEnvironmentParams();
 
         mIfGenParams.numProbes_threadsPerRow.x = mSettings.mNumProbes[0];
         mIfGenParams.numProbes_threadsPerRow.y = mSettings.mNumProbes[1];
@@ -579,17 +580,23 @@ namespace Ogre
         uint32 irradWidth, irradHeight;
         mSettings.getIrradProbeFullResolution( irradWidth, irradHeight );
         mIrradianceTex->setResolution( irradWidth, irradHeight );
-        mIrradianceTex->setPixelFormat( PFG_R10G10B10A2_UNORM );
+        // Jahshaka (PHOTON-ENV-1): FLOAT, not upstream's R10G10B10A2_UNORM. The atlas
+        // holds the probe's irradiance in the voxels' stored units (radiance over the
+        // decode multiplier D_max / pi, D_max the brightest LIGHT), and since the sky
+        // entered it - every escaping probe ray reads the environment - a sky
+        // brighter than that ceiling (any sky in a scene with no lamp brighter than
+        // it) clipped at 1.0. Half floats hold it; the cost is 4 bytes a texel here,
+        // against the 8 the depth atlas gives back below.
+        mIrradianceTex->setPixelFormat( PFG_RGBA16_FLOAT );
 
         uint32 depthWidth, depthHeight;
         mSettings.getDepthProbeFullResolution( depthWidth, depthHeight );
         mDepthVarianceTex->setResolution( depthWidth, depthHeight );
-        // Jahshaka (PHOTON-READER-1): FOUR channels, not upstream's two - the depth
-        // moments (x: mean distance, y: mean squared distance) plus z: the ESCAPE
-        // FRACTION of the probe's rays, integrated over the same cosine lobe, which the
-        // pixel shader reads as the probe's sky visibility. The irradiance atlas had no
-        // channel for it (R10G10B10A2: a 2-bit alpha). w is unused.
-        mDepthVarianceTex->setPixelFormat( PFG_RGBA32_FLOAT );
+        // Upstream's two channels, the depth moments. (PHOTON-READER-1 widened it to
+        // four for the probe rays' escape fraction, read by the pixel as a sky
+        // visibility; PHOTON-ENV-1 put the sky itself into the irradiance atlas and
+        // that channel lost its only reader.)
+        mDepthVarianceTex->setPixelFormat( PFG_RG32_FLOAT );
 
         mIrradianceTex->scheduleTransitionTo( GpuResidency::Resident );
         mDepthVarianceTex->scheduleTransitionTo( GpuResidency::Resident );
@@ -734,7 +741,16 @@ namespace Ogre
         if( mGenerationJob->getProperty( "vct_anisotropic" ) != anisoI32 )
             mGenerationJob->setProperty( "vct_anisotropic", anisoI32 );
 
-        const uint8 numTexUnits = static_cast<uint8>( 1u + numVolumes * numCascades );
+        // Jahshaka (PHOTON-ENV-1): + the environment cube, last, while the lighting
+        // has one (the job property jah_env declares it).
+        TextureGpu *envCube = mVctLighting->getEnvironmentCube();
+        {
+            const int32 envOn = envCube ? 1 : 0;
+            if( mGenerationJob->getProperty( "jah_env" ) != envOn )
+                mGenerationJob->setProperty( "jah_env", envOn );
+        }
+        const uint8 numTexUnits =
+            static_cast<uint8>( 1u + numVolumes * numCascades + ( envCube ? 1u : 0u ) );
         if( mGenerationJob->getNumTexUnits() != numTexUnits )
             mGenerationJob->setNumTexUnits( numTexUnits );
 
@@ -760,6 +776,33 @@ namespace Ogre
                     mGenerationJob->setTexture( unit, texSlot, 0, false );
                 ++unit;
             }
+        }
+        if( envCube )
+        {
+            texSlot.texture = envCube;
+            mGenerationJob->setTexture( unit, texSlot, 0, false );
+        }
+    }
+    //-------------------------------------------------------------------------
+    void IrradianceField::fillEnvironmentParams()
+    {
+        // In CASCADE 0's STORED units: the march returns the rays' colour in them and
+        // the pixel decodes the atlas with cascade 0's multiplier, so the sky an
+        // escaping ray adds is divided by the same number (the bounce job does the
+        // same for its own volume, VctLighting::runBounce).
+        const float finalMultiplier = mVctLighting->getFinalMultiplier();
+        const float invFinal = finalMultiplier > 0.0f ? 1.0f / finalMultiplier : 0.0f;
+        TextureGpu *envCube = mVctLighting->getEnvironmentCube();
+        const float *gain = mVctLighting->getEnvironmentGain();
+        const float *sh = mVctLighting->getEnvironmentSh();
+        mIfGenParams.envGainMips =
+            float4( Vector4( gain[0] * invFinal, gain[1] * invFinal, gain[2] * invFinal,
+                             envCube ? Real( envCube->getNumMipmaps() ) : Real( 1 ) ) );
+        for( size_t i = 0u; i < 9u; ++i )
+        {
+            mIfGenParams.envSh[i] = float4( Vector4( sh[i * 3u + 0u] * invFinal,
+                                                     sh[i * 3u + 1u] * invFinal,
+                                                     sh[i * 3u + 2u] * invFinal, 0.0f ) );
         }
     }
     //-------------------------------------------------------------------------
@@ -864,6 +907,7 @@ namespace Ogre
             // are a few hundred bytes.
             bindChainToGenerationJob();
             fillChainParams();
+            fillEnvironmentParams();
         }
 
         mIfGenParams.numProcessedProbes = mNumProbesProcessed;

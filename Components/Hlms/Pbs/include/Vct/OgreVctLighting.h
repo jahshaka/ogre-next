@@ -431,6 +431,14 @@ namespace Ogre
             the gain already applied (the host's own ambient coefficients).
         */
         void setEnvironment( TextureGpu *cube, const ColourValue &gain, const float sh[27] );
+        /// The environment setEnvironment was handed (Jahshaka, PHOTON-ENV-1): the
+        /// irradiance field's generation job reads the same one for its escaping rays.
+        TextureGpu  *getEnvironmentCube() const { return mEnvCube; }
+        const float *getEnvironmentGain() const { return mEnvGain; }
+        const float *getEnvironmentSh() const { return mEnvSh; }
+        /// The decode multiplier the pixel shader applies to this volume's stored
+        /// radiance (fillConstBufferData's `multiplier`): D_max / pi.
+        float getFinalMultiplier() const { return mInvBakingMultiplier * mMultiplier; }
 
         TextureGpu **getLightVoxelTextures() { return mLightVoxel; }
         /// JAHSHAKA PATCH: THE DIRECT TERM'S VOLUME (patch 0076's D term), or null

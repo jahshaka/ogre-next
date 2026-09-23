@@ -182,6 +182,12 @@ namespace Ogre
             // this buffer (the members above) is still a prefix of it.
             float4 vctInvResMaxLod[kMaxChainCascades];
             float4 vctFromPrev[( kMaxChainCascades - 1u ) * 2u];
+
+            // Jahshaka (PHOTON-ENV-1): THE ONE ENVIRONMENT the probe rays escape to,
+            // in cascade 0's stored units (fillEnvironmentParams): rgb gain, w mips;
+            // then the nine SH coefficients, world axes (w unused).
+            float4 envGainMips;
+            float4 envSh[9];
         };
 
         struct IfdBorderMirrorParams
@@ -268,6 +274,8 @@ namespace Ogre
         void bindChainToGenerationJob();
         /// ...and the chain's parameters, from VctLighting's one definition of them.
         void fillChainParams();
+        /// Jahshaka (PHOTON-ENV-1): the environment of the bound lighting, per dispatch.
+        void fillEnvironmentParams();
 
     public:
         IrradianceField( Root *root, SceneManager *sceneManager );
