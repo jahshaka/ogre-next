@@ -34,6 +34,8 @@ THE SOFTWARE.
 #include "Vct/OgreVctVoxelizerSourceBase.h"
 
 #include "Compositor/OgreCompositorManager2.h"
+#include "Compute/OgreComputeTools.h"
+#include "OgreRenderSystem.h"
 #include "Compositor/OgreCompositorWorkspace.h"
 #include "OgreRoot.h"
 
@@ -137,6 +139,7 @@ namespace Ogre
         mRotateRays( true ),
         mIntegrationSerial( 0u ),
         mRefinesOwed( 0u ),
+        mComputeTools( 0 ),
         mFieldOrigin( Vector3::ZERO ),
         mFieldSize( Vector3::ZERO ),
         mDepthMaxIntegrationTapsPerPixel( 0u ),
@@ -187,6 +190,7 @@ namespace Ogre
             vaoManager->createConstBuffer( sizeof( IfdBorderMirrorParams ), BT_DEFAULT, 0, false );
 
         HlmsCompute *hlmsCompute = mRoot->getHlmsManager()->getComputeHlms();
+        mComputeTools = new ComputeTools( hlmsCompute );
         mGenerationJob = hlmsCompute->findComputeJobNoThrow( "IrradianceField/Gen" );
 
         if( !mGenerationJob )
@@ -212,6 +216,9 @@ namespace Ogre
 
         delete mIfRaster;
         mIfRaster = 0;
+
+        delete mComputeTools;
+        mComputeTools = 0;
 
         VaoManager *vaoManager = mRoot->getRenderSystem()->getVaoManager();
         for( ConstBufferPacked *buffer : mIfGenParamsRing )
@@ -673,6 +680,8 @@ namespace Ogre
         setWholeWork();
         mWorkMode = IntegrateFresh;
         mRefinesOwed = mTargetSamples - 1u;
+        if( !mSettings.isRaster() )
+            invalidateAllProbes();
 
         // The same enlargement initialize() applies, for the same reason (limited
         // information at the borders), so that a moved field is placed exactly as a
@@ -823,6 +832,22 @@ namespace Ogre
         // bias derived from its resolution: both belong to the lighting that was just
         // bound.
         setIrradianceFieldGenParams();
+    }
+    //-------------------------------------------------------------------------
+    void IrradianceField::invalidateAllProbes()
+    {
+        if( !mIrradianceTex || !mComputeTools ||
+            mIrradianceTex->getResidencyStatus() != GpuResidency::Resident )
+        {
+            return;
+        }
+        // Zero everywhere: the count (alpha) is what the reader weights by, and a
+        // zero value keeps a stray read of an invalid texel black rather than stale.
+        const float clearValue[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        ResourceTransitionArray transitions;
+        mComputeTools->prepareForUavClear( transitions, mIrradianceTex );
+        mRoot->getRenderSystem()->executeResourceTransition( transitions );
+        mComputeTools->clearUavFloat( mIrradianceTex, clearValue );
     }
     //-------------------------------------------------------------------------
     void IrradianceField::reset()
