@@ -135,7 +135,6 @@ namespace Ogre
         mTargetSamples( 1u ),
         mKeepOnChange( 0u ),
         mRotateRays( true ),
-        mIntegrationSerial( 0u ),
         mRefinesOwed( 0u ),
         mFieldOrigin( Vector3::ZERO ),
         mFieldSize( Vector3::ZERO ),
@@ -236,7 +235,7 @@ namespace Ogre
         // axis vertices, 5.2 at the face centres), so a small source near an axis read up
         // to 3.3x its irradiance and one near a face centre ~0.6x, whatever the ray count
         // (the one-voxel wall of gi.field_thin_wall read 1.68x at 256 rays a texel). The
-        // set is rotated per integration (the generation job's rayRotation) and every
+        // set is rotated per integration (per probe and sample, in the generation job) and every
         // texel integrates every ray at its own direction: DDGI's estimator.
         float *RESTRICT_ALIAS updateData = reinterpret_cast<float * RESTRICT_ALIAS>( outBuffer );
         const uint32 numRays = mSettings.getNumRaysPerProbe();
@@ -971,18 +970,6 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    namespace
-    {
-        /// PCG hash (O'Neill; the integer hash of "Hash Functions for GPU Rendering",
-        /// Jarzynski & Olano 2020): the integration counter to 32 random bits.
-        uint32 ifdPcgHash( uint32 v )
-        {
-            const uint32 state = v * 747796405u + 2891336453u;
-            const uint32 word = ( ( state >> ( ( state >> 28u ) + 4u ) ) ^ state ) * 277803737u;
-            return ( word >> 22u ) ^ word;
-        }
-    }  // namespace
-
     void IrradianceField::update( uint32 probesPerFrame )
     {
         // Jahshaka (PHOTON-WRITER-1): the WORK, not the whole grid (the two are the
@@ -1077,32 +1064,26 @@ namespace Ogre
             mIfGenParams.windowOffset.w = mNumProbesProcessed + probesPerFrame;
         }
         {
-            // Jahshaka (PHOTON-FIELD-ROTATE-1): THIS INTEGRATION'S ROTATION, uniformly
-            // random over SO(3) (Shoemake's quaternion from three uniforms), drawn from
-            // the integration counter - deterministic for a given sequence of updates,
-            // never the same set twice in a row.
-            Quaternion q = Quaternion::IDENTITY;
-            if( mRotateRays )
-            {
-                const uint32 base = mIntegrationSerial * 3u;
-                const float u1 = float( ifdPcgHash( base + 0u ) ) * ( 1.0f / 4294967296.0f );
-                const float u2 = float( ifdPcgHash( base + 1u ) ) * ( 1.0f / 4294967296.0f );
-                const float u3 = float( ifdPcgHash( base + 2u ) ) * ( 1.0f / 4294967296.0f );
-                const float s1 = Math::Sqrt( 1.0f - u1 ), s2 = Math::Sqrt( u1 );
-                q = Quaternion( s2 * std::cos( Math::TWO_PI * u3 ), s1 * std::sin( Math::TWO_PI * u2 ),
-                                s1 * std::cos( Math::TWO_PI * u2 ), s2 * std::sin( Math::TWO_PI * u3 ) );
-                q.normalise();
-            }
-            Matrix3 rot;
-            q.ToRotationMatrix( rot );
-            for( size_t r = 0u; r < 3u; ++r )
-                mIfGenParams.rayRotation[r] =
-                    float4( Vector4( rot[r][0], rot[r][1], rot[r][2], 0.0f ) );
+            // Jahshaka (PHOTON-FIELD-ROTATE-1): THE RAY ROTATION IS A FUNCTION OF THE
+            // PROBE'S PLACE IN THE WORLD AND ITS OWN SAMPLE INDEX (the job hashes the
+            // two into a uniformly random rotation, Shoemake's quaternion): a probe at
+            // one lattice point integrates the same K rotations whatever happened
+            // before, so a converged field is a deterministic function of the world -
+            // the property the static set had and a per-dispatch counter would lose
+            // (a walk away and back, a scroll against a re-placement, two processes,
+            // all converge to the same bytes).
+            const Vector3 spacing = mFieldSize / mSettings.getNumProbes3f();
+            mIfGenParams.latticeOrigin.x =
+                static_cast<uint32>( static_cast<int32>( Math::Floor( mFieldOrigin.x / spacing.x + 0.5f ) ) );
+            mIfGenParams.latticeOrigin.y =
+                static_cast<uint32>( static_cast<int32>( Math::Floor( mFieldOrigin.y / spacing.y + 0.5f ) ) );
+            mIfGenParams.latticeOrigin.z =
+                static_cast<uint32>( static_cast<int32>( Math::Floor( mFieldOrigin.z / spacing.z + 0.5f ) ) );
+            mIfGenParams.latticeOrigin.w = 0u;
             mIfGenParams.sweep.x = static_cast<uint32>( mWorkMode );
             mIfGenParams.sweep.y = mTargetSamples;
             mIfGenParams.sweep.z = mKeepOnChange;
-            mIfGenParams.sweep.w = mIntegrationSerial;
-            ++mIntegrationSerial;
+            mIfGenParams.sweep.w = mRotateRays ? 1u : 0u;
         }
         mIfGenParams.probesPerRow = numThreadGroupsX;  // There's one probe per group
         *ifGenParams = mIfGenParams;

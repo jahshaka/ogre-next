@@ -224,12 +224,15 @@ namespace Ogre
             float4 envGainMips;
             float4 envSh[9];
 
-            // Jahshaka (PHOTON-FIELD-ROTATE-1): THIS INTEGRATION'S RAY ROTATION (rows of
-            // a 3x3, w unused) - a uniformly random rotation drawn from the integration
-            // counter - and its history rule: x = IntegrationMode, y = the target
-            // sample count, z = keepOnChange, w = the integration counter.
-            float4 rayRotation[3];
-            uint4  sweep;
+            // Jahshaka (PHOTON-FIELD-ROTATE-1): THE WINDOW'S PLACE ON THE WORLD LATTICE -
+            // xyz: the world lattice coordinate of window-local probe 0 (round( field
+            // origin / spacing )), so a probe's lattice coordinate is this plus its
+            // window-local one; the job seeds each probe's ray rotation from that
+            // coordinate and the probe's own sample index. w unused. And the history
+            // rule: x = IntegrationMode, y = the target sample count, z =
+            // keepOnChange, w = 1 to rotate the rays (0: the static measurement arm).
+            uint4 latticeOrigin;
+            uint4 sweep;
         };
 
         struct IfdBorderMirrorParams
@@ -271,8 +274,6 @@ namespace Ogre
         uint32          mTargetSamples;
         uint32          mKeepOnChange;
         bool            mRotateRays;
-        /// Counts every generation dispatch; seeds its ray rotation.
-        uint32 mIntegrationSerial;
         /// Whole-grid refinements owed after the current work (every event - a build,
         /// a re-placement, a scroll, a change - owes mTargetSamples - 1 of them).
         uint32 mRefinesOwed;
