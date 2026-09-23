@@ -54,7 +54,15 @@
 	@end
 	#define JAH_ENV_MIPS p_envGainMips.w
 	#define JAH_ENV_GAIN p_envGainMips.xyz
-	#define JAH_ENV_SH( n ) jahEnvShWorld( n, p_envSh[0].xyz, p_envSh[1].xyz, p_envSh[2].xyz, p_envSh[3].xyz, p_envSh[4].xyz, p_envSh[5].xyz, p_envSh[6].xyz, p_envSh[7].xyz, p_envSh[8].xyz )
+	#define JAH_ENV_SH_C0 p_envSh[0].xyz
+	#define JAH_ENV_SH_C1 p_envSh[1].xyz
+	#define JAH_ENV_SH_C2 p_envSh[2].xyz
+	#define JAH_ENV_SH_C3 p_envSh[3].xyz
+	#define JAH_ENV_SH_C4 p_envSh[4].xyz
+	#define JAH_ENV_SH_C5 p_envSh[5].xyz
+	#define JAH_ENV_SH_C6 p_envSh[6].xyz
+	#define JAH_ENV_SH_C7 p_envSh[7].xyz
+	#define JAH_ENV_SH_C8 p_envSh[8].xyz
 	@insertpiece( JahEnvironment )
 
 	INLINE void computeVctProbe( OGRE_INOUT_REF( float3, outDiffuse ),

@@ -217,10 +217,16 @@
 	// irradiance field and the screen-probe gather hand a pixel - is ONE plain-GLSL
 	// file, irisgl/engine/src/rayquery/include/jah_environment.glsl, wrapped by
 	// Jahshaka's build into the library piece JahEnvironment: the disc-free sky
-	// cube read at the mip whose lobe matches the cone, or (no cube bound) the SH
-	// in the cone's direction. The cube and its gain come from the pass slot
-	// Jahshaka's Hlms listener claims (jah_env); the SH is HlmsPbs's own, whose
-	// frame is the world turned half a turn about Y (OgreScene::setAmbientSh).
+	// cube read at the mip whose lobe matches the cone, or (no cube bound) the
+	// radiance the SH describes in the cone's direction (the coefficients
+	// de-convolved: they are the cosine-convolved irradiance). The cube and its
+	// gain come from the pass slot
+	// Jahshaka's Hlms listener claims (jah_env); the SH is HlmsPbs's own
+	// coefficients, stored in HlmsPbs's frame -- the world turned half a turn
+	// about Y, which the engine writes by multiplying each world coefficient by
+	// its basis function's sign under that turn (OgreScene::setAmbientSh's
+	// kAxisSign: + + - - - - + + +) -- and read back into WORLD axes here by the
+	// same signs. The packing is AmbientLighting_piece_ps.any's irradianceSH.
 	// This replaces the two-band hemisphere pair every escape used to be filled
 	// with (the pair is gone from VctLighting and from this pass buffer).
 	@property( jah_env )
@@ -234,10 +240,26 @@
 		#define JAH_ENV_MIPS 1.0
 		#define JAH_ENV_GAIN float3( 0, 0, 0 )
 	@end
-	@property( ambient_sh )
-		#define JAH_ENV_SH( n ) float3( irradianceSH( float3( -( n ).x, ( n ).y, -( n ).z ) PASSBUF_ARG ) )
+	@property( ambient_sh && !ambient_sh_monochrome )
+		#define JAH_ENV_SH_C0 passBuf.sh0.xyz
+		#define JAH_ENV_SH_C1 float3( passBuf.sh0.w, passBuf.sh1.x, passBuf.sh1.y )
+		#define JAH_ENV_SH_C2 ( -float3( passBuf.sh1.z, passBuf.sh1.w, passBuf.sh2.x ) )
+		#define JAH_ENV_SH_C3 ( -float3( passBuf.sh2.y, passBuf.sh2.z, passBuf.sh2.w ) )
+		#define JAH_ENV_SH_C4 ( -passBuf.sh3.xyz )
+		#define JAH_ENV_SH_C5 ( -float3( passBuf.sh3.w, passBuf.sh4.x, passBuf.sh4.y ) )
+		#define JAH_ENV_SH_C6 float3( passBuf.sh4.z, passBuf.sh4.w, passBuf.sh5.x )
+		#define JAH_ENV_SH_C7 float3( passBuf.sh5.y, passBuf.sh5.z, passBuf.sh5.w )
+		#define JAH_ENV_SH_C8 passBuf.sh6.xyz
 	@else
-		#define JAH_ENV_SH( n ) float3( 0, 0, 0 )
+		#define JAH_ENV_SH_C0 float3( 0, 0, 0 )
+		#define JAH_ENV_SH_C1 float3( 0, 0, 0 )
+		#define JAH_ENV_SH_C2 float3( 0, 0, 0 )
+		#define JAH_ENV_SH_C3 float3( 0, 0, 0 )
+		#define JAH_ENV_SH_C4 float3( 0, 0, 0 )
+		#define JAH_ENV_SH_C5 float3( 0, 0, 0 )
+		#define JAH_ENV_SH_C6 float3( 0, 0, 0 )
+		#define JAH_ENV_SH_C7 float3( 0, 0, 0 )
+		#define JAH_ENV_SH_C8 float3( 0, 0, 0 )
 	@end
 	@insertpiece( JahEnvironment )
 
