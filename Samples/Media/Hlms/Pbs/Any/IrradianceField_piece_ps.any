@@ -26,6 +26,10 @@
 @piece( DeclIrradianceFieldFuncs )
 	#define IrfProbeIndex uint
 
+	// Jahshaka (PHOTON-WRITER-1): the field's window - which atlas tile holds which
+	// probe - one definition shared with the generation and integration jobs.
+	@insertpiece( JahFieldWindow )
+
 	INLINE float2 octahedronMappingWrap( float2 v )
 	{
 		float2 signVal;
@@ -168,8 +172,14 @@
 		// the grid and getProbeIdx's flat index wraps into another row.
 		@insertpiece( custom_ps_ifdCageProbeOrigin )
 
+		// Jahshaka (PHOTON-WRITER-1): the probe's ATLAS SLOT. The cage is built in the
+		// window's own coordinates (probeOrigin, and dir below); the tile that holds
+		// that probe is where the window's offset puts it - the host's hook applies
+		// it (a field that never scrolls has the slot equal to the coordinate).
+		float3 ifdProbeSlot = probeOrigin;
+		@insertpiece( custom_ps_ifdCageProbeSlot )
 		IrfProbeIndex probeIdx =
-			getProbeIdx( probeOrigin, passBuf.irradianceField.numProbesAggregated.xy );
+			getProbeIdx( ifdProbeSlot, passBuf.irradianceField.numProbesAggregated.xy );
 
 		float3 dir = probeOrigin - ifdGridPos;
 		// max(): a probe can sit exactly under the shaded pixel -- a pixel landing on a

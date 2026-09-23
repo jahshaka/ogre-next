@@ -17,15 +17,30 @@
 		//float invFieldResolution;
 		uint4 numProbes_threadsPerRow;
 
+		// Jahshaka (PHOTON-WRITER-1): the work's boxes and the window's offset, the
+		// same prefix the generation job declares (jah_field_window.glsl).
+		uint4 boxLo[3];
+		uint4 boxSize[3];
+		uint4 windowOffset;
+
 		float4x4 irrProbeToVctTransform;
 	}
 	CONST_BUFFER_STRUCT_END( p );
+
+	// Jahshaka (PHOTON-WRITER-1): the field's window, one definition for this job,
+	// its sibling and the pixel's reader (the build wraps jah_field_window.glsl).
+	@insertpiece( JahFieldWindow )
 
 	#define ProbeIndex uint
 
 	INLINE ProbeIndex getProbeIdx( uint2 workGroupID PARAMS_ARG_DECL )
 	{
-		return workGroupID.x + workGroupID.y * p.probesPerRow + p.numProcessedProbes;
+		// Jahshaka (PHOTON-WRITER-1): a position in the work, mapped to its slot.
+		uint listPos = workGroupID.x + workGroupID.y * p.probesPerRow + p.numProcessedProbes;
+		uint3 slot = jahFieldWorkSlot( listPos, p.boxLo[0], p.boxLo[1], p.boxLo[2],
+									   p.boxSize[0], p.boxSize[1], p.boxSize[2],
+									   p.numProbes_threadsPerRow.xyz );
+		return jahFieldSlotIndex( slot, p.numProbes_threadsPerRow.xyz );
 	}
 
 	INLINE ushort2 getUv( ProbeIndex probeIdx, ushort2 localInvocationId )

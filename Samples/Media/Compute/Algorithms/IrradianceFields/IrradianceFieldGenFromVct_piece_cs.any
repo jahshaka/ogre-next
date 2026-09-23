@@ -17,6 +17,12 @@
 		//float invFieldResolution;
 		uint4 numProbes_threadsPerRow;
 
+		// Jahshaka (PHOTON-WRITER-1): the work's boxes and the window's offset
+		// (IrradianceField::scrollWindow; jah_field_window.glsl says what they mean).
+		uint4 boxLo[3];
+		uint4 boxSize[3];
+		uint4 windowOffset;
+
 		float4x4 irrProbeToVctTransform;
 
 		// Jahshaka (PHOTON-READER-1): the cascade chain, as VctLighting's one
@@ -33,6 +39,10 @@
 		float4 envSh[9];
 	}
 	CONST_BUFFER_STRUCT_END( p );
+
+	// Jahshaka (PHOTON-WRITER-1): the field's window, one definition for this job,
+	// its sibling and the pixel's reader (the build wraps jah_field_window.glsl).
+	@insertpiece( JahFieldWindow )
 
 	#define numProbes numProbes_threadsPerRow.xyz
 	#define threadsPerRow numProbes_threadsPerRow.w
@@ -106,9 +116,15 @@
 		return globalInvocationId.x + globalInvocationId.y * p.threadsPerRow;
 	}
 
+	// THE PROBE A RAY BELONGS TO IS A SLOT OF THE WORK (Jahshaka, PHOTON-WRITER-1):
+	// the ray's position in the work list, mapped through the work's boxes to the
+	// atlas slot it integrates (JahFieldWindow).
 	INLINE ProbeIndex getProbeIdx( RayIndex rayIndex PARAMS_ARG_DECL )
 	{
-		return rayIndex / @value( num_rays_per_probe )u + p.numProcessedProbes;
+		uint listPos = rayIndex / @value( num_rays_per_probe )u + p.numProcessedProbes;
+		uint3 slot = jahFieldWorkSlot( listPos, p.boxLo[0], p.boxLo[1], p.boxLo[2],
+									   p.boxSize[0], p.boxSize[1], p.boxSize[2], p.numProbes.xyz );
+		return jahFieldSlotIndex( slot, p.numProbes.xyz );
 	}
 
 	INLINE ushort4 getIrradianceFieldIrradDepthXY( RayIndex rayIndex, ProbeIndex probeIdx )
@@ -168,11 +184,13 @@
 		// Assumes numProbes are powers of two.
 		// Saves ~10ms compared to the divisions above
 		// Precomputing the MSB actually slows this code down substantially
-		float3 vPos;
-		vPos.x = probeIdx & (p.numProbes.x - 1u);
-		vPos.y = (probeIdx & ((p.numProbes.x * p.numProbes.y) - 1u)) >> findMSB( p.numProbes.x );
-		vPos.z = probeIdx >> findMSB( p.numProbes.x * p.numProbes.y );
-		return vPos;
+		// Jahshaka (PHOTON-WRITER-1): probeIdx is the SLOT; the probe's place in the
+		// world is its WINDOW-LOCAL coordinate (JahFieldWindow).
+		uint3 slot;
+		slot.x = probeIdx & (p.numProbes.x - 1u);
+		slot.y = (probeIdx & ((p.numProbes.x * p.numProbes.y) - 1u)) >> findMSB( p.numProbes.x );
+		slot.z = probeIdx >> findMSB( p.numProbes.x * p.numProbes.y );
+		return float3( jahFieldLocal( slot, p.windowOffset.xyz, p.numProbes.xyz ) );
 	}
 @end
 
@@ -185,6 +203,12 @@
 @piece( BodyCS )
 	RayIndex rayIdx = getRayIndex( gl_GlobalInvocationID.xy PARAMS_ARG );
 	ProbeIndex probeIdx = getProbeIdx( rayIdx PARAMS_ARG );
+	// Jahshaka (PHOTON-WRITER-1): the dispatch is rounded UP to whole groups (a
+	// scrolled plane's probe count need not fill the last one), and a ray past the
+	// work's end - windowOffset.w - computes with everyone (the reductions below
+	// share memory and barriers) and writes nothing.
+	const bool inWork =
+		( rayIdx / @value( num_rays_per_probe )u + p.numProcessedProbes ) < p.windowOffset.w;
 
 	float3 dir = bufferFetch( directionsBuffer, rshort( rayIdx % @value( num_rays_per_probe ) ) ).xyz;
 
@@ -260,7 +284,7 @@
 
 	ushort4 irradDepthXY = getIrradianceFieldIrradDepthXY( rayIdx, probeIdx );
 
-	if( gl_LocalInvocationIndex % @value( num_rays_per_depth_pixel )u == 0u )
+	if( gl_LocalInvocationIndex % @value( num_rays_per_depth_pixel )u == 0u && inWork )
 	{
 		float sqDepth = diffuse.w * diffuse.w;
 
@@ -284,7 +308,7 @@
 	__sharedOnlyBarrier;
 
 	// Irradiance has 'bigger pixels' than depth, thus we need to reduce again.
-	if( gl_LocalInvocationIndex % @value( num_rays_per_irrad_pixel ) == 0u )
+	if( gl_LocalInvocationIndex % @value( num_rays_per_irrad_pixel ) == 0u && inWork )
 	{
 		for( uint i=1u; i<@value( reduction_iterations ); ++i )
 			diffuse.xyz += g_diffuseDepth[gl_LocalInvocationIndex + i * @value( num_rays_per_depth_pixel )u].xyz;
