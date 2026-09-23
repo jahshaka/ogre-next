@@ -452,7 +452,18 @@ namespace Ogre
         // memset did), so the generation job read an uninitialised float here.
         mIfGenParams.unused0 = 0.0f;
 
-        mIfGenParams.coneAngleTan = Math::Tan( Math::TWO_PI / static_cast<float>( numRaysPerProbe ) );
+        // THE BIN'S CONE, DERIVED FROM THE RAY COUNT (Jahshaka, PHOTON-WRITER-1). The
+        // probe's N rays tile the sphere, each standing for a bin of 4 pi / N sr, and the
+        // cone of that solid angle has 2 pi ( 1 - cos theta ) = 4 pi / N, i.e.
+        // cos theta = 1 - 2 / N (tan theta = 0.1686 at the 144 rays of a 12x12 depth
+        // probe). Upstream's tan( 2 pi / N ) is not a half-angle of anything (0.0437).
+        // WHAT READS IT: the ENVIRONMENT an escaping ray sees, prefiltered over its bin
+        // (the sky has no occlusion to bias, so the bin average is the right estimate).
+        // The VOXEL march does NOT - a probe ray crosses the voxels as a RAY, at the
+        // store's own one-cell floor (the generation job says why: a cone's composite
+        // over-occludes grazing directions, measured).
+        mIfGenParams.coneAngleTan =
+            Math::Tan( Math::ACos( 1.0f - 2.0f / static_cast<float>( numRaysPerProbe ) ).valueRadians() );
         mIfGenParams.numProcessedProbes = 0u;
         mIfGenParams.unused1 = 0.0f;
         mIfGenParams.unused2 = 0.0f;
