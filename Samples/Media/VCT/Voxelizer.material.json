@@ -6,7 +6,7 @@
             "threads_per_group" : [4, 4, 4],
 
             "source" : "Voxelizer_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "Matrix_piece_all", "VoxelGeometry_piece_cs.any", "VoxelMerge_piece_cs.any", "Voxelizer_piece_cs.any"],
+            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "Matrix_piece_all", "JahGeomRows_piece_all.any", "VoxelMerge_piece_cs.any", "Voxelizer_piece_cs.any"],
             "inform_shader_of_texture_data_change" : true,
 
             "uav_units" : 7,
@@ -190,7 +190,7 @@
             "thread_groups" : [1, 1, 1],
 
             "source" : "AabbCalcultor_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "Matrix_piece_all", "VoxelGeometry_piece_cs.any", "AabbCalcultor_piece_cs.any"],
+            "pieces" : ["CrossPlatformSettings_piece_all", "Matrix_piece_all", "JahGeomRows_piece_all.any", "AabbCalcultor_piece_cs.any"],
 
             "uav_units" : 2,
 

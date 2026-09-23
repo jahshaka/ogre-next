@@ -1,7 +1,7 @@
 @insertpiece( SetCrossPlatformSettings )
 
 @piece( CustomGlslExtensions )
-	// Jahshaka (ATOM P4): see VoxelGeometry_piece_cs.any.
+	// Jahshaka (ATOM P4): see the JahGeomRows piece (jah_geom_rows.glsl).
 	#extension GL_EXT_buffer_reference: require
 	#extension GL_EXT_buffer_reference_uvec2: require
 @end

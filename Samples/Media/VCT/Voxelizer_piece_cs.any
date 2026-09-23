@@ -12,8 +12,10 @@
 @piece( PreBindingsHeaderCS )
 	// Jahshaka (ATOM P4): the `Vertex` struct is GONE. There is no private vertex
 	// buffer to describe - the shader reads the raster's own through the device
-	// addresses in a geometry row (VoxelGeometry_piece_cs.any).
-	@insertpiece( DeclVoxelGeometry )
+	// addresses in a geometry row - Jahshaka's JahGeomRows piece (the one decode,
+	// irisgl/engine/src/rayquery/include/jah_geom_rows.glsl, which the ray jobs'
+	// hit normal reads too).
+	@insertpiece( JahGeomRows )
 
 	struct InstanceBuffer
 	{

@@ -16,7 +16,7 @@
 @piece( CustomGlslExtensions )
 	#extension GL_ARB_shader_group_vote: require
 	// Jahshaka (ATOM P4): the geometry is read where the raster keeps it, through
-	// buffer device addresses - see VoxelGeometry_piece_cs.any. The uvec2 form is
+	// buffer device addresses - see the JahGeomRows piece. The uvec2 form is
 	// deliberate: shaderInt64 is not an enabled device feature.
 	#extension GL_EXT_buffer_reference: require
 	#extension GL_EXT_buffer_reference_uvec2: require

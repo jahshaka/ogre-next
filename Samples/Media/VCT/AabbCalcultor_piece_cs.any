@@ -3,8 +3,8 @@
 
 @piece( PreBindingsHeaderCS )
 	// Jahshaka (ATOM P4): no private vertex format to describe - the positions are
-	// read where the raster keeps them.
-	@insertpiece( DeclVoxelGeometry )
+	// read where the raster keeps them (Jahshaka's JahGeomRows piece).
+	@insertpiece( JahGeomRows )
 
 	struct MeshAabb
 	{
