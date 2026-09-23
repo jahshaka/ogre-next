@@ -536,12 +536,17 @@
 								 midf3_c( light0Buf.lights[@n].diffuse.xyz ),
 								 midf3_c( light0Buf.lights[@n].specular ), pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow );@end
 
+	/// JAHSHAKA (CLOUDS-2D-1): custom_ps_darkenNonCasterDirectional is a factor on
+	/// EVERY directional light that holds no shadow map, in both loops below -- the
+	/// host's hook for what the caster loop above takes from DarkenWithShadow.
+	/// Inserted as a suffix of the light's term: the piece is an expression that
+	/// begins with a multiplication, or nothing (upstream defines none).
 	@property( !hlms_static_branch_lights )
 		@foreach( hlms_lights_directional_non_caster, n, hlms_lights_directional )
 			@insertpiece( ObjLightMaskCmp )
 				finalColour += BRDF( midf3_c( light0Buf.lights[@n].position.xyz ),
 									 midf3_c( light0Buf.lights[@n].diffuse.xyz ),
-									 midf3_c( light0Buf.lights[@n].specular ), pixelData PASSBUF_ARG );@end
+									 midf3_c( light0Buf.lights[@n].specular ), pixelData PASSBUF_ARG )@insertpiece( custom_ps_darkenNonCasterDirectional );@end
 	@else
 		for( int n=0; n<floatBitsToInt( light0Buf.numNonCasterDirectionalLights ); ++n )
 		{
@@ -549,7 +554,7 @@
 			@insertpiece( ObjLightMaskCmpNonCasterLoop )
 				finalColour += BRDF( midf3_c( light0Buf.lights[i].position.xyz ),
 									 midf3_c( light0Buf.lights[i].diffuse.xyz ),
-									 midf3_c( light0Buf.lights[i].specular ), pixelData PASSBUF_ARG );
+									 midf3_c( light0Buf.lights[i].specular ), pixelData PASSBUF_ARG )@insertpiece( custom_ps_darkenNonCasterDirectional );
 		}
 		/// Increase fineMaskLightIdx to keep it working with spot/point lights
 		@insertpiece( ObjLightMaskCmpNonCasterLoopEnd )
