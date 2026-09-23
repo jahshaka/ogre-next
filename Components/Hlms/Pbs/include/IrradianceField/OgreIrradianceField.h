@@ -272,6 +272,14 @@ namespace Ogre
         /// Whole-grid refinements owed after the current work (every event - a build,
         /// a re-placement, a scroll, a change - owes mTargetSamples - 1 of them).
         uint32 mRefinesOwed;
+        /// Clears the irradiance atlas (setFieldVolume's invalidation).
+        ComputeTools *mComputeTools;
+
+        /// Jahshaka (PHOTON-FIELD-ROTATE-1): every probe's sample count to 0 - the
+        /// pixel's reader weights a probe by its count (saturated), so a probe no
+        /// integration has reached since is no probe at all and the reader's
+        /// fallback answers its pixels.
+        void invalidateAllProbes();
 
         Vector3 mFieldOrigin;
         Vector3 mFieldSize;
@@ -399,6 +407,12 @@ namespace Ogre
             gives it (it is enlarged by one probe block per side here too).
         @param fieldSize
             The volume's size, same meaning as initialize()'s.
+        @remarks
+            Jahshaka (PHOTON-FIELD-ROTATE-1): the voxel path INVALIDATES every probe
+            here (its count is cleared to 0: nothing the atlas holds describes the new
+            placement), so the caller may integrate the new placement over as many
+            update() calls - frames - as it likes: until a probe's first integration the
+            pixel's reader gives it no weight and falls back.
         */
         void setFieldVolume( const Vector3 &fieldOrigin, const Vector3 &fieldSize );
 
