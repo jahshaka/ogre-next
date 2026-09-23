@@ -39,7 +39,7 @@
 		float4 envSh[9];
 
 		// Jahshaka (PHOTON-FIELD-ROTATE-1): this integration's ray rotation (rows) and
-		// its history rule: x = the mode (0 fresh, 1 change, 2 refine), y = the target
+		// its history rule: x = the mode (0 fresh, 1 change, 2 refine, 3 invalidate), y = the target
 		// sample count, z = the samples a change keeps, w = the integration counter
 		// (IrradianceField::update).
 		float4 rayRotation[3];
@@ -164,6 +164,20 @@
 	uint2 irradTile = jahIfdTileOrigin( probeIdx, @value( irrad_resolution )u, @value( irrad_full_width )u );
 	uint2 depthTile = jahIfdTileOrigin( probeIdx, @value( depth_resolution )u, @value( depth_full_width )u );
 	uint lid = gl_LocalInvocationIndex;
+
+	// THE INVALIDATION (mode 3, a re-placement): no rays - the probe's irradiance
+	// tile to value 0 and sample count 0, so the pixel's reader gives it no weight
+	// until an integration reaches it. The same for every thread of the group.
+	if( p.sweep.x == 3u )
+	{
+		for( uint t = lid; t < @value( irrad_resolution )u * @value( irrad_resolution )u;
+			 t += @value( threads_per_group_x )u )
+		{
+			uint2 xy = uint2( t % @value( irrad_resolution )u, t / @value( irrad_resolution )u );
+			OGRE_imageWrite2D4( irradianceField, irradTile + xy, float4( 0, 0, 0, 0 ) );
+		}
+		return;
+	}
 
 	// THE PROBE'S HISTORY: how many integrations its value is the mean of, stored in
 	// the irradiance atlas's alpha (every texel of the tile, the border mirror
