@@ -1,6 +1,22 @@
 
 //#include "SyntaxHighlightingMisc.h"
 
+@piece( JahInjectionReader )
+	// THE ONE VOXEL READER'S TEXT (jah_voxel_sample.glsl, the piece JahVoxelSample) over this
+	// job's single volume: the shadow march calls its origin gate (jahVoxelOriginGate) and its
+	// tent instead of carrying a copy of either. The job reads the coverage and the position
+	// per half only (it WRITES the light), so the light and axis reads are absent.
+	#define JAH_VOX_HAS_ANISO 0
+	#define JAH_VOX_ANISO false
+	#define JAH_VOX_SAMPLE_ISO( c, u, l ) float4( 0.0f, 0.0f, 0.0f, 0.0f )
+	#define JAH_VOX_SAMPLE_COVP( c, u, l ) OGRE_SampleLevel( voxelCoveragePTex, voxelAlbedoSampler, u, l )
+	#define JAH_VOX_SAMPLE_COVN( c, u, l ) OGRE_SampleLevel( voxelCoverageNTex, voxelAlbedoSampler, u, l )
+	#define JAH_VOX_SAMPLE_POSP( c, u, l ) OGRE_SampleLevel( voxelPositionPTex, voxelAlbedoSampler, u, l )
+	#define JAH_VOX_SAMPLE_POSN( c, u, l ) OGRE_SampleLevel( voxelPositionNTex, voxelAlbedoSampler, u, l )
+	#define JAH_VOX_INVRES( c ) p_invVoxelResolution
+	@insertpiece( JahVoxelSample )
+@end
+
 @piece( HeaderCS )
 	#define LT_DIRECTIONAL 0.0f
 	#define LT_SPOTLIGHT 2.0f
@@ -238,16 +254,14 @@
 				float3 stepCells = abs( lightDir * p_rayMarchStepSize ) / p_invVoxelResolution;
 				if( originAxis >= 0 && coverageAtIt[originAxis] > 0.0f )
 				{
-					// both halves' coverage-weighted position (the read takes both)
+					// both halves' coverage-weighted position (the read takes both), gated by
+					// the reader's own origin rule (jahVoxelOriginGate)
 					float posAt = OGRE_SampleLevel( voxelPositionPTex, voxelAlbedoSampler, currUvwPos.xyz, lodLevel )[originAxis] +
 								  OGRE_SampleLevel( voxelPositionNTex, voxelAlbedoSampler, currUvwPos.xyz, lodLevel )[originAxis];
 					float oSum = covP[originAxis] + covN[originAxis];
-					float u = ( ( posAt / oSum - originCoord ) *
-								originSign - p_invVoxelResolution[originAxis] ) /
-							  ( 0.5f * p_invVoxelResolution[originAxis] );
-					float t = clamp( u, -1.0f, 1.0f );
-					coverageAtIt[originAxis] *= t < 0.0f ? 0.5f * ( t + 1.0f ) * ( t + 1.0f )
-														  : 1.0f - 0.5f * ( 1.0f - t ) * ( 1.0f - t );
+					coverageAtIt[originAxis] *= jahVoxelOriginGate(
+						posAt, oSum, float4( float( originAxis ), originCoord, originSign, 0.0f ),
+						p_invVoxelResolution[originAxis] );
 				}
 				occluded += dot( coverageAtIt, stepCells ) * p_thinWallCounter;
 				alpha = alphaStart * max( 0.0f, 1.0f - occluded );

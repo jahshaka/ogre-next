@@ -86,6 +86,10 @@ vulkan( }; )
 #define p_thinWallCounter dirCorrectionRatio_thinWallCounter.w
 #define p_invVoxelResolution invVoxelResolution
 
+// Jahshaka (PHOTON-VOXEL-5; the VOXEL-4 audit's F3): THE ONE READER'S RULES for the shadow
+// march - after the parameters, which its functions read.
+@insertpiece( JahInjectionReader )
+
 //in uvec3 gl_NumWorkGroups;
 //in uvec3 gl_WorkGroupID;
 //in uvec3 gl_LocalInvocationID;
