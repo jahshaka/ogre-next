@@ -25,6 +25,14 @@
 		float4 invXform_row0;
 		float4 invXform_row1;
 		float4 invXform_row2;
+
+		// Jahshaka (CONE-FRAME-2): a direction in the CUBEMAP frame (world, z
+		// negated) to the probe's normalised space - a diagonal (the volume's
+		// per-axis scale after the z un-flip), so the cone frame goes cubemap ->
+		// probe in ONE exact step.
+		float4 xformCube_row0;
+		float4 xformCube_row1;
+		float4 xformCube_row2;
 	};
 @end
 @piece( DeclVctUniform )

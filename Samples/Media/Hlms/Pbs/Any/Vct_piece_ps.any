@@ -62,6 +62,19 @@
 	}
 
 
+	// Jahshaka (CONE-FRAME-2): a CUBEMAP-frame direction (world, z negated) to
+	// the probe's normalised space through the pass buffer's diagonal
+	// (VctLighting::fillConstBufferData's xformCube rows): one exact step, so an
+	// axis direction keeps exact zeros. The cone frame is built in that frame.
+	INLINE float3 jahCubeToVctProbeSpaceDir( float3 dir, VctProbeParams probeParams )
+	{
+		float3 dirLS;
+		dirLS.x = dot( probeParams.xformCube_row0.xyz, dir );
+		dirLS.y = dot( probeParams.xformCube_row1.xyz, dir );
+		dirLS.z = dot( probeParams.xformCube_row2.xyz, dir );
+		return normalize( dirLS );
+	}
+
 	INLINE float3 fromVctToViewSpace( float3 pos, VctProbeParams probeParams )
 	{
 		float3 posVS;
@@ -218,16 +231,17 @@
 	// the escape weight are ONE plain-GLSL file,
 	// irisgl/engine/src/rayquery/include/jah_voxel_cones.glsl, wrapped by Jahshaka's
 	// build into the library piece JahVoxelCones - the text the surface cache's card
-	// job and the bounce-injection job run too. The pixel's cone frame is in VIEW
-	// space; the integrator takes a view direction to the volume's normalised space
-	// and to the world (the environment's axes) through these two macros.
+	// job and the bounce-injection job run too. The pixel's cone frame is in the
+	// CUBEMAP frame (CONE-FRAME-2); the integrator takes a cubemap direction to the
+	// volume's normalised space (one diagonal) and to the world (the z un-flip)
+	// through these two macros.
 	@property( vct_cone_dirs == 6 )
 		#define JAH_CONES_SIX 1
 	@else
 		#define JAH_CONES_SIX 0
 	@end
-	#define JAH_CONES_TO_LS( d ) toVctProbeSpaceDir( d, passBuf.vctProbeParams )
-	#define JAH_CONES_TO_WORLD( d ) jahViewToWorldDir( d )
+	#define JAH_CONES_TO_LS( d ) jahCubeToVctProbeSpaceDir( d, passBuf.vctProbeParams )
+	#define JAH_CONES_TO_WORLD( d ) float3( ( d ).x, ( d ).y, -( d ).z )
 	@insertpiece( JahVoxelCones )
 
 	INLINE void computeVctProbe
@@ -245,7 +259,9 @@
 		// THE START BIAS: one cell of cascade 0 along the normal, whichever way the
 		// surface faces (fork change 0070; the rationale is JahVoxelCones'). The
 		// specular cone starts from the same point.
-		float3 dirLS = toVctProbeSpaceDir( pixelData.geomNormal.xyz, probeParams );
+		// ...from the normal in the CUBEMAP frame (the cone frame's third axis),
+		// through the same diagonal the card job's construction uses.
+		float3 dirLS = jahCubeToVctProbeSpaceDir( TBN[2], probeParams );
 		float3 biasDirLS = jahConeBiasDir( dirLS );
 		posLS = jahConeStart( posLS, biasDirLS );
 
@@ -368,12 +384,15 @@
 	// vector-first it takes a view-space direction to that camera-independent
 	// space -- the same line the env-probe piece uses a few hundred lines below
 	// -- and read matrix-first it brings one back, the matrix being orthogonal.
-	// So the frame is built out there and composed back in ONCE, which leaves
-	// the cone loop and every other reader of this matrix untouched.
-	float3x3 jahConeToView = passBuf.invViewMatCubemap;
-	float3x3 jahConeBasis =
-		mul( jahConeToView,
-			 jahConeBasis( mul( float3( pixelData.geomNormal ), jahConeToView ) ) );
+	// So the frame is built out there — and, since Jahshaka's CONE-FRAME-2, it
+	// STAYS there: the cone directions go cubemap -> probe space in one exact
+	// diagonal step (jahCubeToVctProbeSpaceDir) and cubemap -> world by the z
+	// un-flip, instead of being composed back into view space and taken to the
+	// probe through the view inverse (two float rotations, which left an
+	// axis-aligned surface's off-axis components non-zero). This is the card
+	// job's construction exactly (jahConeBasisWorld + the volume's diagonal):
+	// the pixel and the card are one frame.
+	float3x3 jahConeBasis = jahConeBasis( mul( float3( pixelData.geomNormal ), passBuf.invViewMatCubemap ) );
 
 	@property( use_parallax_correct_cubemaps )
 		float3 vctSpecPosVS = float3( 0, 0, 0 );
