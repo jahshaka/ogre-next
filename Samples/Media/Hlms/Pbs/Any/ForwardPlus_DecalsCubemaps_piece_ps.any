@@ -523,7 +523,10 @@
 		@end
 		if( jahProbesHere == _h( 0.0 ) && jahNoCone )
 		{
-			midf3 jahSkyDirLS = mul( pixelData.reflDir, midf3x3_c( passBuf.invViewMatCubemap ) );
+			// ...along the lobe's DOMINANT direction (ENV-RAY-MATCH, jahEnvDominantDir).
+			midf3 jahSkyDirLS = mul( midf3_c( jahEnvDominantDir( float3( pixelData.normal ), float3( pixelData.reflDir ),
+															 float( pixelData.perceptualRoughness * pixelData.perceptualRoughness ) ) ),
+										 midf3x3_c( passBuf.invViewMatCubemap ) );
 			// (N - 1) r (2 - r): the mip the convolution stores roughness r at (audit F3).
 			midf jahSkyLod = pixelData.perceptualRoughness * ( midf_c( passBuf.jahEnv.w ) - _h( 1.0 ) ) *
 							 ( _h( 2.0 ) - pixelData.perceptualRoughness );

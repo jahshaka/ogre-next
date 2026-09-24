@@ -182,6 +182,10 @@
 	@end
 
 	@insertpiece( DeclVctFuncs )
+	// Jahshaka (ENV-RAY-MATCH): the environment's dominant-direction helper for
+	// the specular lookups below. A no-op after DeclVctFuncs inserted it with the
+	// environment's bindings; without VCT it brings the helper alone.
+	@insertpiece( JahEnvironment )
 	@insertpiece( DeclIrradianceFieldFuncs )
 	@insertpiece( DeclRefractionsFuncs )
 	@insertpiece( DeclIrradianceSH )
@@ -772,8 +776,14 @@
 @end
 
 @piece( CubemapGlobal )
+	// Jahshaka (ENV-RAY-MATCH): the prefiltered chain is read along the GGX lobe's
+	// DOMINANT direction (jahEnvDominantDir, in the JahEnvironment piece), not the
+	// mirror one: the split-sum convolution centres the lobe on R, the true lobe
+	// leans toward the normal. The same fit at every environment reader.
 	pixelData.envColourS += SampleEnvProbe( texEnvProbeMap, samplerState@value(envMapRegSampler),
-											mul( pixelData.reflDir, midf3x3_c( passBuf.invViewMatCubemap ) ),
+											mul( midf3_c( jahEnvDominantDir( float3( pixelData.normal ), float3( pixelData.reflDir ),
+												float( pixelData.perceptualRoughness * pixelData.perceptualRoughness ) ) ),
+												 midf3x3_c( passBuf.invViewMatCubemap ) ),
 											@insertpiece( envSpecularRoughness ) ).xyz @insertpiece( ApplyEnvMapScale );
 	@property( cubemaps_as_diffuse_gi )
 		pixelData.envColourD += SampleEnvProbe( texEnvProbeMap, samplerState@value(envMapRegSampler),

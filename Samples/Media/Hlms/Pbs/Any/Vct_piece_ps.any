@@ -333,7 +333,11 @@
 		@property( use_envprobe_map && !use_parallax_correct_cubemaps )
 			float3 jahEnvS = float3( 0.0f, 0.0f, 0.0f );
 		@else
-			float3 jahEnvS = jahEnvLobe( jahViewToWorldDir( pixelData.reflDir ),
+			// ...ALONG THE LOBE'S DOMINANT DIRECTION, not the mirror one
+			// (ENV-RAY-MATCH: jahEnvDominantDir, the same fit at every reader).
+			float3 jahEnvS = jahEnvLobe( jahViewToWorldDir( jahEnvDominantDir(
+											 float3( pixelData.normal ), float3( pixelData.reflDir ),
+											 float( pixelData.perceptualRoughness * pixelData.perceptualRoughness ) ) ),
 										 float( pixelData.perceptualRoughness ) ) * specAlpha;
 		@end
 
