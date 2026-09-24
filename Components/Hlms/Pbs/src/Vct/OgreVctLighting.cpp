@@ -1252,7 +1252,8 @@ namespace Ogre
     //-------------------------------------------------------------------------
     size_t VctLighting::getConstBufferSize() const
     {
-        size_t retVal = 8u * 4u * sizeof( float );
+        // Jahshaka (CONE-FRAME-2): + xformCube_row0..2, three float4s.
+        size_t retVal = 11u * 4u * sizeof( float );
         retVal += ( 4u + 4u * 2u ) * sizeof( float ) * mExtraCascades.size();
         return retVal;
     }
@@ -1421,6 +1422,26 @@ namespace Ogre
         // float4 invXform_row2;
         for( size_t i = 0; i < 12u; ++i )
             *passBufferPtr++ = static_cast<float>( invXForm[0][i] );
+
+        // float4 xformCube_row0;
+        // float4 xformCube_row1;
+        // float4 xformCube_row2;
+        // Jahshaka (CONE-FRAME-2): a DIRECTION in the camera-independent CUBEMAP
+        // frame (world with z negated - the frame HlmsPbs's invViewMatCubemap
+        // takes a view direction to, where the pixel builds its cone frame) to
+        // the probe's normalised space: the voxel volume's per-axis scale after
+        // un-flipping z. A pure diagonal, so an axis direction keeps exact zeros
+        // in its other two components; the cone frame no longer round-trips
+        // cubemap -> view -> probe through two float rotations. (The w column is
+        // unused: a direction has no translation.)
+        {
+            const Vector3 invSize = 1.0f / mVoxelizer->getVoxelSize();
+            const float rows[12] = { invSize.x, 0.0f, 0.0f, 0.0f,  //
+                                     0.0f, invSize.y, 0.0f, 0.0f,  //
+                                     0.0f, 0.0f, -invSize.z, 0.0f };
+            for( size_t i = 0; i < 12u; ++i )
+                *passBufferPtr++ = rows[i];
+        }
     }
     //-------------------------------------------------------------------------
     bool VctLighting::shouldEnableSpecularSdfQuality() const
