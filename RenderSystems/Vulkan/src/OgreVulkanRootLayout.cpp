@@ -267,6 +267,33 @@ namespace Ogre
         FastArray<FastArray<VkDescriptorSetLayoutBinding> > rootLayoutDesc;
 
         const size_t numSets = calculateNumUsedSets();
+
+        // Jahshaka (PHOTON-VOXEL-3): A DYNAMIC SET'S SLOTS LIVE IN THE GLOBAL BINDING
+        // TABLE'S FIXED ARRAYS (OgreVulkanGlobalBindingTable.h), and the render system
+        // writes them by slot number with no check in a release build: a layout that
+        // needs more slots than the table holds must be refused here, where it is
+        // made, not discovered as corrupted descriptors when it is drawn.
+        for( size_t i = 0u; i < numSets; ++i )
+        {
+            if( mBaked[i] )
+                continue;
+            if( mDescBindingRanges[i][DescBindingTypes::Texture].end > NUM_BIND_TEXTURES ||
+                mDescBindingRanges[i][DescBindingTypes::Sampler].end > NUM_BIND_SAMPLERS )
+            {
+                OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                             "Root layout set " + StringConverter::toString( i ) + " needs " +
+                                 StringConverter::toString(
+                                     mDescBindingRanges[i][DescBindingTypes::Texture].end ) +
+                                 " texture / " +
+                                 StringConverter::toString(
+                                     mDescBindingRanges[i][DescBindingTypes::Sampler].end ) +
+                                 " sampler slots; the global binding table holds " +
+                                 StringConverter::toString( NUM_BIND_TEXTURES ) + " / " +
+                                 StringConverter::toString( NUM_BIND_SAMPLERS ),
+                             "VulkanRootLayout::createVulkanHandles" );
+            }
+        }
+
         rootLayoutDesc.resize( numSets );
         mSets.resize( numSets );
         mPools.resize( numSets );

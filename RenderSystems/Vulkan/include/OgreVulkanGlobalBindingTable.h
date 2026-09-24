@@ -38,8 +38,18 @@ namespace Ogre
 #define NUM_BIND_TEX_BUFFERS 16u
 // We don't use OGRE_MAX_TEXTURE_LAYERS. That's overkill and thus
 // reserved for DescriptorSetTextures kind of textures
-#define NUM_BIND_TEXTURES 32u
-#define NUM_BIND_SAMPLERS 32u
+// Jahshaka (PHOTON-VOXEL-3): 64, not 32. The dynamic set's texture and sampler
+// slots are written straight into these arrays by slot number and the only guard
+// was an OGRE_ASSERT_MEDIUM, compiled out of every non-debug build: a pass with more
+// than 32 textures (HlmsPbs with a four-cascade anisotropic chain carries 20 voxel
+// volumes, the shadow maps, the irradiance field, the environment...) wrote past
+// `textures` into `samplers` and past `samplers` into the buffer tables - measured
+// as destroyed samplers and buffers in the next descriptor write and a SIGSEGV in
+// VulkanRootLayout::bind. VulkanRootLayout::createVulkanHandles now refuses a
+// layout whose dynamic set needs more (an exception at PSO creation, not
+// corruption at draw time).
+#define NUM_BIND_TEXTURES 64u
+#define NUM_BIND_SAMPLERS 64u
 #define NUM_BIND_READONLY_BUFFERS 16u
 
     namespace BakedDescriptorSets
