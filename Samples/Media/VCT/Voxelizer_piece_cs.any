@@ -630,10 +630,8 @@
 			sumEmissive[@c]	= voxelMergeAddSat( sumEmissive[@c], accEmissive[@c] );
 		@end
 		sumRoughness	= voxelMergeAddSat( sumRoughness, accRoughness );
-		sumAxisP	= voxelMergeAxisAddSat( sumAxisP, accAxisP );
-		sumAxisN	= voxelMergeAxisAddSat( sumAxisN, accAxisN );
-		sumPosP		= voxelMergeAxisAddSat( sumPosP, accPosP );
-		sumPosN		= voxelMergeAxisAddSat( sumPosN, accPosN );
+		voxelMergeAxisPosAddSat( sumAxisP, sumPosP, accAxisP, accPosP );
+		voxelMergeAxisPosAddSat( sumAxisN, sumPosN, accAxisN, accPosN );
 		// Two's complement: a signed sum kept in a uint wraps the same way in
 		// every order, which is the whole point of doing this in integers — and a
 		// unit vector's quantised component is 4,096, so half a million triangles

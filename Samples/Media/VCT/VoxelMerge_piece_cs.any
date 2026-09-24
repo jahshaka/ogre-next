@@ -251,6 +251,33 @@
 						 uint3( 0x7FFu, 0x7FFu, 0x3FFu ) );
 		return sum.x | ( sum.y << 11u ) | ( sum.z << 22u );
 	}
+	/// THE POSITION TAKES WHAT THE COVERAGE TAKES (PHOTON-VOXEL-5; the VOXEL-4 audit's F2).
+	/// The coverage fields saturate at 4.0 / 4.0 / 2.0 (x / y / z) of full coverage; a
+	/// position sum added whole past that point divided an unsaturated numerator by a
+	/// saturated denominator - three full layers along z at 0.1 / 0.5 / 0.9 of one cell read
+	/// the mean at 0.75, not 0.5. So each field's position add is scaled by the share of its
+	/// coverage add the field accepted: the mean of what the store holds is the mean of the
+	/// contributions it counted (exact within one batch; across batches the first batches
+	/// fill the field - the batches run in a fixed order, so the store is deterministic).
+	/// Past the cap a voxel is opaque along that axis at any count (the resolve caps O at
+	/// 1), and only the position of the counted surfaces is kept.
+	INLINE void voxelMergeAxisPosAddSat( OGRE_INOUT_REF( uint, packedAxis ),
+										  OGRE_INOUT_REF( uint, packedPos ), uint3 addAxis,
+										  uint3 addPos )
+	{
+		const uint3 cap = uint3( 0x7FFu, 0x7FFu, 0x3FFu );
+		const uint3 before = voxelMergeAxisUnpack( packedAxis );
+		const uint3 after = min( before + min( addAxis, cap ), cap );
+		const uint3 taken = after - before;
+		uint3 posAdd = uint3( 0u, 0u, 0u );
+		for( int a = 0; a < 3; ++a )
+		{
+			if( addAxis[a] > 0u )
+				posAdd[a] = ( addPos[a] * taken[a] + ( addAxis[a] >> 1u ) ) / addAxis[a];
+		}
+		packedAxis = after.x | ( after.y << 11u ) | ( after.z << 22u );
+		packedPos = voxelMergeAxisAddSat( packedPos, posAdd );
+	}
 	/// O_a = min( 1, S_a ): a voxel cannot be more than opaque along an axis (the
 	/// cap bites where two surfaces project onto the same face - a closed box's
 	/// front and back in one cell - and nowhere on a single surface).
