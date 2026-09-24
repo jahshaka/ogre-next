@@ -11,6 +11,13 @@
 			vulkan_layout( ogre_t@value(vctProbeY) ) uniform texture3D vctProbeY[@value( vct_num_probes )];
 			vulkan_layout( ogre_t@value(vctProbeZ) ) uniform texture3D vctProbeZ[@value( vct_num_probes )];
 		@end
+		// Jahshaka (PHOTON-VOXEL-3/-4): the per-half-axis coverage (HlmsPbs registers it after
+		// the anisotropic arrays, VctLighting's last light-volume entry).
+		vulkan_layout( ogre_t@value(vctProbeCovP) ) uniform texture3D vctProbeCovP[@value( vct_num_probes )];
+		vulkan_layout( ogre_t@value(vctProbeCovN) ) uniform texture3D vctProbeCovN[@value( vct_num_probes )];
+		// Jahshaka (PHOTON-VOXEL-4): the surface position per half-axis, the list's last entries.
+		vulkan_layout( ogre_t@value(vctProbePosP) ) uniform texture3D vctProbePosP[@value( vct_num_probes )];
+		vulkan_layout( ogre_t@value(vctProbePosN) ) uniform texture3D vctProbePosN[@value( vct_num_probes )];
 		// THE CONE FUNCTIONS COME AFTER THE VOLUMES THEY READ (PHOTON-READER-1): the
 		// march reads the volumes as globals through its macro convention, and this
 		// piece is the first point in the pixel shader where they are declared
@@ -142,6 +149,13 @@
 	#define JAH_VOX_MAX_CASCADES @value( vct_num_probes )
 	#define JAH_VOX_COUNT @value( vct_num_probes )
 	#define JAH_VOX_SAMPLE_ISO( c, u, l ) OGRE_SampleLevel( vctProbes[c], vctProbeSampler, u, l )
+	// Jahshaka (PHOTON-VOXEL-3): the PER-AXIS COVERAGE, VctLighting's last light-volume
+	// entry - the march's mip-0 read takes the opacity along its ray from it.
+	#define JAH_VOX_SAMPLE_COVP( c, u, l ) OGRE_SampleLevel( vctProbeCovP[c], vctProbeSampler, u, l )
+	#define JAH_VOX_SAMPLE_COVN( c, u, l ) OGRE_SampleLevel( vctProbeCovN[c], vctProbeSampler, u, l )
+	// Jahshaka (PHOTON-VOXEL-4): the SURFACE POSITION, the list's last entry - the gate.
+	#define JAH_VOX_SAMPLE_POSP( c, u, l ) OGRE_SampleLevel( vctProbePosP[c], vctProbeSampler, u, l )
+	#define JAH_VOX_SAMPLE_POSN( c, u, l ) OGRE_SampleLevel( vctProbePosN[c], vctProbeSampler, u, l )
 	@property( vct_anisotropic )
 		#define JAH_VOX_HAS_ANISO 1
 		#define JAH_VOX_ANISO true
@@ -247,6 +261,7 @@
 	INLINE void computeVctProbe
 	(
 		OGRE_INOUT_REF( float3, outDiffuse ), OGRE_INOUT_REF( float4, outSpecular ),
+		OGRE_INOUT_REF( float, outRoughOcclusion ),
 		PixelData pixelData, float3 pos, float3x3 TBN,
 	@property( use_parallax_correct_cubemaps )
 		OGRE_INOUT_REF( float3, vctSpecPosVS ),
@@ -264,6 +279,7 @@
 		float3 dirLS = jahCubeToVctProbeSpaceDir( TBN[2], probeParams );
 		float3 biasDirLS = jahConeBiasDir( dirLS );
 		posLS = jahConeStart( posLS, biasDirLS );
+		const float4 jahOrigin = jahConeOrigin( posLS, biasDirLS );
 
 		@property( vct_num_probes > 1 )
 			/*float3 blendv = abs( posLS * 2.0f - 1.0f );
@@ -279,7 +295,7 @@
 			// cone's aperture - radiance, added after the voxels' decode below.
 			float3 light;
 			float3 jahEnvD;
-			jahDiffuseCones( posLS, biasDirLS, dirLS, TBN, light, jahEnvD );
+			jahDiffuseCones( posLS, jahOrigin, TBN, light, jahEnvD );
 		@end
 
 		float blendWeight = probeParams.blendFade * blend * probeParams.multiplier;
@@ -296,13 +312,25 @@
 			// 1 / (1 - 0.02) = 1.020408163
 			float vctRoughness = (pixelData.perceptualRoughness - 0.02f) * 1.020408163f;
 			float specConeAngleTan = max( 0.0f, tan( vctRoughness * 0.5f * M_PI * 0.99f ) );
-			JahConeResult irrLight = jahConeMarch( posLS, reflVecLS, specConeAngleTan, biasDirLS,
-												   reflVecLS,
+			// A LOBE WIDER THAN 45 DEGREES IS NOT A CONE (PHOTON-VOXEL-3). At tan > 1 a
+			// cone's footprint at its first sample reaches behind its own origin (radius
+			// tan x distance > distance): at roughness 0.9 (tan 5.7) the leak room's
+			// specular cone read the lamp outside through a 0.5 m wall. Such a lobe is
+			// read in two shares. THE SKY'S: the prefiltered lobe (jahEnvLobe - exactly
+			// what PBS reads outside every volume, the split-sum) times the share the
+			// voxels did not stop; THE OCCLUDED ONE: the diffuse estimator's voxel light
+			// (applyVctRoughSpecular, after the field has written envColourD). The
+			// occlusion comes from this march CAPPED AT TAN 1 - an occlusion query along
+			// the reflection, its colour unused - handed out in outRoughOcclusion.
+			const bool jahRoughLobe = specConeAngleTan > 1.0f;
+			// the lobe's share below the surface is stopped by it (jahConeBelow)
+			float4 jahSpecOrigin = jahOrigin;
+			jahSpecOrigin.w = jahConeBelow( normalize( pixelData.reflDir ), normalize( pixelData.normal ), min( specConeAngleTan, 1.0f ) );
+			JahConeResult irrLight = jahConeMarch( posLS, reflVecLS, min( specConeAngleTan, 1.0f ), jahSpecOrigin,
 			@property( vct_enable_specular_sdf_quality && vct_num_probes <= 1 )
-												   JAH_MARCH_SPECULAR | JAH_MARCH_GAP_ALONG_DIR |
-													   JAH_MARCH_SDF );
+												   JAH_MARCH_SPECULAR | JAH_MARCH_SDF );
 			@else
-												   JAH_MARCH_SPECULAR | JAH_MARCH_GAP_ALONG_DIR );
+												   JAH_MARCH_SPECULAR );
 			@end
 
 			float specAlpha = ( 1.0f - min( 1.0f, irrLight.alpha / 0.95f ) );
@@ -353,8 +381,11 @@
 			// With the injection fixed the voxel holds radiance, a specular cone
 			// returns radiance, and the pre-integrated BRDF downstream wants
 			// exactly that: no factor.
-			outSpecular += float4( irrLight.colour.xyz * blendWeight +
+			outSpecular += float4( ( jahRoughLobe ? float3( 0.0f, 0.0f, 0.0f )
+												  : irrLight.colour.xyz * blendWeight ) +
 								   jahEnvS * ( probeParams.blendFade * blend ), blend );
+			if( jahRoughLobe )
+				outRoughOcclusion = 1.0f - specAlpha;
 
 			@property( use_parallax_correct_cubemaps )
 				vctSpecPosVS = fromVctToViewSpace( irrLight.posLS.xyz, probeParams );
@@ -366,6 +397,30 @@
 
 @end
 
+
+@piece( applyVctRoughSpecular )
+	// THE ROUGH LOBE'S OCCLUDED SHARE (PHOTON-VOXEL-3, computeVctProbe's comment): a
+	// lobe wider than tan 1 took its sky share already (the prefiltered lobe times
+	// what the capped occlusion query let through); what the voxels stopped it reads
+	// from the DIFFUSE estimator, now complete in envColourD (the cones, the field's
+	// cage, the gather). envColourD is the voxels' light PLUS the sky the estimator
+	// saw; the field's atlas stores their sum, so the SPLIT is made here: the sky part
+	// is the unoccluded sky irradiance at the normal (jahEnvIrradiance) times the
+	// visibility, taken as the query's own transmittance, 1 - occlusion - and the voxel
+	// part, the rest, is what the occluded share reads (its mean radiance is the
+	// voxel part over the occlusion, times the occlusion it fills). The split-sum
+	// downstream applies the specular albedo. Held in `vctRoughOcclusion`
+	// (applyVoxelConeTracing), 0 for every lobe that marched.
+	@property( !vct_disable_specular )
+		if( vctRoughOcclusion > 0.0f )
+		{
+			float3 jahSkyD = jahEnvIrradiance( jahViewToWorldDir( float3( pixelData.normal ) ) );
+			pixelData.envColourS += max( float3( pixelData.envColourD ) -
+											 jahSkyD * ( 1.0f - vctRoughOcclusion ),
+										 float3( 0.0f, 0.0f, 0.0f ) );
+		}
+	@end
+@end
 
 @piece( applyVoxelConeTracing )
 	// Jahshaka patch 0083: the cones get their own frame, and THE FRAME IS
@@ -404,7 +459,8 @@
 
 	float3 vctDiffuse = float3( 0, 0, 0 );
 	float4 vctSpecular = float4( 0, 0, 0, 0 );
-	computeVctProbe( vctDiffuse, vctSpecular,
+	float vctRoughOcclusion = 0.0f;
+	computeVctProbe( vctDiffuse, vctSpecular, vctRoughOcclusion,
 					 pixelData, inPs.pos, jahConeBasis,
 				@property( use_parallax_correct_cubemaps )
 					 vctSpecPosVS,

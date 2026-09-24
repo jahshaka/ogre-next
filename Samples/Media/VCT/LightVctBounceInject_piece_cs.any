@@ -19,6 +19,13 @@
 	#define JAH_VOX_MAX_CASCADES @value( hlms_num_vct_cascades )
 	#define JAH_VOX_COUNT @value( hlms_num_vct_cascades )
 	#define JAH_VOX_SAMPLE_ISO( c, u, l ) OGRE_SampleLevel( vctProbes[c], vctProbeSampler, u, l )
+	// Jahshaka (PHOTON-VOXEL-3): the PER-AXIS COVERAGE, VctLighting's last light-volume
+	// entry - the march's mip-0 read takes the opacity along its ray from it.
+	#define JAH_VOX_SAMPLE_COVP( c, u, l ) OGRE_SampleLevel( vctProbeCovP[c], vctProbeSampler, u, l )
+	#define JAH_VOX_SAMPLE_COVN( c, u, l ) OGRE_SampleLevel( vctProbeCovN[c], vctProbeSampler, u, l )
+	// Jahshaka (PHOTON-VOXEL-4): the SURFACE POSITION, the list's last entry - the gate.
+	#define JAH_VOX_SAMPLE_POSP( c, u, l ) OGRE_SampleLevel( vctProbePosP[c], vctProbeSampler, u, l )
+	#define JAH_VOX_SAMPLE_POSN( c, u, l ) OGRE_SampleLevel( vctProbePosN[c], vctProbeSampler, u, l )
 	@property( vct_anisotropic )
 		#define JAH_VOX_HAS_ANISO 1
 		#define JAH_VOX_ANISO true
@@ -100,7 +107,7 @@
 
 		float3 light;
 		float3 envD;
-		jahDiffuseCones( posLS, normalLS, normalLS, jahConeBasisWorld( nWorld ), light, envD );
+		jahDiffuseCones( posLS, jahConeOrigin( posLS, normalLS ), jahConeBasisWorld( nWorld ), light, envD );
 		outDiffuse.xyz = light + envD;
 	}
 
@@ -167,8 +174,11 @@
 		// voxel's own roughness (the emissive volume's alpha).
 		const float voxelRoughness =
 			OGRE_Load3D( voxelEmissiveTex, gl_GlobalInvocationID.xyz, 0 ).w;
+		// ...times the voxel's opacity c (the albedo's alpha, PHOTON-VOXEL-3): the albedo
+		// is the surfaces' area MEAN, and what the voxel re-emits is premultiplied by
+		// how much of it they fill, exactly like the direct term it is added to.
 		currentLight.xyz += albedoVal.xyz * vctDiffuse.xyz * p_iterationDampening *
-							jahDiffuseAlbedoHemi( voxelRoughness );
+							jahDiffuseAlbedoHemi( voxelRoughness ) * albedoVal.w;
 	}
 
 	wshort3 voxelCelUvw = wshort3( gl_GlobalInvocationID.xyz );

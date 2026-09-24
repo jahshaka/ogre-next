@@ -27,14 +27,23 @@ uniform restrict writeonly image3D lightVoxel;
 	uniform restrict writeonly image3D directVoxel;
 @end
 
-// JAHSHAKA (CLOUDS-2D-2): THE CLOUD LAYER'S FIELD -- the host binds it at t3
+// Jahshaka (PHOTON-VOXEL-3/-4): THE PER-HALF-AXIS COVERAGE at t3 (the faces looking +a) and
+// t4 (looking -a), and THE SURFACE POSITION per half at t5 / t6 (VctLighting::update binds
+// them with the other voxelizer volumes): the shadow march's opacity and its origin plane.
+vulkan_layout( ogre_t3 ) uniform texture3D voxelCoveragePTex;
+vulkan_layout( ogre_t4 ) uniform texture3D voxelCoverageNTex;
+vulkan_layout( ogre_t5 ) uniform texture3D voxelPositionPTex;
+vulkan_layout( ogre_t6 ) uniform texture3D voxelPositionNTex;
+
+// JAHSHAKA (CLOUDS-2D-2): THE CLOUD LAYER'S FIELD -- the host binds it at t7 (after the
+// surface position, PHOTON-VOXEL-4)
 // and sets `jah_cloud_shadow` when a 2D cloud layer shades the sun
 // (OgreScene::bindCloudInjection). Its three parameters are declared in the
 // Params block below whether or not it is bound, so the job's parameter list
 // is one list; without the property nothing reads them.
 @property( jah_cloud_shadow )
-	vulkan_layout( ogre_t3 ) uniform texture2D jahCloudField;
-	vulkan( layout( ogre_s3 ) uniform sampler jahCloudSampler );
+	vulkan_layout( ogre_t7 ) uniform texture2D jahCloudField;
+	vulkan( layout( ogre_s7 ) uniform sampler jahCloudSampler );
 @end
 
 layout( local_size_x = @value( threads_per_group_x ),

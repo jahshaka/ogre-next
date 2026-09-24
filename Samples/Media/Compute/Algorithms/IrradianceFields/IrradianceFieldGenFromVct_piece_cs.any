@@ -42,6 +42,9 @@
 		// (IrradianceField::update).
 		uint4 latticeOrigin;
 		uint4 sweep;
+		// Jahshaka (PHOTON-VOXEL-4, FIELD-DIR-1): a world direction to cascade 0's
+		// normalised space, per axis (all ones in a cube: no transform).
+		float4 worldToVolumeDir;
 	}
 	CONST_BUFFER_STRUCT_END( p );
 
@@ -70,6 +73,13 @@
 	#define JAH_VOX_MAX_CASCADES @value( hlms_num_vct_cascades )
 	#define JAH_VOX_COUNT @value( hlms_num_vct_cascades )
 	#define JAH_VOX_SAMPLE_ISO( c, u, l ) OGRE_SampleLevel( vctProbes[c], probeSampler, u, l )
+	// Jahshaka (PHOTON-VOXEL-3): the PER-AXIS COVERAGE, VctLighting's last light-volume
+	// entry - the march's mip-0 read takes the opacity along its ray from it.
+	#define JAH_VOX_SAMPLE_COVP( c, u, l ) OGRE_SampleLevel( vctProbeCovP[c], probeSampler, u, l )
+	#define JAH_VOX_SAMPLE_COVN( c, u, l ) OGRE_SampleLevel( vctProbeCovN[c], probeSampler, u, l )
+	// Jahshaka (PHOTON-VOXEL-4): the SURFACE POSITION, the list's last entry - the gate.
+	#define JAH_VOX_SAMPLE_POSP( c, u, l ) OGRE_SampleLevel( vctProbePosP[c], probeSampler, u, l )
+	#define JAH_VOX_SAMPLE_POSN( c, u, l ) OGRE_SampleLevel( vctProbePosN[c], probeSampler, u, l )
 	@property( vct_anisotropic )
 		#define JAH_VOX_HAS_ANISO 1
 		#define JAH_VOX_ANISO true
@@ -244,22 +254,26 @@
 	{
 		float3 setDir = bufferFetch( directionsBuffer, int( r ) ).xyz;
 		float3 dir = normalize( float3( dot( rot0, setDir ), dot( rot1, setDir ), dot( rot2, setDir ) ) );
+		// THE RAY IN THE VOLUME'S SPACE (PHOTON-VOXEL-4, FIELD-DIR-1): `dir` is a WORLD
+		// direction; the march walks cascade 0's normalised space, where it is the world
+		// direction over the box's size. This job used to pass the world direction as the
+		// normalised one - right in a cube only: in gi.ddgi_ambient's 18 x 9 x 18 m box a
+		// 45-degree ray marched at 26.6 degrees and its depth was integrated as 45. A cube
+		// (every cascade of the chain) takes the world direction's own bits.
+		float3 dirLS = dir;
+		if( any( notEqual( p.worldToVolumeDir.xyz, float3( 1.0, 1.0, 1.0 ) ) ) )
+			dirLS = normalize( dir * p.worldToVolumeDir.xyz );
 
 		// THE START BIAS (0070's rule, the ray's own direction as the bias direction).
 		// A probe sits at a lattice point, and one standing in or beside a surface's
 		// own cell would otherwise meet that cell's opacity on its first sample. The
-		// ray leaves by one cell of cascade 0 along itself, componentwise, and the
-		// march then takes its own first step (one cell measured along the ray, the L1
-		// cell) before it samples: THE FIRST SAMPLE IS TWO CELLS FROM THE PROBE along an
-		// axis and up to 2.73 along a diagonal - the pixel cone's geometry (surface,
-		// one cell along the normal, the march's step). Measured at 0 / 1 / 2 extra
+		// ray leaves by one cell of cascade 0 along itself, componentwise (in the volume's
+		// space: dirLS), and the plane march reads on from there - the pixel cone's
+		// geometry (surface, one cell along the normal). Measured at 0 / 1 / 2 extra
 		// cells (PHOTON-READER-1): gi.ddgi_ambient's floor 0.914 / 0.915 / 0.915 of its
 		// truth, the sealed room 1 / 1 / 3 codes, gi.leak_room's thin walls within
 		// 0.004 of each other at 0 and 1 - nothing overrules the pixel's geometry.
-		float3 startBias = dir * JAH_VOX_INVRES( 0 );
-		// JAH_MARCH_NO_ESCAPE: this job reads the ray's own composite, never the
-		// march's occupancy estimate (why: the escape, below).
-		//
+		float3 startBias = dirLS * JAH_VOX_INVRES( 0 );
 		// A RAY, NOT A CONE (Jahshaka, PHOTON-WRITER-1): aperture ZERO, so the march
 		// crosses the voxels at the store's own resolution (its diameter floor is one
 		// cell of the cascade it is in). A cone's composite transmittance is not the
@@ -271,9 +285,7 @@
 		// sky / a 2.56-2.70x face step; upstream's tan 0.0437 0.662 / 1.67-1.77x; a ray
 		// 0.729 / 1.18-1.31x (with the reader's backface rule 0.927 / 1.08-1.19x). The
 		// bin's cone stays where it IS the right estimate: the environment, below.
-		JahConeResult ray = jahConeMarch( posLS + startBias, dir, 0.0, float3( 0, 0, 0 ),
-										  float3( 0, 0, 0 ),
-										  JAH_MARCH_GAP_ALONG_DIR | JAH_MARCH_NO_ESCAPE );
+		JahConeResult ray = jahConeMarch( posLS + startBias, dirLS, 0.0, kJahVoxelNoOrigin, 0u );
 		// THE SKY IS PART OF THE PROBE'S IRRADIANCE (Jahshaka, PHOTON-ENV-1). The share
 		// of this ray the voxels did not stop - one minus min( 1, opacity / 0.95 ), the
 		// same escape the pixel's cones weight theirs by - sees the ONE ENVIRONMENT in
@@ -285,9 +297,8 @@
 		// meets, and for a ray crossing a wall the directional composite IS the
 		// transmittance - measured on gi.ddgi_ambient's sealed room (PHOTON-READER-1):
 		// the occupancy estimate let 11/255 of sky through the walls, the composite
-		// 1/255. The directions are world directions (the march reads them as cascade
-		// 0's, upstream's own approximation for a box that is not a cube); the
-		// environment reads them as what they are.
+		// 1/255. The march reads the direction in the volume's space (dirLS), the
+		// environment reads the world direction.
 		const float escape = 1.0 - min( 1.0, ray.alpha / 0.95 );
 		const float3 sky = escape * jahEnvCone( dir, p.coneAngleTan );
 		// THE DEPTH STAYS CASCADE-0-LOCAL AND IS MEASURED FROM THE PROBE: the march's
@@ -306,7 +317,7 @@
 			rayColour = float3( 0, 0, 0 );
 		g_rayColourDepth[r] = float4( rayColour,
 									  min( ray.travelledC0 + length( startBias ), 1.414213562 ) *
-										  dot( abs( dir ), float3( p.numProbes.xyz ) ) );
+										  dot( abs( dirLS ), float3( p.numProbes.xyz ) ) );
 		g_rayDir[r] = float4( dir, 0.0 );
 	}
 	__sharedOnlyBarrier;

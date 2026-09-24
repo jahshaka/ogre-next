@@ -1024,6 +1024,7 @@
 
 			@insertpiece( applyVoxelConeTracing )
 			@insertpiece( applyIrradianceField )
+			@insertpiece( applyVctRoughSpecular )
 
 			/// Jahshaka patch 0028: the probe loop is PER MATERIAL now.
 			/// `use_parallax_correct_cubemaps` is a DATABLOCK property (set in

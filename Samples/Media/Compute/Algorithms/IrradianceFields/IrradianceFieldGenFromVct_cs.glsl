@@ -27,6 +27,16 @@ vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbes[@value( hl
 	vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbeZ[@value( hlms_num_vct_cascades )];
 	@add( vctTexUnit, hlms_num_vct_cascades )
 @end
+// Jahshaka (PHOTON-VOXEL-3): every cascade's PER-HALF-AXIS COVERAGE (+a faces, then -a).
+vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbeCovP[@value( hlms_num_vct_cascades )];
+@add( vctTexUnit, hlms_num_vct_cascades )
+vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbeCovN[@value( hlms_num_vct_cascades )];
+@add( vctTexUnit, hlms_num_vct_cascades )
+// Jahshaka (PHOTON-VOXEL-4): every cascade's SURFACE POSITION per half-axis (+a, then -a), the last kinds.
+vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbePosP[@value( hlms_num_vct_cascades )];
+@add( vctTexUnit, hlms_num_vct_cascades )
+vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbePosN[@value( hlms_num_vct_cascades )];
+@add( vctTexUnit, hlms_num_vct_cascades )
 
 // Jahshaka (PHOTON-ENV-1): the environment cube, after every volume, while the
 // lighting has one (IrradianceField::bindChainToGenerationJob).

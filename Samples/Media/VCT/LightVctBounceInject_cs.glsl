@@ -28,6 +28,20 @@ vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbes[@value( hl
 	@add( vctTexUnit, hlms_num_vct_cascades )
 @end
 
+// Jahshaka (PHOTON-VOXEL-3): every cascade's PER-AXIS COVERAGE, after the probe
+// arrays (VctLighting::setupBounceTextures' order): the march's mip-0 read takes the
+// opacity along its cone from it.
+vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbeCovP[@value( hlms_num_vct_cascades )];
+@add( vctTexUnit, hlms_num_vct_cascades )
+vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbeCovN[@value( hlms_num_vct_cascades )];
+@add( vctTexUnit, hlms_num_vct_cascades )
+// Jahshaka (PHOTON-VOXEL-4): every cascade's SURFACE POSITION, after the coverage - the
+// march's gate.
+vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbePosP[@value( hlms_num_vct_cascades )];
+@add( vctTexUnit, hlms_num_vct_cascades )
+vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbePosN[@value( hlms_num_vct_cascades )];
+@add( vctTexUnit, hlms_num_vct_cascades )
+
 // JAHSHAKA PATCH 0076: THE DIRECT TERM, at the unit after every probe array (the
 // same order VctLighting::setupBounceTextures binds them in). It is read with a
 // plain Load3D at the voxel this invocation writes -- the D of the fixed point

@@ -96,7 +96,14 @@
 	normalVal.xyz = normalVal.xyz * 2.0f - 1.0f;
 	normalVal.xyz = normalize( normalVal.xyz );
 
-	float3 blockColour = emissiveVal.xyz;
+	// THE VOXEL EMITS ITS SURFACES' MEAN RADIANCE TIMES THE VOXEL'S OPACITY
+	// (PHOTON-VOXEL-3): the emissive and the albedo are area MEANS and the albedo's
+	// alpha is the conservative coverage c = max( O_x, O_y, O_z )
+	// (VoxelMerge_piece_cs.any), so the light volume is premultiplied by c like the
+	// direct term below (whose `alpha` starts at c) - a wall that fills a tenth of
+	// the voxel emits a tenth of its radiance into it, and the reader's mip-0 read
+	// turns c into the opacity along the ray.
+	float3 blockColour = emissiveVal.xyz * albedoVal.w;
 	// THE VOXEL'S ROUGHNESS (PHOTON-WRITER-1): the merged perceptual roughness of
 	// the surfaces in this voxel, in the emissive volume's alpha
 	// (VoxelMerge_piece_cs.any, voxelMergeEmissive).
@@ -164,16 +171,86 @@
 			//Ensure lightDir makes pixel-sized steps
 			lightDir /= max3( abs( lightDir.x ), abs( lightDir.y ), abs( lightDir.z ) );
 
+			// THE SHADOW MARCH READS THE OPACITY ALONG THE LAMP (PHOTON-VOXEL-3): per step,
+			// the per-axis coverage times the cells the step crosses along each axis -
+			// a thin wall in the lamp's way stops it within its own cell, a wall the lamp
+			// runs PARALLEL to does not shadow its neighbours - accumulated additively
+			// (the pieces of one surface split between voxels add up to the surface,
+			// they do not multiply as if they were independent occluders), the same rule
+			// as the reader (jah_voxel_sample.glsl, jahVoxelReadPlane). At a
+			// coarser mip (an area lamp's widening) the coverage is the mip's MEAN PER CELL
+			// over its block, so the cells crossed count exactly as at mip 0 - the reader's
+			// own rule (PHOTON-VOXEL-4, INJECT-SHADOW-1: a factor 2^-lod here under-counted
+			// an LTC area lamp's widening march by that factor).
+			// The pin read the ALBEDO's alpha, one opacity for every direction.
+			// THE ORIGIN PLANE: the voxel's own surface - the faces looking TOWARDS the lamp
+			// along the axis its normal is dominant on, at their stored depth; the march never
+			// counts what lies at or behind it (the lit face itself, a thin wall's back face in
+			// the same cell).
+			int originAxis = -1;
+			float originCoord = 0.0f;
+			float originSign = 1.0f;
+			{
+				float3 an = abs( normalVal.xyz );
+				int n = an.x >= an.y ? ( an.x >= an.z ? 0 : 2 ) : ( an.y >= an.z ? 1 : 2 );
+				if( lightDir[n] != 0.0f )
+				{
+					bool towardsP = lightDir[n] > 0.0f;
+					float ownO = towardsP
+						? OGRE_SampleLevel( voxelCoveragePTex, voxelAlbedoSampler, voxelUvwPos, 0.0f )[n]
+						: OGRE_SampleLevel( voxelCoverageNTex, voxelAlbedoSampler, voxelUvwPos, 0.0f )[n];
+					if( ownO > 0.0f )
+					{
+						originAxis = n;
+						originCoord = ( towardsP
+							? OGRE_SampleLevel( voxelPositionPTex, voxelAlbedoSampler, voxelUvwPos, 0.0f )[n]
+							: OGRE_SampleLevel( voxelPositionNTex, voxelAlbedoSampler, voxelUvwPos, 0.0f )[n] ) / ownO;
+						originSign = towardsP ? 1.0f : -1.0f;
+					}
+				}
+			}
 			float alpha = albedoVal.w;
+			const float alphaStart = alpha;
+			float occluded = 0.0f;
 			bool reachedDst = false;
 			float3 currUvwPos = voxelUvwPos + lightDir * p_rayMarchStepSize;
 			float lodLevel = 0;
 
 			while( alpha > 0 && !reachedDst )
 			{
-				float4 albedoAtIt = OGRE_SampleLevel( voxelAlbedoTex, voxelAlbedoSampler,
-													  currUvwPos.xyz, lodLevel );
-				alpha *= max( 0.0f, (1.0f - albedoAtIt.w * p_thinWallCounter ) );
+				// A SHADOW RAY IS STOPPED BY ANY FACE IT CROSSES, from either side (the reader's ray
+				// rule, jah_voxel_sample.glsl): a voxel's surface may lie inside another solid (the
+				// end of a wall slab hidden in the next wall), and that solid's back face must
+				// shadow it - read through the faces looking back only, such a hidden face was lit
+				// through the wall (gi.leak_room: 0.03-0.05 of red inside at 0.5 m, 1.0 at 0.05 m
+				// on the chain). Both halves together, capped per texel like one surface, read a
+				// wall once from outside.
+				float3 covP = OGRE_SampleLevel( voxelCoveragePTex, voxelAlbedoSampler, currUvwPos.xyz, lodLevel ).xyz;
+				float3 covN = OGRE_SampleLevel( voxelCoverageNTex, voxelAlbedoSampler, currUvwPos.xyz, lodLevel ).xyz;
+				float3 coverageAtIt = min( covP + covN, float3( 1.0f, 1.0f, 1.0f ) );
+				// THE CROSSING RULE, the reader's (jah_voxel_sample.glsl, jahVoxelReadPlane): the
+				// coverage times the cells the step crosses along each axis - the kernel's hats,
+				// sampled at the step, sum to one across the steps that straddle a surface, so a
+				// thin wall is read to its full coverage (PHOTON-VOXEL-4: a segment gate at the
+				// step read w x O, the fetch's blend weight). At a coarser mip the coverage is the
+				// mip's MEAN PER CELL, so the cells crossed count exactly as at mip 0. THE ORIGIN
+				// PLANE - the voxel's own surface, by its stored depth - is never an occluder.
+				float3 stepCells = abs( lightDir * p_rayMarchStepSize ) / p_invVoxelResolution;
+				if( originAxis >= 0 && coverageAtIt[originAxis] > 0.0f )
+				{
+					// both halves' coverage-weighted position (the read takes both)
+					float posAt = OGRE_SampleLevel( voxelPositionPTex, voxelAlbedoSampler, currUvwPos.xyz, lodLevel )[originAxis] +
+								  OGRE_SampleLevel( voxelPositionNTex, voxelAlbedoSampler, currUvwPos.xyz, lodLevel )[originAxis];
+					float oSum = covP[originAxis] + covN[originAxis];
+					float u = ( ( posAt / oSum - originCoord ) *
+								originSign - p_invVoxelResolution[originAxis] ) /
+							  ( 0.5f * p_invVoxelResolution[originAxis] );
+					float t = clamp( u, -1.0f, 1.0f );
+					coverageAtIt[originAxis] *= t < 0.0f ? 0.5f * ( t + 1.0f ) * ( t + 1.0f )
+														  : 1.0f - 0.5f * ( 1.0f - t ) * ( 1.0f - t );
+				}
+				occluded += dot( coverageAtIt, stepCells ) * p_thinWallCounter;
+				alpha = alphaStart * max( 0.0f, 1.0f - occluded );
 
 				currUvwPos += lightDir * p_rayMarchStepSize;
 				reachedDst = currUvwPos.x <= 0.0f ||
