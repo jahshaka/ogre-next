@@ -17,9 +17,20 @@
 	@property( hlms_instanced_stereo )
 		float2 fwdFragCoord = inPs.cullCamPosXY.xy * (1.0f / inPs.cullCamPosXY.z);
 		fwdFragCoord.xy = fwdFragCoord.xy * 0.5f + 0.5f;
+		#define FWDPLUS_CELL_COUNT( n ) ( n )
+	@else @property( hlms_forwardplus_custom_frag_coord )
+		// JAHSHAKA: A FRAGMENT THAT IS NOT A PIXEL OF THE CAMERA'S IMAGE. A derived Hlms whose
+		// fragment stands for another point (a ray hit shaded by a visibility-buffer decode)
+		// declares, before this header, fwdCustomFragCoord (that point's position in THIS
+		// target's pixels, the convention of gl_FragCoord) and fwdCustomHasCell (false when
+		// the point lies outside the grid's frustum: no cell, so no clustered light, decal or
+		// cubemap probe reaches it). Every cell count below is read through the gate.
+		#define fwdFragCoord fwdCustomFragCoord
+		#define FWDPLUS_CELL_COUNT( n ) ( fwdCustomHasCell ? ( n ) : 0u )
 	@else
 		#define fwdFragCoord gl_FragCoord
-	@end
+		#define FWDPLUS_CELL_COUNT( n ) ( n )
+	@end @end
 
 	@property( hlms_forwardplus == forward3d )
 		float f3dMinDistance	= passBuf.f3dData.x;
@@ -108,7 +119,7 @@
 		finalColour += finalDecalEmissive;
 	@end
 
-	numLightsInGrid = bufferFetch1( f3dGrid, int(sampleOffset) );
+	numLightsInGrid = FWDPLUS_CELL_COUNT( bufferFetch1( f3dGrid, int(sampleOffset) ) );
 
 	@property( hlms_forwardplus_debug )totalNumLightsInGrid += numLightsInGrid;@end
 
@@ -156,7 +167,7 @@
 	}
 
 	ushort prevLightCount = numLightsInGrid;
-	numLightsInGrid		= bufferFetch1( f3dGrid, int(sampleOffset + 1u) );
+	numLightsInGrid		= FWDPLUS_CELL_COUNT( bufferFetch1( f3dGrid, int(sampleOffset + 1u) ) );
 
 	@property( hlms_forwardplus_debug )totalNumLightsInGrid += numLightsInGrid;@end
 
@@ -220,7 +231,7 @@
 
 @property( hlms_enable_vpls )
 	prevLightCount	= numLightsInGrid;
-	numLightsInGrid	= bufferFetch1( f3dGrid, int(sampleOffset + 2u) );
+	numLightsInGrid	= FWDPLUS_CELL_COUNT( bufferFetch1( f3dGrid, int(sampleOffset + 2u) ) );
 
 	@property( hlms_forwardplus_debug )totalNumLightsInGrid += numLightsInGrid;@end
 
