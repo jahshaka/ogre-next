@@ -39,15 +39,19 @@
 #define VOXEL_MERGE_SCALE 4096.0f
 #define VOXEL_MERGE_CLAMP 16.0f
 
-	/// ONE VOXEL'S FOURTEEN ACCUMULATOR TEXELS ARE ADJACENT IN Z: albedo sum at
-	/// z*14+0..3 (rgba), RAW normal sum at +4..6 (xyz, two's complement),
-	/// emissive sum at +7..9 (rgb), FOLDED normal sum at +10..12 (xyz), and the
-	/// ROUGHNESS sum at +13 (PHOTON-WRITER-1). Fourteen and not sixteen because
-	/// only fourteen carry anything — a fourth channel on the three vectors would
-	/// be 25 MB read and written for nothing at 128^3.
+	/// ONE VOXEL'S EIGHTEEN ACCUMULATOR TEXELS ARE ADJACENT IN Z: albedo sum at
+	/// z*18+0..3 (rgba), RAW normal sum at +4..6 (xyz, two's complement),
+	/// emissive sum at +7..9 (rgb), FOLDED normal sum at +10..12 (xyz), the
+	/// ROUGHNESS sum at +13 (PHOTON-WRITER-1), the PER-HALF-AXIS COVERAGE sums
+	/// packed into +14 (the faces looking +x, +y, +z) and +15 (looking -x, -y, -z)
+	/// (PHOTON-VOXEL-3/-4, THE DIRECTIONAL COVERAGE below) and the matching
+	/// POSITION-WEIGHTED sums into +16 and +17 (PHOTON-VOXEL-4, THE SURFACE POSITION
+	/// below). Eighteen because only eighteen carry anything — a fourth
+	/// channel on the three vectors would be 25 MB read and written for nothing
+	/// at 128^3.
 	/// Interleaved rather than stacked planes so the shader needs no knowledge of
 	/// the volume's depth (a voxelisation dispatch covers one OCTANT and does not
-	/// know it), and so a voxel's fourteen texels share a cache line's worth of
+	/// know it), and so a voxel's texels share a cache line's worth of
 	/// the 3D swizzle.
 	///
 	/// R32_UINT AND NOT RGBA32_UINT, AND THE REASON IS A MEASUREMENT, NOT A HANG
@@ -66,7 +70,7 @@
 	/// more per 64^3 volume, resident.
 	INLINE uint3 voxelMergeUvw( uint3 voxelCel, uint chan )
 	{
-		return uint3( voxelCel.x, voxelCel.y, voxelCel.z * 14u + chan );
+		return uint3( voxelCel.x, voxelCel.y, voxelCel.z * 18u + chan );
 	}
 
 	/// THE TWO NORMAL SUMS, AND WHY THERE ARE TWO.
@@ -138,20 +142,150 @@
 		return int3( floor( clamp( v, -1.0f, 1.0f ) * VOXEL_MERGE_SCALE + 0.5f ) );
 	}
 
+	/// THE COVERAGE (PHOTON-VOXEL-3). THE STORE IS A DENSITY FIELD: a voxel a
+	/// surface passes through holds that surface's radiance times the FRACTION OF
+	/// THE VOXEL IT FILLS - the area of the surface inside the voxel over the
+	/// voxel's face area - so a wall's voxels, summed, hold the wall's radiance
+	/// times its area, and the opacity the cones composite follows the same rule.
+	/// Upstream stored the MEAN over the triangles that touched a voxel, so a
+	/// voxel a wall grazed held the wall's full radiance and full opacity: a thin
+	/// wall on a cell boundary was stored three voxels thick and every wall was
+	/// rounded out to whole cells at its edges (PHOTON-FIELD-ROTATE-1 measured
+	/// 1.32-1.44x the authored emission on a one-voxel wall).
+	///
+	/// A triangle's contribution is its value times its weight w (the Voxelizer's
+	/// clipped area over the face area), both on this grid: the product of two
+	/// 12-bit fixed-point numbers, rounded back to 12 bits - an exact integer
+	/// operation, so the sums stay order-independent. A triangle's piece of a
+	/// voxel is at most the cube's largest cross-section (sqrt 2), and w is
+	/// clamped to 2: the product of a clamped contribution (65,536) and a weight
+	/// (8,192) is 2^29, inside a uint.
+	INLINE uint voxelMergeWeight( float w )
+	{
+		return uint( clamp( w, 0.0f, 2.0f ) * VOXEL_MERGE_SCALE + 0.5f );
+	}
+	INLINE uint4 voxelMergeWeigh4( uint4 q, uint w )
+	{
+		return ( q * w + 2048u ) >> 12u;
+	}
+	INLINE uint3 voxelMergeWeigh3( uint3 q, uint w )
+	{
+		return ( q * w + 2048u ) >> 12u;
+	}
+	/// Signed: the arithmetic shift rounds towards minus infinity on both signs,
+	/// the same rule as the quantisation's floor.
+	INLINE int3 voxelMergeWeighSigned3( int3 q, uint w )
+	{
+		return ( q * int( w ) + 2048 ) >> 12;
+	}
 
-	/// THE MEAN, FROM THE SUMS. Every dispatch that adds anything to a voxel
+
+	/// THE RESOLVE, FROM THE SUMS. Every dispatch that adds anything to a voxel
 	/// writes this afterwards, from the TOTAL the accumulator then holds — so
 	/// whichever dispatch happens to be last leaves the complete answer, and an
 	/// earlier one's partial answer is always overwritten by it. That is why the
 	/// resolve rides the voxelisation instead of being a pass of its own: the
 	/// value written does not depend on WHO writes it, only on the sums, and the
 	/// sums are exact.
-	INLINE float4 voxelMergeAlbedo( uint4 sumAlbedo, float invAccum )
+	///
+	/// THE DIVISOR IS THE AREA (PHOTON-VOXEL-3). `totalWeight` is the voxel's
+	/// isotropic coverage W on the grid (the sum of the pieces' area weights). Every
+	/// MATERIAL PROPERTY of the voxel - its albedo, its emissive radiance, its normal,
+	/// its roughness - is the area-weighted MEAN, sum / W: what the surfaces inside the
+	/// voxel ARE, per unit of their area. How MUCH of the voxel they fill is not a
+	/// material property and is not folded into any of them: it is the per-axis
+	/// coverage (THE DIRECTIONAL COVERAGE, below), and its largest component rides in
+	/// the albedo's alpha as the voxel's conservative opacity c = max( O_x, O_y, O_z ).
+	/// The light injection multiplies what the voxel emits by c (the light volume is
+	/// premultiplied by its alpha: the mips average colour and alpha together, the
+	/// ray hit divides colour by alpha and gets the mean radiance back), and the
+	/// reader's mip-0 read replaces c by the opacity along the ray.
+	INLINE float voxelMergeInvMean( uint totalWeight )
 	{
-		return float4( sumAlbedo ) * invAccum;
+		return 1.0f / float( max( totalWeight, 1u ) );
 	}
-	INLINE float4 voxelMergeNormal( uint4 sumNormal, uint4 sumFolded, float invAccum )
+	INLINE float4 voxelMergeAlbedo( uint4 sumAlbedo, uint totalWeight, float3 coverage )
 	{
+		return float4( float3( sumAlbedo.xyz ) * voxelMergeInvMean( totalWeight ),
+					   max( coverage.x, max( coverage.y, coverage.z ) ) );
+	}
+
+	/// THE DIRECTIONAL COVERAGE (PHOTON-VOXEL-3). A ray along axis a sees of a
+	/// voxel the area of its surfaces PROJECTED onto the plane normal to a, over the
+	/// voxel's face area, times their opacity: O_a = sum of w * alpha * |n . a| over
+	/// the pieces (w = the piece's area over the face area, n its geometric normal).
+	/// A wall on the xy plane fills its voxels along z (O_z = 1) and is invisible
+	/// along x and y (O_x = O_y = 0), which is what makes a thin closed box right:
+	/// its side faces are opaque along their own normals and transparent across
+	/// the wall. A single per-voxel opacity cannot say both (PHOTON-VOXEL-3 run 1
+	/// measured it: an isotropic coverage left a closed wall's edge columns opaque at
+	/// full radiance, +31 % over the authored wall).
+	///
+	/// SPLIT BY THE SIDE A FACE LOOKS TO (PHOTON-VOXEL-4): O_a+ = sum w alpha max( n . a, 0 ),
+	/// O_a- = sum w alpha max( -n . a, 0 ). A ray travelling +a meets the faces looking back
+	/// at it, O_a-; a solid's back face is never read and a closed wall is read ONCE at any
+	/// cell size. Summed over both sides into one value, a wall's front and back added once
+	/// the cell resolved them: the open floor's wall cone read 0.49 / 0.85 / 0.87 / 0.89 of a
+	/// reference 0.413 at 32 / 64 / 128 / 256 cells, split 0.35 / 0.36 / 0.37 / 0.38
+	/// (spikes/photon-voxel-4/lab, split-run.txt). A one-sided surface is invisible from
+	/// behind - the reader's backface rule; a two-sided sheet carries both sides' pieces.
+	///
+	/// THE GRID. 1/512 per axis, the three sums packed 11/11/10 bits into ONE
+	/// accumulator texel (x in bits 0..10, y in 11..21, z in 22..31): 4.0, 4.0 and
+	/// 2.0 of full coverage before a field saturates, far above the resolve's cap of
+	/// 1. Each field is added with its OWN saturation, which is commutative and
+	/// associative, so the merge stays exactly as order-independent as the other
+	/// fourteen sums. One contribution is rounded to nearest (+-1/1024) and at most
+	/// sqrt 2 (the cube's largest cross-section), 724 steps.
+	INLINE uint3 voxelMergeAxisQuantize( float3 v )
+	{
+		return uint3( clamp( v, 0.0f, 2.0f ) * 512.0f + 0.5f );
+	}
+	INLINE uint3 voxelMergeAxisUnpack( uint packed )
+	{
+		return uint3( packed & 0x7FFu, ( packed >> 11u ) & 0x7FFu, packed >> 22u );
+	}
+	INLINE uint voxelMergeAxisAddSat( uint packed, uint3 add )
+	{
+		uint3 sum = min( voxelMergeAxisUnpack( packed ) + min( add, uint3( 0x7FFu, 0x7FFu, 0x3FFu ) ),
+						 uint3( 0x7FFu, 0x7FFu, 0x3FFu ) );
+		return sum.x | ( sum.y << 11u ) | ( sum.z << 22u );
+	}
+	/// O_a = min( 1, S_a ): a voxel cannot be more than opaque along an axis (the
+	/// cap bites where two surfaces project onto the same face - a closed box's
+	/// front and back in one cell - and nowhere on a single surface).
+	INLINE float3 voxelMergeAxisResolve( uint packed )
+	{
+		return min( float3( voxelMergeAxisUnpack( packed ) ) * ( 1.0f / 512.0f ),
+					float3( 1.0f, 1.0f, 1.0f ) );
+	}
+	/// THE SURFACE POSITION (PHOTON-VOXEL-4). Per axis a, where along a the surfaces a ray
+	/// along a meets in this voxel lie: the coverage-weighted mean of the pieces' centroids
+	/// along a, p_a = sum w alpha |n_a| c_a / sum w alpha |n_a| - the second packed sum
+	/// holds sum( coverage contribution x c_a ) with c_a the piece's centroid in the voxel's
+	/// own cell coordinate [0, 1], on the coverage's 1/512 grid (the same packing and the
+	/// same per-field saturation; c_a <= 1, so it never saturates before the coverage).
+	/// Stored ABSOLUTE in the volume's normalised coordinate and O-PREMULTIPLIED, pO_a =
+	/// O_a x ( ( cell_a + p_a ) / res_a ), RGBA16_UNORM: a box filter and a trilinear fetch
+	/// then give sum O p / sum O - the coverage-weighted mean position exactly, at every
+	/// mip (a texel with O = 0 has no say). A voxel no surface reaches stores 0.
+	INLINE float3 voxelMergePositionResolve( uint packedPos, uint packedAxis, uint3 voxelCel,
+											 float3 invRes )
+	{
+		float3 sumAxis = float3( voxelMergeAxisUnpack( packedAxis ) );
+		float3 sumPos = float3( voxelMergeAxisUnpack( packedPos ) );
+		float3 local = float3( 0.5f, 0.5f, 0.5f );
+		for( int a = 0; a < 3; ++a )
+		{
+			if( sumAxis[a] > 0.0f )
+				local[a] = min( sumPos[a] / sumAxis[a], 1.0f );
+		}
+		return voxelMergeAxisResolve( packedAxis ) * ( ( float3( voxelCel ) + local ) * invRes );
+	}
+
+	INLINE float4 voxelMergeNormal( uint4 sumNormal, uint4 sumFolded, uint totalWeight )
+	{
+		float invAccum = voxelMergeInvMean( totalWeight );
 		// THE TWO GROUPS, RECOVERED. Write the folded sum as U - F and the raw one
 		// as U + F, where U is the sum of the normals the fold left alone and F
 		// the sum, IN THEIR ORIGINAL DIRECTIONS, of the ones it turned round: then
@@ -220,9 +354,10 @@
 	// fourteenth sum, the materials' perceptual roughness per triangle), which the
 	// light injection and the bounce read to make the voxel emit what its surface
 	// renders. Nothing read the old constant 0 in .w.
-	INLINE float4 voxelMergeEmissive( uint4 sumEmissive, uint sumRoughness, float invAccum )
+	INLINE float4 voxelMergeEmissive( uint4 sumEmissive, uint sumRoughness, uint totalWeight )
 	{
-		return float4( float3( sumEmissive.xyz ) * invAccum, float( sumRoughness ) * invAccum );
+		return float4( float3( sumEmissive.xyz ) * voxelMergeInvMean( totalWeight ),
+					   float( sumRoughness ) * voxelMergeInvMean( totalWeight ) );
 	}
 
 @end

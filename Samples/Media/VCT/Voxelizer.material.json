@@ -9,9 +9,9 @@
             "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "Matrix_piece_all", "JahGeomRows_piece_all.any", "VoxelMerge_piece_cs.any", "Voxelizer_piece_cs.any"],
             "inform_shader_of_texture_data_change" : true,
 
-            "uav_units" : 7,
+            "uav_units" : 11,
 
-            "gl_tex_slot_start" : 7,
+            "gl_tex_slot_start" : 11,
 			
 			"params" :
             [
@@ -23,7 +23,11 @@
                 ["voxelNormalTex",  		[2], "int"],
                 ["voxelEmissiveTex",		[3], "int"],
                 ["voxelAccumVal",			[4], "int"],
-                ["voxelMergeAccum",			[5], "int"]
+                ["voxelMergeAccum",			[5], "int"],
+                ["voxelCoveragePTex",		[6], "int"],
+                ["voxelCoverageNTex",		[7], "int"],
+                ["voxelPositionPTex",		[8], "int"],
+                ["voxelPositionNTex",		[9], "int"]
 			],
 
 			"properties" :
@@ -48,6 +52,10 @@
 
             "textures" :
             [
+                {},
+                {},
+                {},
+                {},
                 {},
                 {},
                 {}
@@ -76,6 +84,10 @@
                 ["voxelAlbedoTex",          [0], "int"],
                 ["voxelNormalTex",          [1], "int"],
                 ["voxelEmissiveTex",        [2], "int"],
+                ["voxelCoveragePTex",       [3], "int"],
+                ["voxelCoverageNTex",       [4], "int"],
+                ["voxelPositionPTex",       [5], "int"],
+                ["voxelPositionNTex",       [6], "int"],
 
                 ["lightVoxel",              [0], "int"]
             ]
@@ -96,6 +108,7 @@
             "textures" :
             [
                 {},
+                {},
                 {}
             ],
 
@@ -107,7 +120,8 @@
             "params_glsl" :
             [
                 ["inLightLowerMip",         [0], "int"],
-                ["inVoxelNormalTex",        [1], "int"],
+                ["inCoveragePTex",          [1], "int"],
+                ["inCoverageNTex",          [2], "int"],
                 ["outLightHigherMip0",       [0], "int"],
                 ["outLightHigherMip1",       [1], "int"],
                 ["outLightHigherMip2",       [2], "int"]

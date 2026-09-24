@@ -3,7 +3,8 @@
 #define OGRE_imageWrite3D4( outImage, iuv, value ) imageStore( outImage, int3( iuv ), value )
 
 vulkan_layout( ogre_t0 ) uniform texture3D inLightLowerMip;
-vulkan_layout( ogre_t1 ) uniform texture3D inVoxelNormalTex;
+vulkan_layout( ogre_t1 ) uniform texture3D inCoveragePTex;
+vulkan_layout( ogre_t2 ) uniform texture3D inCoverageNTex;
 
 layout( vulkan( ogre_u0 ) vk_comma @insertpiece(uav0_pf_type) )
 uniform restrict writeonly image3D outLightHigherMip0;

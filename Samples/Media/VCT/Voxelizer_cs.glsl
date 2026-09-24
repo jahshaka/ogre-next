@@ -95,6 +95,19 @@ uniform restrict uimage3D voxelAccumVal;
 // Jahshaka patch 0065: the per-voxel INTEGER ACCUMULATOR the merge sums into.
 layout( vulkan( ogre_u6 ) vk_comma @insertpiece(uav6_pf_type) )
 uniform restrict uimage3D voxelMergeAccum;
+// Jahshaka (PHOTON-VOXEL-3/-4): THE PER-HALF-AXIS COVERAGE - O_a+ (the faces looking +a)
+// and O_a- (looking -a), written by the resolve (VoxelMerge_piece_cs.any, THE DIRECTIONAL
+// COVERAGE); the light injection, the anisotropic mip step 0 and every read sample it.
+layout( vulkan( ogre_u7 ) vk_comma @insertpiece(uav7_pf_type) )
+uniform restrict writeonly image3D voxelCoveragePTex;
+layout( vulkan( ogre_u8 ) vk_comma @insertpiece(uav8_pf_type) )
+uniform restrict writeonly image3D voxelCoverageNTex;
+// Jahshaka (PHOTON-VOXEL-4): THE SURFACE POSITION per half-axis, O-premultiplied, absolute
+// in the volume's normalised coordinate (VoxelMerge_piece_cs.any, THE SURFACE POSITION).
+layout( vulkan( ogre_u9 ) vk_comma @insertpiece(uav9_pf_type) )
+uniform restrict writeonly image3D voxelPositionPTex;
+layout( vulkan( ogre_u10 ) vk_comma @insertpiece(uav10_pf_type) )
+uniform restrict writeonly image3D voxelPositionNTex;
 
 
 

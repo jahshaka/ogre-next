@@ -8,18 +8,35 @@
 //in uint  gl_LocalInvocationIndex;
 
 @piece( HeaderCS )
-	void blendAdd( OGRE_INOUT_REF( float, accumWeight ),
-				   OGRE_INOUT_REF( float4, accumVal ),
-				   float4 sampleVal, float4 vNormal, float3 axisNormal )
+	// Jahshaka (PHOTON-VOXEL-3): ONE VOXEL SEEN ALONG AXIS `axis` for one cell of travel -
+	// the mip-0 read the cone march makes (jah_voxel_sample.glsl, jahVoxelReadPlane),
+	// along an axis: the opacity is the per-axis coverage O_axis, the colour the
+	// voxel's mean radiance (the light volume is premultiplied by c = max O, so
+	// rgb / c) times it. THE OPACITY IS ONE-SIDED (PHOTON-VOXEL-4): the coverage of the
+	// faces LOOKING BACK at the reader - the -a half for a texel read travelling +a
+	// (VoxelMerge_piece_cs.any, the split) - so a closed wall's back face is no layer of
+	// its own any more. The colour stays the voxel's mean radiance: a one-sided test on
+	// the voxel's mean NORMAL was measured and removed (PHOTON-VOXEL-3 run 2: a mixed
+	// voxel's mean normal hides light that faces the reader - the gather's floor read
+	// 0.54 of its closed form with it, 0.97 without); the split is per face, not per mean.
+	float4 voxelAlongAxis( float4 lightVal, float3 coverage, uint axis )
 	{
-		float weight = dot( vNormal.xyz, axisNormal );
-		if( vNormal.w > 0 )
-			weight = abs( weight );
-		weight = weight * 0.5f + 0.5f;
-		//Normals with no opacity are garbage thus should have the same weight as dot( N, axis ) = 0
-		weight = lerp( 0.5f, weight, sampleVal.a );
-		accumVal.xyzw += sampleVal.xyzw * weight;
-		accumWeight += weight;
+		float k = min( coverage[axis], 1.0f );
+		if( !( lightVal.w > 0.0f ) || !( k > 0.0f ) )
+			return float4( 0.0f, 0.0f, 0.0f, 0.0f );
+		return float4( lightVal.xyz * ( k / lightVal.w ), k );
+	}
+
+	// Two voxels along the axis, the one the reader meets first (`front`) then the
+	// other: the per-length ADDITIVE composite of the mip-0 read (the pieces of a
+	// surface split between the two layers add up to the surface, capped at opaque).
+	float4 compositeAlongAxis( float4 front, float4 back )
+	{
+		float take = min( back.w, 1.0f - front.w );
+		float3 colour = front.xyz;
+		if( back.w > 0.0f )
+			colour += back.xyz * ( take / back.w );
+		return float4( colour, front.w + take );
 	}
 
 	@insertpiece( DeclSRgbFuncs )
@@ -54,41 +71,66 @@
 
 	int3 iSourceUvw = int3( gl_GlobalInvocationID.xyz << 1u );
 
+	// Jahshaka (PHOTON-VOXEL-3): STEP 0 IS THE MIP-0 READ, COMPOSITED ALONG EACH AXIS.
+	// The pin weighted the eight children by their normal against each axis and
+	// AVERAGED them, opacity included, so a one-voxel wall in a 2x2x2 block read 0.5
+	// opaque at mip 1 along every axis - transparent along its normal, half opaque
+	// along its own plane. Each of the six directional texels is now the four
+	// lateral pairs of the block, each pair seen along that axis (voxelAlongAxis:
+	// the per-axis coverage) and composited front to back with the reader's mip-0
+	// rule, then averaged - the same operator the mip-0 read applies, so the chain
+	// starts where the march leaves off. The front of each pair follows step 1's
+	// convention (the -X texel is read by a ray travelling +X: x = 0 is in front).
 	float4 samples[8];
-	float4 vNormals[8];
+	float3 coveragesP[8];
+	float3 coveragesN[8];
 	@foreach( 8, n )
 		samples[@n] = OGRE_Load3D( inLightLowerMip, iSourceUvw.xyz + offsets[@n], 0 );
-		vNormals[@n] = OGRE_Load3D( inVoxelNormalTex, iSourceUvw.xyz + offsets[@n], 0 );
-		vNormals[@n].xyz = vNormals[@n].xyz * 2.0f - 1.0f;
-		vNormals[@n].xyz = normalize( vNormals[@n].xyz );
+		coveragesP[@n] = OGRE_Load3D( inCoveragePTex, iSourceUvw.xyz + offsets[@n], 0 ).xyz;
+		coveragesN[@n] = OGRE_Load3D( inCoverageNTex, iSourceUvw.xyz + offsets[@n], 0 ).xyz;
 	@end
 
-	float3 axisNormal[6] =
-	OGRE_ARRAY_START( float3 )
-		float3( -1,  0,  0 ),
-		float3(  1,  0,  0 ),
-		float3(  0, -1,  0 ),
-		float3(  0,  1,  0 ),
-		float3(  0,  0, -1 ),
-		float3(  0,  0,  1 )
+	// For each direction: the four (front, back) pairs, as step 1 pairs them.
+	int frontIdx[24] =
+	OGRE_ARRAY_START( int )
+		4, 5, 6, 7,		// -X
+		0, 1, 2, 3,		// +X
+		2, 3, 7, 6,		// -Y
+		0, 1, 5, 4,		// +Y
+		1, 3, 5, 7,		// -Z
+		0, 2, 4, 6		// +Z
+	OGRE_ARRAY_END;
+	int backIdx[24] =
+	OGRE_ARRAY_START( int )
+		0, 1, 2, 3,
+		4, 5, 6, 7,
+		0, 1, 5, 4,
+		2, 3, 7, 6,
+		0, 2, 4, 6,
+		1, 3, 5, 7
 	OGRE_ARRAY_END;
 
 	wshort3 outIUvw;
 	float4 accumVal;
-	float accumWeight;
 	@foreach( 6, dir )
-		accumWeight = 0;
+		@div( axis, @dir, 2 )
 		accumVal = float4( 0, 0, 0, 0 );
-		@foreach( 8, n )
-			blendAdd( accumWeight, accumVal, samples[@n], vNormals[@n], axisNormal[@dir] );
-		@end
-
-		if( accumWeight > 0 )
-			accumVal /= accumWeight;
+		for( int p = 0; p < 4; ++p )
+		{
+			int f = frontIdx[@dir * 4 + p];
+			int b = backIdx[@dir * 4 + p];
+			// the -a texel (even) is read travelling +a: the faces looking -a; the +a one the +a faces
+			@property( @dir == 1 || @dir == 3 || @dir == 5 )
+				accumVal += compositeAlongAxis( voxelAlongAxis( samples[f], coveragesP[f], @value( axis )u ),
+												voxelAlongAxis( samples[b], coveragesP[b], @value( axis )u ) );
+			@else
+				accumVal += compositeAlongAxis( voxelAlongAxis( samples[f], coveragesN[f], @value( axis )u ),
+												voxelAlongAxis( samples[b], coveragesN[b], @value( axis )u ) );
+			@end
+		}
+		accumVal *= 0.25f;
 
 		outIUvw.xyz = wshort3( gl_GlobalInvocationID.xyz );
-
-		@div( axis, @dir, 2 )
 		@property( @dir == 1 || @dir == 3 || @dir == 5 )
 			outIUvw.x += p_higherMipHalfWidth;
 		@end
