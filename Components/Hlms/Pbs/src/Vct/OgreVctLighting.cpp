@@ -765,21 +765,21 @@ namespace Ogre
     void VctLighting::setupGlslTextureUnits()
     {
         const size_t numExtraCascades = mExtraCascades.size();
-        size_t numNeededTexUnits;  // +1: `directVoxel` (JAHSHAKA PATCH 0076)
-        // (PHOTON-VOXEL-3: + the coverage array, one per cascade.)
-        // (PHOTON-VOXEL-4: + the surface position array, one per cascade.)
-        if( mAnisotropic )
-            numNeededTexUnits = 8u + 6u * numExtraCascades + 1u;
-        else
-            numNeededTexUnits = 5u + 3u * numExtraCascades + 1u;
-        ++numNeededTexUnits;  // Jahshaka (PHOTON-WRITER-1): voxelEmissiveTex
+        // THE LIST'S LENGTH IS PARAMETERS, NOT UNITS (Jahshaka, PHOTON-VOXEL-5; the VOXEL-4
+        // audit's F1): the two fixed textures, then ONE array parameter per texture variable
+        // (vctProbes, the three axes when anisotropic, the four split kinds - each an array over
+        // every cascade), then `directVoxel` (JAHSHAKA PATCH 0076) and voxelEmissiveTex
+        // (PHOTON-WRITER-1). It was compared with a unit count (8 + 6e + 2 / 5 + 3e + 2), which the
+        // list never had, so the "glsl" list was rebuilt and set dirty on every bounce dispatch.
+        const size_t numTextureVariables = mAnisotropic ? 8u : 5u;
+        const size_t numNeededParams = 2u + numTextureVariables + 2u;
 
         // This code assumes there's 2 textures at the beginning that always stays the same
         // the rest of them are dynamically generated.
         //
         // We also need to check if another VctLighting instance set a different number of cascades
         ShaderParams &glslShaderParams = mLightVctBounceInject->getShaderParams( "glsl" );
-        if( glslShaderParams.mParams.size() != numNeededTexUnits ||
+        if( glslShaderParams.mParams.size() != numNeededParams ||
             glslShaderParams.mParams[3].mp.dataSizeBytes !=
                 ( numExtraCascades + 1u ) * sizeof( uint32 ) )
         {
@@ -793,7 +793,6 @@ namespace Ogre
             const char *names[4] = { "vctProbes", "vctProbeX", "vctProbeY", "vctProbeZ" };
             const char *splitNames[4] = { "vctProbeCovP", "vctProbeCovN", "vctProbePosP",
                                           "vctProbePosN" };
-            const uint32 numTextureVariables = mAnisotropic ? 8u : 5u;
 
             for( size_t i = 0u; i < numTextureVariables; ++i )
             {
