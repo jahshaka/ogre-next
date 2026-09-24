@@ -577,16 +577,17 @@ namespace Ogre
             rootLayout.addArrayBinding( DescBindingTypes::Texture,
                                         RootLayout::ArrayDesc( static_cast<uint16>( vctProbeIdx ),
                                                                static_cast<uint16>( numVctProbes ) ) );
-            if( getProperty( tid, PbsProperty::VctAnisotropic ) )
+            // + the three anisotropic axes, then (Jahshaka, PHOTON-VOXEL-3/-4) the
+            // coverage per half-axis and the surface position per half: one array
+            // each, in setTextureReg's order.
+            const int32 numMoreArrays = getProperty( tid, PbsProperty::VctAnisotropic ) ? 7 : 4;
+            for( int32 i = 0; i < numMoreArrays; ++i )
             {
-                for( int32 i = 0; i < 3; ++i )
-                {
-                    vctProbeIdx += numVctProbes;
-                    rootLayout.addArrayBinding(
-                        DescBindingTypes::Texture,
-                        RootLayout::ArrayDesc( static_cast<uint16>( vctProbeIdx ),
-                                               static_cast<uint16>( numVctProbes ) ) );
-                }
+                vctProbeIdx += numVctProbes;
+                rootLayout.addArrayBinding(
+                    DescBindingTypes::Texture,
+                    RootLayout::ArrayDesc( static_cast<uint16>( vctProbeIdx ),
+                                           static_cast<uint16>( numVctProbes ) ) );
             }
         }
 
@@ -1396,6 +1397,16 @@ namespace Ogre
                 setTextureReg( tid, PixelShader, "vctProbeY", texUnit, numVctProbes );
                 texUnit += numVctProbes;
                 setTextureReg( tid, PixelShader, "vctProbeZ", texUnit, numVctProbes );
+                texUnit += numVctProbes;
+            }
+            // Jahshaka (PHOTON-VOXEL-3/-4): the coverage per half-axis (the faces looking
+            // +a, then -a) and the surface position per half - VctLighting's last four
+            // light-volume entries (the order fillBuffersFor binds them in).
+            const char *splitNames[4] = { "vctProbeCovP", "vctProbeCovN", "vctProbePosP",
+                                          "vctProbePosN" };
+            for( size_t k = 0u; k < 4u; ++k )
+            {
+                setTextureReg( tid, PixelShader, splitNames[k], texUnit, numVctProbes );
                 texUnit += numVctProbes;
             }
         }

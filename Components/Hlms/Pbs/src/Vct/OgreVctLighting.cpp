@@ -353,12 +353,18 @@ namespace Ogre
         const uint32 heightAniso = std::max( 1u, height >> 1u );
         const uint32 depthAniso = std::max( 1u, depth >> 1u );
 
+        // Jahshaka (PHOTON-VOXEL-4): every chain stops where the SHORTEST axis reaches one
+        // texel (the voxelizer's own rule, OgreVctVoxelizer.cpp): a cell is a cube and every
+        // texel of every level stays one. The directional volumes' real extent per axis is
+        // half the voxels (both signs are packed along x): their last level is the one whose
+        // shortest real axis is one texel - for a cube the pin's "2x1x1" level, unchanged;
+        // for 32 x 16 x 32 cells the 4 x 1 x 2 one (step 1 would otherwise composite a
+        // one-texel axis with the out-of-range texel beside it).
+        const uint32 shortest = std::min( width, std::min( height, depth ) );
         const uint8 numMipsMain = ( mAnisotropic && !bSdfQuality )
                                       ? 1u
-                                      : PixelFormatGpuUtils::getMaxMipmapCount( width, height, depth );
-        // numMipsAniso needs one less mip; because the last mip must be 2x1x1, not 1x1x1
-        const uint8 numMipsAniso =
-            PixelFormatGpuUtils::getMaxMipmapCount( widthAniso, heightAniso, depthAniso ) - 1u;
+                                      : PixelFormatGpuUtils::getMaxMipmapCount( shortest );
+        const uint8 numMipsAniso = PixelFormatGpuUtils::getMaxMipmapCount( std::max( 1u, shortest >> 1u ) );
 
         const size_t numTextures = mAnisotropic ? 4u : 1u;
 
@@ -392,6 +398,14 @@ namespace Ogre
 
             texFlags &= ( uint32 ) ~( TextureFlags::RenderToTexture | TextureFlags::AllowAutomipmaps );
         }
+        // Jahshaka (PHOTON-VOXEL-3/-4): the coverage and the surface position per
+        // half-axis, the list's last four entries (the voxelizer's, not owned -
+        // destroyTextures() leaves them alone).
+        for( uint32 h = 0u; h < 2u; ++h )
+        {
+            mLightVoxel[coverageIndex( h )] = mVoxelizer->getCoverageVox( h );
+            mLightVoxel[positionIndex( h )] = mVoxelizer->getPositionVox( h );
+        }
 
         if( mAnisotropic )
         {
@@ -420,8 +434,15 @@ namespace Ogre
                 DescriptorSetTexture2::TextureSlot::makeEmpty() );
             texSlot.texture = mLightVoxel[0];
             mAnisoGeneratorStep0->setTexture( 0, texSlot );
-            texSlot.texture = mVoxelizer->getNormalVox();
+            // Jahshaka (PHOTON-VOXEL-3): step 0 composites mip 0 ALONG each axis with the
+            // opacity along that axis - the per-axis coverage, which replaces the voxel
+            // normal the pin weighted the eight children by; (PHOTON-VOXEL-4) per half:
+            // the faces looking +a at unit 1, -a at unit 2, each read by the travel that
+            // meets them.
+            texSlot.texture = mVoxelizer->getCoverageVox( 0u );
             mAnisoGeneratorStep0->setTexture( 1, texSlot );
+            texSlot.texture = mVoxelizer->getCoverageVox( 1u );
+            mAnisoGeneratorStep0->setTexture( 2, texSlot );
 
             ShaderParams *shaderParams = &mAnisoGeneratorStep0->getShaderParams( "default" );
             // higherMipHalfWidth
@@ -492,6 +513,13 @@ namespace Ogre
     void VctLighting::destroyTextures()
     {
         restoreSwappedTextures();
+
+        // Jahshaka (PHOTON-VOXEL-3/-4): the coverage and position entries are the voxelizer's.
+        for( uint32 h = 0u; h < 2u; ++h )
+        {
+            mLightVoxel[coverageIndex( h )] = 0;
+            mLightVoxel[positionIndex( h )] = 0;
+        }
 
         TextureGpuManager *textureManager = mVoxelizer->getTextureGpuManager();
         for( size_t i = 0; i < sizeof( mLightVoxel ) / sizeof( mLightVoxel[0] ); ++i )
@@ -576,11 +604,14 @@ namespace Ogre
         // bound LAST so that every existing slot index -- albedo, normal, this
         // cascade's probes, the extra cascades', the three anisotropic sets -- keeps
         // the number it had, in the C++ and in the shader's ogre_tN layout alike.
+        // Jahshaka (PHOTON-VOXEL-3/-4): + four per cascade - the coverage per half-axis and
+        // the surface position per half, the list's last entries - bound after the probe
+        // sets and before `directVoxel`.
         uint8 numNeededTexUnits;
         if( mAnisotropic )
-            numNeededTexUnits = 6u + 4u * static_cast<uint8>( numExtraCascades ) + 1u;
+            numNeededTexUnits = 10u + 8u * static_cast<uint8>( numExtraCascades ) + 1u;
         else
-            numNeededTexUnits = 3u + static_cast<uint8>( numExtraCascades ) + 1u;
+            numNeededTexUnits = 7u + 5u * static_cast<uint8>( numExtraCascades ) + 1u;
         // Jahshaka (PHOTON-ENV-1): +1 for the environment cube, at the very last unit
         // (after `directVoxel`) and only while one is set - the job's `jah_env`
         // property says so to the shader, and it is re-asserted per dispatch with
@@ -660,6 +691,35 @@ namespace Ogre
             }
         }
 
+        // Jahshaka (PHOTON-VOXEL-3/-4): every cascade's COVERAGE PER HALF-AXIS (the march
+        // takes the opacity along the cone from it) and SURFACE POSITION PER HALF (its
+        // origin plane) - the list's last four kinds, each over every cascade.
+        for( uint32 k = 0u; k < 4u; ++k )
+        {
+            const uint32 h = k & 1u;
+            const bool position = k >= 2u;
+            texSlot.texture = position ? mVoxelizer->getPositionVox( h ) : mVoxelizer->getCoverageVox( h );
+            mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
+            if( bSetSamplerNow )
+            {
+                hlmsManager->addReference( mSamplerblockTrilinear );
+                mLightVctBounceInject->_setSamplerblock( texSlotIdx - 1u, mSamplerblockTrilinear );
+            }
+            for( size_t cascadeIdx = 0u; cascadeIdx < numExtraCascades; ++cascadeIdx )
+            {
+                VctLighting *extra = mExtraCascades[cascadeIdx];
+                texSlot.texture = extra->mLightVoxel[position ? extra->positionIndex( h )
+                                                              : extra->coverageIndex( h )];
+                mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
+                if( bSetSamplerNow )
+                {
+                    hlmsManager->addReference( mSamplerblockTrilinear );
+                    mLightVctBounceInject->_setSamplerblock( texSlotIdx - 1u,
+                                                             mSamplerblockTrilinear );
+                }
+            }
+        }
+
         // JAHSHAKA PATCH 0076: THE DIRECT TERM, at the last unit. Read with a plain
         // Load3D at the voxel being written, so it needs no sampler of its own (the
         // OpenGL path's samplerblock loop above deliberately skips it).
@@ -693,10 +753,12 @@ namespace Ogre
     {
         const size_t numExtraCascades = mExtraCascades.size();
         size_t numNeededTexUnits;  // +1: `directVoxel` (JAHSHAKA PATCH 0076)
+        // (PHOTON-VOXEL-3: + the coverage array, one per cascade.)
+        // (PHOTON-VOXEL-4: + the surface position array, one per cascade.)
         if( mAnisotropic )
-            numNeededTexUnits = 6u + 4u * numExtraCascades + 1u;
+            numNeededTexUnits = 8u + 6u * numExtraCascades + 1u;
         else
-            numNeededTexUnits = 3u + numExtraCascades + 1u;
+            numNeededTexUnits = 5u + 3u * numExtraCascades + 1u;
         ++numNeededTexUnits;  // Jahshaka (PHOTON-WRITER-1): voxelEmissiveTex
 
         // This code assumes there's 2 textures at the beginning that always stays the same
@@ -713,13 +775,17 @@ namespace Ogre
             ShaderParams::Param param;
             int32 texSlotIdx = 2u;
 
+            // Jahshaka (PHOTON-VOXEL-3/-4): + the coverage and the surface position per
+            // half-axis, the last four arrays.
             const char *names[4] = { "vctProbes", "vctProbeX", "vctProbeY", "vctProbeZ" };
-
-            const uint32 numTextureVariables = mAnisotropic ? 4u : 1u;
+            const char *splitNames[4] = { "vctProbeCovP", "vctProbeCovN", "vctProbePosP",
+                                          "vctProbePosN" };
+            const uint32 numTextureVariables = mAnisotropic ? 8u : 5u;
 
             for( size_t i = 0u; i < numTextureVariables; ++i )
             {
-                param.name = names[i];
+                param.name = i + 4u >= numTextureVariables ? splitNames[i + 4u - numTextureVariables]
+                                                           : names[i];
                 int32 textureUnitsTmp[16];
                 for( size_t cascadeIdx = 0u; cascadeIdx < numExtraCascades + 1u; ++cascadeIdx )
                     textureUnitsTmp[cascadeIdx] = texSlotIdx++;
@@ -1011,12 +1077,12 @@ namespace Ogre
             if( mAnisotropic )
             {
                 mLightVctBounceInject->setProperty( "vct_anisotropic", 1 );
-                mLightVctBounceInject->setNumTexUnits( 6u );
+                mLightVctBounceInject->setNumTexUnits( 8u );  // + the coverage and the position
             }
             else
             {
                 mLightVctBounceInject->setProperty( "vct_anisotropic", 0 );
-                mLightVctBounceInject->setNumTexUnits( 3u );
+                mLightVctBounceInject->setNumTexUnits( 5u );  // + the coverage and the position
             }
         }
 
@@ -1063,6 +1129,17 @@ namespace Ogre
         mLightInjectionJob->setTexture( 1, texSlot );
         texSlot.texture = mVoxelizer->getEmissiveVox();
         mLightInjectionJob->setTexture( 2, texSlot );
+        // Jahshaka (PHOTON-VOXEL-3/-4): the coverage per half-axis at units 3 (+a) and 4
+        // (-a) - the shadow march's opacity along the lamp's direction, the half that looks
+        // back at it - and the surface position per half at 5 and 6 (its origin plane).
+        // The host's cloud field is at unit 7.
+        for( uint8 h = 0u; h < 2u; ++h )
+        {
+            texSlot.texture = mVoxelizer->getCoverageVox( h );
+            mLightInjectionJob->setTexture( uint8( 3u + h ), texSlot );
+            texSlot.texture = mVoxelizer->getPositionVox( h );
+            mLightInjectionJob->setTexture( uint8( 5u + h ), texSlot );
+        }
 
         DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
         uavSlot.access = ResourceAccess::Write;
@@ -1284,7 +1361,7 @@ namespace Ogre
 
             uint8 cascadeNumMipmaps = 0u;
 
-            if( cascade->mLightVoxel[1] )
+            if( cascade->mAnisotropic )
             {
                 // Anisotropic has the number of mipmaps calculated
                 cascadeNumMipmaps = cascade->mLightVoxel[1]->getNumMipmaps();
@@ -1338,7 +1415,7 @@ namespace Ogre
 
             float cascadeNumMipmaps = 0u;
 
-            if( cascade->mLightVoxel[1] )
+            if( cascade->mAnisotropic )
             {
                 // Anisotropic has the number of mipmaps calculated
                 cascadeNumMipmaps = static_cast<float>( cascade->mLightVoxel[1]->getNumMipmaps() );

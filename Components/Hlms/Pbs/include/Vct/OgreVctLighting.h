@@ -71,7 +71,15 @@ namespace Ogre
         /// we wouldn't be able to support anisotropic mips for high resolution voxels.
         /// But more importantly, we would waste 1/4th of memory (actually 1/2 of memory
         /// because GPUs like GCN round memory consumption to the next power of 2).
-        TextureGpu             *mLightVoxel[4];
+        ///
+        /// Jahshaka (PHOTON-VOXEL-3/-4): THE LAST FOUR ENTRIES - from mLightVoxel[4]
+        /// anisotropic, mLightVoxel[1] isotropic - are the voxelizer's COVERAGE PER HALF-AXIS
+        /// (coverageIndex(0 / 1): the faces looking +a / -a) and its SURFACE POSITION per
+        /// half (positionIndex(0 / 1)), NOT owned here: every reader of the light volumes
+        /// reads the opacity along its ray from the coverage and the origin plane from the
+        /// position, so they ride the same list and every reader that binds
+        /// getNumVoxelTextures() volumes per cascade binds them too.
+        TextureGpu             *mLightVoxel[8];
         HlmsSamplerblock const *mSamplerblockTrilinear;
 
         VctVoxelizerSourceBase *mVoxelizer;
@@ -448,7 +456,15 @@ namespace Ogre
         /// class could see the volume to check it.
         TextureGpu  *getLightDirectTexture() const { return mLightDirect; }
         TextureGpu **getLightVoxelTextures( const size_t cascadeIdx );
-        uint32       getNumVoxelTextures() const { return mAnisotropic ? 4u : 1u; }
+        /// The light volumes a reader binds per cascade: the total (and its three
+        /// anisotropic axes), then the coverage per half-axis (+a, -a; PHOTON-VOXEL-3/-4),
+        /// then the surface position per half (PHOTON-VOXEL-4).
+        uint32       getNumVoxelTextures() const { return mAnisotropic ? 8u : 5u; }
+        /// Where the coverage of half `h` (0: the faces looking +a, 1: -a) sits in
+        /// getLightVoxelTextures().
+        uint32       coverageIndex( uint32 h ) const { return ( mAnisotropic ? 4u : 1u ) + h; }
+        /// Where the surface position of half `h` sits: the last two entries.
+        uint32       positionIndex( uint32 h ) const { return ( mAnisotropic ? 6u : 3u ) + h; }
 
         const HlmsSamplerblock *getBindTrilinearSamplerblock() { return mSamplerblockTrilinear; }
 

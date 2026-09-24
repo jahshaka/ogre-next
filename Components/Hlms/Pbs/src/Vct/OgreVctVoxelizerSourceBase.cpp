@@ -45,6 +45,8 @@ namespace Ogre
         mEmissiveVox( 0 ),
         mNormalVox( 0 ),
         mAccumValVox( 0 ),
+        mCoverageVox{ 0, 0 },
+        mPositionVox{ 0, 0 },
         mRenderSystem( renderSystem ),
         mVaoManager( renderSystem->getVaoManager() ),
         mHlmsManager( hlmsManager ),
@@ -104,6 +106,15 @@ namespace Ogre
             mTextureGpuManager->destroyTexture( mEmissiveVox );
             mTextureGpuManager->destroyTexture( mNormalVox );
             mTextureGpuManager->destroyTexture( mAccumValVox );
+            for( size_t h = 0u; h < 2u; ++h )
+            {
+                if( mCoverageVox[h] )
+                    mTextureGpuManager->destroyTexture( mCoverageVox[h] );
+                if( mPositionVox[h] )
+                    mTextureGpuManager->destroyTexture( mPositionVox[h] );
+                mCoverageVox[h] = 0;
+                mPositionVox[h] = 0;
+            }
 
             mAlbedoVox = 0;
             mEmissiveVox = 0;

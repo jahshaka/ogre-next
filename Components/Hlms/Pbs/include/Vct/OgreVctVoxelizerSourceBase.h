@@ -60,6 +60,19 @@ namespace Ogre
         TextureGpu *mEmissiveVox;
         TextureGpu *mNormalVox;
         TextureGpu *mAccumValVox;
+        /// Jahshaka (PHOTON-VOXEL-3/-4): THE PER-HALF-AXIS COVERAGE (RGB10A2 each: O_x, O_y,
+        /// O_z) - [0] of the faces looking +a, [1] of those looking -a: the fraction of each
+        /// voxel face its surfaces cover along that axis, split by the side they face. A ray
+        /// travelling +a reads the -a half (VoxelMerge_piece_cs.any, THE DIRECTIONAL
+        /// COVERAGE); VctLighting exposes both as entries of its light-volume list, so every
+        /// reader that binds the list binds them too.
+        TextureGpu *mCoverageVox[2];
+        /// Jahshaka (PHOTON-VOXEL-4): THE SURFACE POSITION per half-axis (RGBA16_UNORM, xyz)
+        /// - the coverage-weighted mean position of each half's surfaces along each axis,
+        /// ABSOLUTE in the volume's normalised coordinate and premultiplied by that half's
+        /// coverage (VoxelMerge_piece_cs.any, THE SURFACE POSITION): the origin plane's
+        /// test. The list's last two entries.
+        TextureGpu *mPositionVox[2];
 
         RenderSystem      *mRenderSystem;
         VaoManager        *mVaoManager;
@@ -94,6 +107,9 @@ namespace Ogre
         TextureGpu *getAlbedoVox() { return mAlbedoVox; }
         TextureGpu *getNormalVox() { return mNormalVox; }
         TextureGpu *getEmissiveVox() { return mEmissiveVox; }
+        /// `half`: 0 the faces looking +a, 1 those looking -a.
+        TextureGpu *getCoverageVox( size_t half ) { return mCoverageVox[half]; }
+        TextureGpu *getPositionVox( size_t half ) { return mPositionVox[half]; }
 
         TextureGpuManager *getTextureGpuManager();
         RenderSystem      *getRenderSystem();

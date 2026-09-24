@@ -437,6 +437,13 @@ namespace Ogre
             ( mFieldSize / voxelizer->getVoxelSize() ) / mSettings.getNumProbes3f(),
             Quaternion::IDENTITY );
         mIfGenParams.irrProbeToVctTransform = irrProbeToVctTransform;
+        {
+            // FIELD-DIR-1 (PHOTON-VOXEL-4): the box's aspect, for the rays' directions.
+            const Vector3 boxSize = voxelizer->getVoxelSize();
+            const Real minSize = std::min( boxSize.x, std::min( boxSize.y, boxSize.z ) );
+            mIfGenParams.worldToVolumeDir =
+                float4( Vector4( minSize / boxSize.x, minSize / boxSize.y, minSize / boxSize.z, 0.0f ) );
+        }
 
         // ONE WORK GROUP PER PROBE (Jahshaka, PHOTON-FIELD-ROTATE-1): its threads march
         // the probe's rays into shared memory, then integrate every texel of the
@@ -702,12 +709,17 @@ namespace Ogre
         // The job's texture units, in the order the shader declares them (the same
         // order VctLighting::setupBounceTextures binds the bounce job's): unit 0 the
         // directions buffer, then every cascade's isotropic volume, then - anisotropic
-        // tiers - every cascade's X, every cascade's Y, every cascade's Z.
+        // tiers - every cascade's X, every cascade's Y, every cascade's Z; then every
+        // cascade's per-axis coverage (PHOTON-VOXEL-3), then every cascade's surface
+        // position (PHOTON-VOXEL-4).
         const uint32 numCascades =
             std::min<uint32>( static_cast<uint32>( mVctLighting->getNumCascades() ),
                               kMaxChainCascades );
         const bool bIsAnisotropic = mVctLighting->isAnisotropic();
-        const uint32 numVolumes = bIsAnisotropic ? 4u : 1u;
+        // + the per-axis coverage and the surface position, the light-volume list's last
+        // entries (PHOTON-VOXEL-3/-4): the probe rays' march reads the opacity along each
+        // ray from them.
+        const uint32 numVolumes = mVctLighting->getNumVoxelTextures();
 
         const int32 numCascadesI32 = static_cast<int32>( numCascades );
         if( mGenerationJob->getProperty( "hlms_num_vct_cascades" ) != numCascadesI32 )

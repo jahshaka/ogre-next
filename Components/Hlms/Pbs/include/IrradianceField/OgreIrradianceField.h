@@ -228,6 +228,13 @@ namespace Ogre
             // keepOnChange, w = 1 to rotate the rays (0: the static measurement arm).
             uint4 latticeOrigin;
             uint4 sweep;
+            // Jahshaka (PHOTON-VOXEL-4, FIELD-DIR-1): a WORLD direction to cascade 0's
+            // normalised space, per axis - min( box size ) / box size (xyz; w unused).
+            // A probe ray is a world direction; the march walks the volume's normalised
+            // space, where a direction is the world one scaled by 1 / the box's size. All
+            // ones in a cubic box (every cascade of the chain), which the job reads as "no
+            // transform" so a cube's rays are the bits they always were.
+            float4 worldToVolumeDir;
         };
 
         struct IfdBorderMirrorParams
