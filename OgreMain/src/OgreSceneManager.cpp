@@ -1350,7 +1350,8 @@ namespace Ogre
     }
     //-----------------------------------------------------------------------
     void SceneManager::_cullPhase01( Camera *cullCamera, Camera *renderCamera, const Camera *lodCamera,
-                                     uint8 firstRq, uint8 lastRq, bool reuseCullData )
+                                     uint8 firstRq, uint8 lastRq, bool reuseCullData,
+                                     const uint64 *skipRq )
     {
         OgreProfileGroup( "Frustum Culling", OGREPROF_CULLING );
 
@@ -1420,6 +1421,7 @@ namespace Ogre
                 CullFrustumRequest cullRequest(
                     realFirstRq, realLastRq, mIlluminationStage == IRS_RENDER_TO_TEXTURE, true, false,
                     &mEntitiesMemoryManagerCulledList, cullCamera, lodCamera );
+                cullRequest.skipRq = skipRq;
                 fireCullFrustumThreads( cullRequest );
             }
         }  // end lock on scene graph mutex
@@ -2202,6 +2204,11 @@ namespace Ogre
             {
                 if( i >= ownRqs )
                     break;
+
+                // JAHSHAKA (ATOM S3-DRAW): a queue the pass skips receives nothing
+                // (CompositorPassSceneDef::mSkipRQ).
+                if( request.skipRq && ( request.skipRq[i >> 6u] & ( uint64( 1u ) << ( i & 63u ) ) ) )
+                    continue;
 
                 MovableObject::MovableObjectArray &outVisibleObjects =
                     *( visibleObjectsPerRq.begin() + i );

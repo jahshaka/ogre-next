@@ -185,7 +185,8 @@ namespace Ogre
     }
     //---------------------------------------------------------------------
     void Viewport::_updateCullPhase01( Camera *renderCamera, Camera *cullCamera, const Camera *lodCamera,
-                                       uint8 firstRq, uint8 lastRq, bool reuseCullData )
+                                       uint8 firstRq, uint8 lastRq, bool reuseCullData,
+                                       const uint64 *skipRq )
     {
 #if OGRE_NO_VIEWPORT_ORIENTATIONMODE == 0
         {
@@ -197,7 +198,8 @@ namespace Ogre
         // Tell Camera to render into me
         cullCamera->_notifyViewport( this );
 
-        cullCamera->_cullScenePhase01( renderCamera, lodCamera, this, firstRq, lastRq, reuseCullData );
+        cullCamera->_cullScenePhase01( renderCamera, lodCamera, this, firstRq, lastRq, reuseCullData,
+                                       skipRq );
     }
     //---------------------------------------------------------------------
     void Viewport::_updateRenderPhase02( Camera *camera, const Camera *lodCamera, uint8 firstRq,

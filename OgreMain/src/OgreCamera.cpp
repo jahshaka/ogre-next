@@ -353,7 +353,8 @@ namespace Ogre
     }
     //-----------------------------------------------------------------------
     void Camera::_cullScenePhase01( Camera *renderCamera, const Camera *lodCamera, Viewport *vp,
-                                    uint8 firstRq, uint8 lastRq, bool reuseCullData )
+                                    uint8 firstRq, uint8 lastRq, bool reuseCullData,
+                                    const uint64 *skipRq )
     {
         OgreProfileBeginGPUEvent( "Camera: " + getName() );
 
@@ -376,7 +377,8 @@ namespace Ogre
         }
 
         // render scene
-        mSceneMgr->_cullPhase01( this, renderCamera, lodCamera, firstRq, lastRq, reuseCullData );
+        mSceneMgr->_cullPhase01( this, renderCamera, lodCamera, firstRq, lastRq, reuseCullData,
+                                 skipRq );
     }
     //-----------------------------------------------------------------------
     void Camera::_renderScenePhase02( const Camera *lodCamera, uint8 firstRq, uint8 lastRq,

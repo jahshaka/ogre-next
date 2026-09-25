@@ -111,6 +111,21 @@ namespace Ogre
         /// Last Render Queue ID to render. Not inclusive
         uint8 mLastRQ;
 
+        /// JAHSHAKA (ATOM S3-DRAW): render queues this pass SKIPS inside
+        /// [mFirstRQ; mLastRQ), one bit per queue id (bit (id & 63) of word id >> 6).
+        /// A pass range is contiguous, but a queue whose objects one pass must not
+        /// draw while every other pass keeps drawing them (Jahshaka's visibility-buffer
+        /// queue: its items are drawn by the view's own id pass and shaded by a decode,
+        /// and stay in the shadow, probe and reflection passes) cannot be cut out of a
+        /// contiguous range without moving another queue across a range some other pass
+        /// relies on. The skip is applied to the FRUSTUM CULL (a skipped queue receives
+        /// no visible object, so nothing of it is queued or rendered by this pass);
+        /// LOD updates, the casters box and render queue listeners keep the full range.
+        /// Not a visibility mask on purpose: the shadow node's casters box is computed
+        /// with the executing pass' viewport mask, so a mask would take the skipped
+        /// objects out of the shadow maps too.
+        uint64 mSkipRQ[4];
+
         /// Enable ForwardPlus during the pass (if Forward3D or ForwardClustered systems
         /// were created). Disabling optimizes performance when you don't need it.
         bool mEnableForwardPlus;
@@ -227,6 +242,7 @@ namespace Ogre
             mGenNormalsGBuf( false ),
             mFirstRQ( 0 ),
             mLastRQ( (uint8)-1 ),
+            mSkipRQ{ 0u, 0u, 0u, 0u },
             mEnableForwardPlus( true ),
             mCameraCubemapReorient( false ),
             mUpdateLodLists( true ),
@@ -256,6 +272,25 @@ namespace Ogre
         void setLightVisibilityMask( uint32 visibilityMask )
         {
             mLightVisibilityMask = visibilityMask & VisibilityFlags::RESERVED_VISIBILITY_FLAGS;
+        }
+
+        /// JAHSHAKA (ATOM S3-DRAW): see mSkipRQ.
+        void setSkipRenderQueue( uint8 rqId, bool skip )
+        {
+            const uint64 bit = uint64( 1u ) << ( rqId & 63u );
+            if( skip )
+                mSkipRQ[rqId >> 6u] |= bit;
+            else
+                mSkipRQ[rqId >> 6u] &= ~bit;
+        }
+        bool skipsRenderQueue( uint8 rqId ) const
+        {
+            return ( mSkipRQ[rqId >> 6u] & ( uint64( 1u ) << ( rqId & 63u ) ) ) != 0u;
+        }
+        /// The skip set to hand the cull, or null when this pass skips nothing.
+        const uint64 *getSkipRenderQueues() const
+        {
+            return ( mSkipRQ[0] | mSkipRQ[1] | mSkipRQ[2] | mSkipRQ[3] ) ? mSkipRQ : 0;
         }
 
         void setUseDepthPrePass( const IdStringVec &textureName, IdString depthTextureName,

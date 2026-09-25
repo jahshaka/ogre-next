@@ -306,7 +306,8 @@ namespace Ogre
         sceneManager->_setCurrentCompositorPass( this );
 
         viewport->_updateCullPhase01( mCamera, mCullCamera, usedLodCamera, mDefinition->mFirstRQ,
-                                      mDefinition->mLastRQ, mDefinition->mReuseCullData );
+                                      mDefinition->mLastRQ, mDefinition->mReuseCullData,
+                                      mDefinition->getSkipRenderQueues() );
 
         notifyPassSceneAfterFrustumCullingListeners();
 

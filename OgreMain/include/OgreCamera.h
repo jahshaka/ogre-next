@@ -412,8 +412,10 @@ namespace Ogre
         @param lastRq
             Last RenderQueue ID to render (exclusive)
         */
+        /// skipRq: JAHSHAKA (ATOM S3-DRAW) — CompositorPassSceneDef::mSkipRQ, or null.
         void _cullScenePhase01( Camera *renderCamera, const Camera *lodCamera, Viewport *vp,
-                                uint8 firstRq, uint8 lastRq, bool reuseCullData );
+                                uint8 firstRq, uint8 lastRq, bool reuseCullData,
+                                const uint64 *skipRq = 0 );
 
         void _renderScenePhase02( const Camera *lodCamera, uint8 firstRq, uint8 lastRq,
                                   bool includeOverlays );

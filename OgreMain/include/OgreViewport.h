@@ -98,8 +98,10 @@ namespace Ogre
 
         /** Instructs the viewport to updates its contents.
          */
+        /// skipRq: JAHSHAKA (ATOM S3-DRAW) — CompositorPassSceneDef::mSkipRQ, or null.
         void _updateCullPhase01( Camera *renderCamera, Camera *cullCamera, const Camera *lodCamera,
-                                 uint8 firstRq, uint8 lastRq, bool reuseCullData );
+                                 uint8 firstRq, uint8 lastRq, bool reuseCullData,
+                                 const uint64 *skipRq = 0 );
         void _updateRenderPhase02( Camera *camera, const Camera *lodCamera, uint8 firstRq,
                                    uint8 lastRq );
 

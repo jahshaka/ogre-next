@@ -113,6 +113,9 @@ namespace Ogre
         Camera const *camera;
         /// Camera whose frustum we're to cull against. Must be const (read only for all threads).
         Camera const *lodCamera;
+        /// JAHSHAKA (ATOM S3-DRAW): queues to skip (CompositorPassSceneDef::mSkipRQ), or null.
+        /// Read only for all threads; owned by the pass definition.
+        uint64 const *skipRq;
 
         CullFrustumRequest() :
             firstRq( 0 ),
@@ -122,7 +125,8 @@ namespace Ogre
             cullingLights( false ),
             objectMemManager( 0 ),
             camera( 0 ),
-            lodCamera( 0 )
+            lodCamera( 0 ),
+            skipRq( 0 )
         {
         }
         CullFrustumRequest( uint8 _firstRq, uint8 _lastRq, bool _casterPass, bool _addToRenderQueue,
@@ -135,7 +139,8 @@ namespace Ogre
             cullingLights( _cullingLights ),
             objectMemManager( _objectMemManager ),
             camera( _camera ),
-            lodCamera( _lodCamera )
+            lodCamera( _lodCamera ),
+            skipRq( 0 )
         {
         }
     };
@@ -1964,8 +1969,11 @@ namespace Ogre
             @param firstRq first render queue ID to render (gets clamped if too big)
             @param lastRq last render queue ID to render (gets clamped if too big)
         */
+        /// skipRq: JAHSHAKA (ATOM S3-DRAW) — CompositorPassSceneDef::mSkipRQ (256 bits, a
+        /// queue whose bit is set receives no visible object from this cull), or null.
         virtual void _cullPhase01( Camera *cullCamera, Camera *renderCamera, const Camera *lodCamera,
-                                   uint8 firstRq, uint8 lastRq, bool reuseCullData );
+                                   uint8 firstRq, uint8 lastRq, bool reuseCullData,
+                                   const uint64 *skipRq = 0 );
 
         /** Prompts the class to send its contents to the renderer.
             @remarks
