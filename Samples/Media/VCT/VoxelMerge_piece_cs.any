@@ -377,8 +377,14 @@
 			// FILTERS the two sides' volumes across neighbouring voxels - so neighbours must agree
 			// which physical side is the front. The majority group flips between voxels of one slab
 			// on a tie (equal faces both sides), so the side is fixed by a generic direction instead:
-			// the front is the one facing it. No axis and no 45-degree diagonal lies on its seam.
-			if( dot( normalOut, float3( 0.2673f, 0.5345f, 0.8018f ) ) < 0.0f )
+			// the front is the one facing it. A slab whose normal is perpendicular to it sits on its
+			// SEAM and may flip between neighbours, so no normal content favours may lie there: the
+			// direction maximises the angle from the seam to all 26 vectors with components in
+			// {-1, 0, 1} (the axes, the face diagonals, the body diagonals) - each is 9.9 degrees or
+			// more off it; the nearest integer normals with components up to 2 are 1.5 degrees off,
+			// up to 5 are 0.19 degrees off. (The earlier (1,2,3)/sqrt(14) had the body diagonal
+			// (1,1,-1) exactly on its seam: a slab tilted so could flip voxel by voxel.)
+			if( dot( normalOut, float3( 0.8925f, 0.4166f, 0.1726f ) ) < 0.0f )
 				normalOut = -normalOut;
 		}
 
