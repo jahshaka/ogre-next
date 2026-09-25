@@ -37,6 +37,13 @@ vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbePosP[@value(
 @add( vctTexUnit, hlms_num_vct_cascades )
 vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbePosN[@value( hlms_num_vct_cascades )];
 @add( vctTexUnit, hlms_num_vct_cascades )
+// Jahshaka (PHOTON-VOXEL-5): the anisotropic tiers' level-0 back side and the voxelizer's normal.
+@property( vct_anisotropic )
+	vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbeBack[@value( hlms_num_vct_cascades )];
+	@add( vctTexUnit, hlms_num_vct_cascades )
+	vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbeNrm[@value( hlms_num_vct_cascades )];
+	@add( vctTexUnit, hlms_num_vct_cascades )
+@end
 
 // Jahshaka (PHOTON-ENV-1): the environment cube, after every volume, while the
 // lighting has one (IrradianceField::bindChainToGenerationJob).

@@ -55,6 +55,14 @@ vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D directVoxel;
 vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D voxelEmissiveTex;
 @add( vctTexUnit, 1 )
 
+// Jahshaka (PHOTON-VOXEL-5): THE BACK SIDE'S DIRECT TERM on the anisotropic tiers, after the
+// emissive volume (VctLighting::setupBounceTextures): a two-sided voxel's back is its own fixed
+// point, L_back = D_back + rho * G_back.
+@property( vct_anisotropic )
+	vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D directBackVoxel;
+	@add( vctTexUnit, 1 )
+@end
+
 // JAHSHAKA (PHOTON-ENV-1): THE ONE ENVIRONMENT, at the unit after `directVoxel`
 // (VctLighting::setupBounceTextures binds it last, and only while the host set a
 // cube - the job property jah_env). Sampled with vctProbeSampler.
@@ -67,6 +75,12 @@ vulkan( layout( ogre_s2 ) uniform sampler vctProbeSampler );
 
 layout( vulkan( ogre_u0 ) vk_comma @insertpiece(uav0_pf_type) )
 uniform restrict writeonly image3D lightVoxel;
+// Jahshaka (PHOTON-VOXEL-5): the back side's total, written in place (no reader of this job reads
+// it: the march's level-0 read here takes the sides' mean).
+@property( vct_anisotropic )
+	layout( vulkan( ogre_u1 ) vk_comma rgba16f )
+	uniform restrict writeonly image3D backVoxel;
+@end
 
 layout( local_size_x = @value( threads_per_group_x ),
         local_size_y = @value( threads_per_group_y ),

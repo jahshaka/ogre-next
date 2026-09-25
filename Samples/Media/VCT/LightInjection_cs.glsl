@@ -22,9 +22,46 @@ uniform restrict writeonly image3D lightVoxel;
 // pass. Declared only when the host has a volume to write it to (a VctLighting with
 // no bounce texture has no use for it): VctLighting::update() sets the property and
 // binds the slot per injection, because this job is shared by name process-wide.
+@pset( jahInjUav, 1 )
 @property( vct_keep_direct )
 	layout( vulkan( ogre_u1 ) vk_comma @insertpiece(uav1_pf_type) )
 	uniform restrict writeonly image3D directVoxel;
+	@add( jahInjUav, 1 )
+@end
+
+// Jahshaka (PHOTON-VOXEL-5): THE ANISOTROPIC TIERS' SIDES AND HALVES. `backVoxel` is level 0's
+// BACK side (the front is 2 x the total minus it: the total holds the sides' mean);
+// `dirOut0..2` the directional volumes' level 0 per axis, composited here from each voxel's
+// light PER HALF-AXIS - or, with a bounce, the direct part of it (`vct_keep_direct`: the bounce
+// pass adds its own part in the anisotropic mip step 0); `directBackVoxel` the back side's
+// direct term for the bounce's fixed point. The slots follow u0 and the direct term in this
+// order (VctLighting::update binds them so).
+@property( vct_anisotropic )
+	layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba16f )
+	uniform restrict writeonly image3D backVoxel;
+	@add( jahInjUav, 1 )
+	@property( vct_keep_direct )
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba8 )
+		uniform restrict writeonly image3D directBackVoxel;
+		@add( jahInjUav, 1 )
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba8 )
+		uniform restrict writeonly image3D dirOut0;
+		@add( jahInjUav, 1 )
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba8 )
+		uniform restrict writeonly image3D dirOut1;
+		@add( jahInjUav, 1 )
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba8 )
+		uniform restrict writeonly image3D dirOut2;
+	@else
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba16f )
+		uniform restrict writeonly image3D dirOut0;
+		@add( jahInjUav, 1 )
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba16f )
+		uniform restrict writeonly image3D dirOut1;
+		@add( jahInjUav, 1 )
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba16f )
+		uniform restrict writeonly image3D dirOut2;
+	@end
 @end
 
 // Jahshaka (PHOTON-VOXEL-3/-4): THE PER-HALF-AXIS COVERAGE at t3 (the faces looking +a) and
@@ -75,6 +112,8 @@ vulkan( layout( ogre_P0 ) uniform Params { )
 	uniform float4 jahCloudMap;
 	uniform float4 jahCloudSun;
 	uniform float4 jahCloudOrigin;
+	// Jahshaka (PHOTON-VOXEL-5): the directional volumes' half width - where a +a texel lives.
+	uniform int higherMipHalfWidth;
 vulkan( }; )
 
 #define p_numLights numLights
@@ -85,6 +124,7 @@ vulkan( }; )
 #define p_dirCorrectionRatio dirCorrectionRatio_thinWallCounter.xyz
 #define p_thinWallCounter dirCorrectionRatio_thinWallCounter.w
 #define p_invVoxelResolution invVoxelResolution
+#define p_higherMipHalfWidth higherMipHalfWidth
 
 // Jahshaka (PHOTON-VOXEL-5; the VOXEL-4 audit's F3): THE ONE READER'S RULES for the shadow
 // march - after the parameters, which its functions read.

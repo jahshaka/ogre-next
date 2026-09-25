@@ -164,14 +164,33 @@
 	// injection writes albedoVal.w to each), so reading it here keeps it exactly as
 	// the accumulating form did.
 	float4 currentLight = OGRE_Load3D( directVoxel, gl_GlobalInvocationID.xyz, 0 );
+	@property( vct_anisotropic )
+		float4 backLight = OGRE_Load3D( directBackVoxel, gl_GlobalInvocationID.xyz, 0 );
+	@end
 
 	if( anyInvocationARB( albedoVal.a > 0 ) )
 	{
+		const bool twoSided = normalVal.a > 0.0f;
 		normalVal.xyz = normalVal.xyz * 2.0f - 1.0f;
 		normalVal.xyz = normalize( normalVal.xyz );
 
-		float3 vctDiffuse = float3( 0, 0, 0 );
-		computeVctProbe( vctDiffuse, voxelUvwPos, normalVal.xyz );
+		// A TWO-SIDED VOXEL GATHERS BOTH HEMISPHERES (PHOTON-VOXEL-5): its front (the canonical
+		// normal's side, VoxelMerge) and its back are two surfaces, each lit by what IT faces - a
+		// roof's top by the sky, its underside by the room. The total keeps their mean, the back
+		// its own (the front is twice the mean minus it).
+		// ONE call site in a loop over the sides, not two: the gather is the whole cone march,
+		// inlined per call (a second call doubled the job's compile time).
+		float3 gathered[2];
+		gathered[0] = float3( 0, 0, 0 );
+		gathered[1] = float3( 0, 0, 0 );
+		for( int side = 0; side < ( twoSided ? 2 : 1 ); ++side )
+		{
+			float3 g = float3( 0, 0, 0 );
+			computeVctProbe( g, voxelUvwPos, side == 0 ? normalVal.xyz : -normalVal.xyz );
+			gathered[side] = g;
+		}
+		const float3 vctDiffuse = gathered[0];
+		const float3 vctDiffuseBack = twoSided ? gathered[1] : gathered[0];
 		// THE BOUNCE RE-EMITS WHAT THE SURFACE RENDERS (PHOTON-WRITER-1): a voxel lit
 		// by the diffuse gather of its surroundings reflects the normalised Disney
 		// lobe's HEMISPHERICAL albedo of it (jahDiffuseAlbedoHemi, the lobe's
@@ -182,10 +201,16 @@
 		// ...times the voxel's opacity c (the albedo's alpha, PHOTON-VOXEL-3): the albedo
 		// is the surfaces' area MEAN, and what the voxel re-emits is premultiplied by
 		// how much of it they fill, exactly like the direct term it is added to.
-		currentLight.xyz += albedoVal.xyz * vctDiffuse.xyz * p_iterationDampening *
-							jahDiffuseAlbedoHemi( voxelRoughness ) * albedoVal.w;
+		const float3 reemit = albedoVal.xyz * p_iterationDampening * jahDiffuseAlbedoHemi( voxelRoughness ) * albedoVal.w;
+		currentLight.xyz += reemit * ( 0.5f * ( vctDiffuse + vctDiffuseBack ) );
+		@property( vct_anisotropic )
+			backLight.xyz += reemit * vctDiffuseBack;
+		@end
 	}
 
 	wshort3 voxelCelUvw = wshort3( gl_GlobalInvocationID.xyz );
 	OGRE_imageWrite3D4( lightVoxel, voxelCelUvw, jahStoreLight( currentLight ) );  // JAHSHAKA PATCH 0080
+	@property( vct_anisotropic )
+		OGRE_imageWrite3D4( backVoxel, voxelCelUvw, float4( backLight.xyz, currentLight.w ) );
+	@end
 @end

@@ -370,11 +370,21 @@
 		// — is the dark side, not the leaking one.
 		float3 normalOut = nU + nF;
 		if( doubleSided )
+		{
 			normalOut = lenU2 >= lenF2 ? nU : nF;
+			// A TWO-SIDED VOXEL'S NORMAL IS CANONICAL (PHOTON-VOXEL-5): the light is stored per SIDE
+			// (LightInjection: the front, the side this normal points to, and the back), and a read
+			// FILTERS the two sides' volumes across neighbouring voxels - so neighbours must agree
+			// which physical side is the front. The majority group flips between voxels of one slab
+			// on a tie (equal faces both sides), so the side is fixed by a generic direction instead:
+			// the front is the one facing it. No axis and no 45-degree diagonal lies on its seam.
+			if( dot( normalOut, float3( 0.2673f, 0.5345f, 0.8018f ) ) < 0.0f )
+				normalOut = -normalOut;
+		}
 
 		// Stored unnormalized and biased, exactly as before, so the injection's
 		// `xyz * 2 - 1` keeps meaning what it meant; .a is the double-sided flag
-		// it reads to pick abs(NdotL) over saturate(NdotL).
+		// (the injection lights both sides of such a voxel).
 		return float4( normalOut * 0.5f + 0.5f, doubleSided ? 1.0f : 0.0f );
 	}
 	// Jahshaka (PHOTON-WRITER-1): .w carries the voxel's MEAN ROUGHNESS (the

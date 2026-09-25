@@ -43,7 +43,7 @@
             "threads_per_group" : [4, 4, 4],
 
             "source" : "LightInjection_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "AreaLights_LTC_piece_ps.any", "sRGB.any", "JahDiffuseAlbedo_piece_all.any", "JahCloudShadow_piece_all.any", "JahVoxelSample_piece_all.any", "LightInjection_piece_cs.any"],
+            "pieces" : ["CrossPlatformSettings_piece_all", "AreaLights_LTC_piece_ps.any", "sRGB.any", "JahDiffuseAlbedo_piece_all.any", "JahCloudShadow_piece_all.any", "JahVoxelSample_piece_all.any", "JahDirectionalComposite_piece_cs.any", "LightInjection_piece_cs.any"],
             "inform_shader_of_texture_data_change" : true,
 
             "thread_groups_based_on_uav" : 0,
@@ -64,7 +64,9 @@
             "properties" :
             {
                 "hlms_lights_area_ltc" : 1,
-                "jah_cloud_shadow" : 0
+                "jah_cloud_shadow" : 0,
+                "vct_anisotropic" : 0,
+                "vct_keep_direct" : 0
             },
 
             "params" :
@@ -76,7 +78,8 @@
                 ["invVoxelResolution",      [1,1,1],    "float"],
                 ["jahCloudMap",             [0,0,0,0],  "float"],
                 ["jahCloudSun",             [0,0,0,1],  "float"],
-                ["jahCloudOrigin",          [0,0,0,0],  "float"]
+                ["jahCloudOrigin",          [0,0,0,0],  "float"],
+                ["higherMipHalfWidth",      [1],        "int"]
             ],
 
             "params_glsl" :
@@ -98,7 +101,7 @@
             "threads_per_group" : [4, 4, 4],
 
             "source" : "AnisotropicMipVctStep0_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "sRGB.any", "AnisotropicMipVctStep0_piece_cs.any"],
+            "pieces" : ["CrossPlatformSettings_piece_all", "sRGB.any", "JahDirectionalComposite_piece_cs.any", "AnisotropicMipVctStep0_piece_cs.any"],
             "inform_shader_of_texture_data_change" : true,
 
             "thread_groups_based_on_uav" : { "slot" : 0, "divisor" : [2, 1, 1] },
@@ -107,9 +110,7 @@
 
             "textures" :
             [
-                {},
-                {},
-                {}
+                {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
             ],
 
             "params" :
@@ -119,9 +120,16 @@
 
             "params_glsl" :
             [
-                ["inLightLowerMip",         [0], "int"],
-                ["inCoveragePTex",          [1], "int"],
-                ["inCoverageNTex",          [2], "int"],
+                ["inLightTotal",            [0], "int"],
+                ["inLightBack",             [1], "int"],
+                ["inDirectTotal",           [2], "int"],
+                ["inDirectBack",            [3], "int"],
+                ["inNormal",                [4], "int"],
+                ["inCoveragePTex",          [5], "int"],
+                ["inCoverageNTex",          [6], "int"],
+                ["inDirectDir0",            [7], "int"],
+                ["inDirectDir1",            [8], "int"],
+                ["inDirectDir2",            [9], "int"],
                 ["outLightHigherMip0",       [0], "int"],
                 ["outLightHigherMip1",       [1], "int"],
                 ["outLightHigherMip2",       [2], "int"]
