@@ -99,6 +99,8 @@ namespace Ogre
         mLightVctBounceInject( 0 ),
         mLightBounce( 0 ),
         mLightDirect( 0 ),  // JAHSHAKA PATCH 0076
+        mLightDirectBack( 0 ),
+        mInjectHigherMipHalfWidth( 0 ),
         mBakingMultiplier( 1.0f ),
         mInvBakingMultiplier( 1.0f ),
         mDefaultLightDistThreshold( 0.5f ),
@@ -122,6 +124,7 @@ namespace Ogre
         mDebugVoxelVisualizer( 0 )
     {
         memset( mLightVoxel, 0, sizeof( mLightVoxel ) );
+        memset( mLightDirectDir, 0, sizeof( mLightDirectDir ) );
         mEnvCube = 0;
         memset( mEnvGain, 0, sizeof( mEnvGain ) );
         memset( mEnvSh, 0, sizeof( mEnvSh ) );
@@ -145,6 +148,7 @@ namespace Ogre
         mDirCorrectionRatioThinWallCounter =
             mShaderParams->findParameter( "dirCorrectionRatio_thinWallCounter" );
         mInvVoxelResolution = mShaderParams->findParameter( "invVoxelResolution" );
+        mInjectHigherMipHalfWidth = mShaderParams->findParameter( "higherMipHalfWidth" );
 
         RenderSystem *renderSystem = mVoxelizer->getRenderSystem();
         VaoManager *vaoManager = renderSystem->getVaoManager();
@@ -227,12 +231,6 @@ namespace Ogre
                     DescriptorSetTexture2::TextureSlot::makeEmpty() );
                 texSlot.texture = mLightVoxel[0];
                 mLightVctBounceInject->setTexture( 2, texSlot, mSamplerblockTrilinear );
-
-                if( mAnisoGeneratorStep0 )
-                {
-                    texSlot.texture = mLightVoxel[0];
-                    mAnisoGeneratorStep0->setTexture( 0, texSlot );
-                }
             }
         }
     }
@@ -410,51 +408,35 @@ namespace Ogre
 
         if( mAnisotropic )
         {
+            // Jahshaka (PHOTON-VOXEL-5): LEVEL 0's BACK SIDE (mLightVoxel[0] holds the sides'
+            // mean) - level 0 only, read by the level-0 readers with the voxelizer's normal (the
+            // side a half's faces look to), the list's last two entries.
+            {
+                char tmpBuffer[128];
+                LwString texName( LwString::FromEmptyPointer( tmpBuffer, sizeof( tmpBuffer ) ) );
+                texName.a( "VctLighting_Back/Id", getId() );
+                TextureGpu *texture = textureManager->createTexture(
+                    texName.c_str(), GpuPageOutStrategy::Discard, TextureFlags::Uav, TextureTypes::Type3D );
+                texture->setResolution( width, height, depth );
+                texture->setNumMipmaps( 1u );
+                texture->setPixelFormat( jahLightVoxelFormat() );
+                texture->scheduleTransitionTo( GpuResidency::Resident );
+                mLightVoxel[backIndex()] = texture;
+            }
+            mLightVoxel[normalIndex()] = mVoxelizer->getNormalVox();
+
             // Setup the compute shaders for VctLighting::generateAnisotropicMips()
             HlmsCompute *hlmsCompute = mVoxelizer->getHlmsManager()->getComputeHlms();
-            mAnisoGeneratorStep0 = hlmsCompute->findComputeJob( "VCT/AnisotropicMipStep0" );
 
             char tmpBuffer[128];
             LwString jobName( LwString::FromEmptyPointer( tmpBuffer, sizeof( tmpBuffer ) ) );
-
-            // Step 0
-            jobName.clear();
-            jobName.a( "VCT/AnisotropicMipStep0/Id", getId() );
-            mAnisoGeneratorStep0 = mAnisoGeneratorStep0->clone( jobName.c_str() );
-
-            for( uint8 i = 0; i < 3u; ++i )
-            {
-                DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
-                uavSlot.access = ResourceAccess::Write;
-                uavSlot.texture = mLightVoxel[i + 1u];
-                uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
-                mAnisoGeneratorStep0->_setUavTexture( i, uavSlot );
-            }
-
             DescriptorSetTexture2::TextureSlot texSlot(
                 DescriptorSetTexture2::TextureSlot::makeEmpty() );
-            texSlot.texture = mLightVoxel[0];
-            mAnisoGeneratorStep0->setTexture( 0, texSlot );
-            // Jahshaka (PHOTON-VOXEL-3): step 0 composites mip 0 ALONG each axis with the
-            // opacity along that axis - the per-axis coverage, which replaces the voxel
-            // normal the pin weighted the eight children by; (PHOTON-VOXEL-4) per half:
-            // the faces looking +a at unit 1, -a at unit 2, each read by the travel that
-            // meets them.
-            texSlot.texture = mVoxelizer->getCoverageVox( 0u );
-            mAnisoGeneratorStep0->setTexture( 1, texSlot );
-            texSlot.texture = mVoxelizer->getCoverageVox( 1u );
-            mAnisoGeneratorStep0->setTexture( 2, texSlot );
+            ShaderParams *shaderParams = 0;
+            ShaderParams::Param *lowerMipResolutionParam = 0;
 
-            ShaderParams *shaderParams = &mAnisoGeneratorStep0->getShaderParams( "default" );
-            // higherMipHalfWidth
-            ShaderParams::Param *lowerMipResolutionParam = &shaderParams->mParams.back();
-            // int32 resolution[4] = { static_cast<int32>( mLightVoxel[1]->getWidth() >> 1u ) };
-            lowerMipResolutionParam->setManualValue(
-                static_cast<int32>( mLightVoxel[1]->getWidth() >> 1u ) );
-            shaderParams->setDirty();
-
-            // Now setup step 1
-            // numMipsOnStep1 is subtracted one because mip 0 got processed by step 0
+            // Step 1: the directional mips from level 0 (which the light injection composites
+            // itself - the fused step 0 - and step 0 completes with a bounce's part).
             const uint8 numMipsOnStep1 = mLightVoxel[1]->getNumMipmaps() - 1u;
             mAnisoGeneratorStep1.resize( numMipsOnStep1 );
 
@@ -499,9 +481,6 @@ namespace Ogre
             }
         }
 
-        mLightInjectionJob->setProperty( "correct_area_light_shadows",
-                                         albedoVox->getNumMipmaps() > 1u ? 1 : 0 );
-
         setAllowMultipleBounces( allowsMultipleBounces );
 
         if( mDebugVoxelVisualizer )
@@ -515,12 +494,15 @@ namespace Ogre
     {
         restoreSwappedTextures();
 
-        // Jahshaka (PHOTON-VOXEL-3/-4): the coverage and position entries are the voxelizer's.
+        // Jahshaka (PHOTON-VOXEL-3/-4): the coverage and position entries are the voxelizer's,
+        // and (PHOTON-VOXEL-5) so is the normal's.
         for( uint32 h = 0u; h < 2u; ++h )
         {
             mLightVoxel[coverageIndex( h )] = 0;
             mLightVoxel[positionIndex( h )] = 0;
         }
+        if( mAnisotropic )
+            mLightVoxel[normalIndex()] = 0;
 
         TextureGpuManager *textureManager = mVoxelizer->getTextureGpuManager();
         for( size_t i = 0; i < sizeof( mLightVoxel ) / sizeof( mLightVoxel[0] ); ++i )
@@ -623,6 +605,10 @@ namespace Ogre
         // holds the voxel's roughness (the bounce's re-emission carries the diffuse
         // lobe's hemispherical albedo). Bound right after `directVoxel`.
         ++numNeededTexUnits;
+        // Jahshaka (PHOTON-VOXEL-5): +1 on the anisotropic tiers for the BACK side's direct term,
+        // right after the emissive volume (before the environment cube).
+        if( mAnisotropic )
+            ++numNeededTexUnits;
 
         HlmsManager *hlmsManager = mVoxelizer->getHlmsManager();
         const RenderSystemCapabilities *caps = hlmsManager->getRenderSystem()->getCapabilities();
@@ -729,6 +715,12 @@ namespace Ogre
         // Jahshaka (PHOTON-WRITER-1): the voxeliser's emissive volume (roughness in .w).
         texSlot.texture = mVoxelizer->getEmissiveVox();
         mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
+        // Jahshaka (PHOTON-VOXEL-5): the back side's direct term (a Load3D, no sampler).
+        if( mAnisotropic )
+        {
+            texSlot.texture = mLightDirectBack;
+            mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
+        }
 
         // Jahshaka (PHOTON-ENV-1): the environment cube, sampled with the probes'
         // trilinear sampler (a separate sampler object on Vulkan).
@@ -755,11 +747,25 @@ namespace Ogre
             mLightVctBounceInject->setTexture( texSlotIdx++, texSlot, 0, false );
         }
 
+        // Jahshaka (PHOTON-VOXEL-5): the back side's total, u1 on the anisotropic tiers, written in
+        // place: the march's level-0 read in this job takes the sides' MEAN (it binds no back), so
+        // nothing here reads it. Measured: a back that ping-pongs and is read per side moved the
+        // roof fixture's two-bounce underside by nothing (gi.voxel_coverage, 0.02193 both), at
+        // 8 B a voxel on every bouncing tier.
+        const uint8 numUavs = mAnisotropic ? 2u : 1u;
+        if( mLightVctBounceInject->getNumUavUnits() != numUavs )
+            mLightVctBounceInject->setNumUavUnits( numUavs );
+
         DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
         uavSlot.access = ResourceAccess::Write;
         uavSlot.texture = mLightBounce;
         uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
         mLightVctBounceInject->_setUavTexture( 0, uavSlot );
+        if( mAnisotropic )
+        {
+            uavSlot.texture = mLightVoxel[backIndex()];
+            mLightVctBounceInject->_setUavTexture( 1, uavSlot );
+        }
     }
     //-------------------------------------------------------------------------
     void VctLighting::setupGlslTextureUnits()
@@ -772,7 +778,7 @@ namespace Ogre
         // (PHOTON-WRITER-1). It was compared with a unit count (8 + 6e + 2 / 5 + 3e + 2), which the
         // list never had, so the "glsl" list was rebuilt and set dirty on every bounce dispatch.
         const size_t numTextureVariables = mAnisotropic ? 8u : 5u;
-        const size_t numNeededParams = 2u + numTextureVariables + 2u;
+        const size_t numNeededParams = 2u + numTextureVariables + 2u + ( mAnisotropic ? 1u : 0u );
 
         // This code assumes there's 2 textures at the beginning that always stays the same
         // the rest of them are dynamically generated.
@@ -796,8 +802,9 @@ namespace Ogre
 
             for( size_t i = 0u; i < numTextureVariables; ++i )
             {
-                param.name = i + 4u >= numTextureVariables ? splitNames[i + 4u - numTextureVariables]
-                                                           : names[i];
+                // the isotropic volume, the three axes (anisotropic), then the split kinds in order
+                const size_t numLead = mAnisotropic ? 4u : 1u;
+                param.name = i < numLead ? names[i] : splitNames[i - numLead];
                 int32 textureUnitsTmp[16];
                 for( size_t cascadeIdx = 0u; cascadeIdx < numExtraCascades + 1u; ++cascadeIdx )
                     textureUnitsTmp[cascadeIdx] = texSlotIdx++;
@@ -814,6 +821,13 @@ namespace Ogre
             param.name = "voxelEmissiveTex";
             param.setManualValue( texSlotIdx + 1 );
             glslShaderParams.mParams.push_back( param );
+            // Jahshaka (PHOTON-VOXEL-5): the back side's direct term, right after.
+            if( mAnisotropic )
+            {
+                param.name = "directBackVoxel";
+                param.setManualValue( texSlotIdx + 2 );
+                glslShaderParams.mParams.push_back( param );
+            }
 
             glslShaderParams.setDirty();
         }
@@ -826,9 +840,40 @@ namespace Ogre
 
         HlmsCompute *hlmsCompute = mVoxelizer->getHlmsManager()->getComputeHlms();
 
-        mAnisoGeneratorStep0->analyzeBarriers( mResourceTransitions );
-        renderSystem->executeResourceTransition( mResourceTransitions );
-        hlmsCompute->dispatch( mAnisoGeneratorStep0, 0, 0 );
+        // Jahshaka (PHOTON-VOXEL-5): step 0 exists with a bounce only - the directional level 0
+        // is the injection's direct part (mLightDirectDir) plus the bounce's part per half-axis.
+        // Its textures are bound here, per dispatch: the total ping-pongs under it.
+        if( mAnisoGeneratorStep0 )
+        {
+            TextureGpu *inputs[10] = { mLightVoxel[0],
+                                       mLightVoxel[backIndex()],
+                                       mLightDirect,
+                                       mLightDirectBack,
+                                       mVoxelizer->getNormalVox(),
+                                       mVoxelizer->getCoverageVox( 0u ),
+                                       mVoxelizer->getCoverageVox( 1u ),
+                                       mLightDirectDir[0],
+                                       mLightDirectDir[1],
+                                       mLightDirectDir[2] };
+            DescriptorSetTexture2::TextureSlot texSlot(
+                DescriptorSetTexture2::TextureSlot::makeEmpty() );
+            for( uint8 i = 0u; i < 10u; ++i )
+            {
+                texSlot.texture = inputs[i];
+                mAnisoGeneratorStep0->setTexture( i, texSlot );
+            }
+            DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
+            uavSlot.access = ResourceAccess::Write;
+            uavSlot.pixelFormat = jahLightVoxelUavFormat();
+            for( uint8 i = 0u; i < 3u; ++i )
+            {
+                uavSlot.texture = mLightVoxel[i + 1u];
+                mAnisoGeneratorStep0->_setUavTexture( i, uavSlot );
+            }
+            mAnisoGeneratorStep0->analyzeBarriers( mResourceTransitions );
+            renderSystem->executeResourceTransition( mResourceTransitions );
+            hlmsCompute->dispatch( mAnisoGeneratorStep0, 0, 0 );
+        }
 
         FastArray<HlmsComputeJob *>::const_iterator itor = mAnisoGeneratorStep1.begin();
         FastArray<HlmsComputeJob *>::const_iterator endt = mAnisoGeneratorStep1.end();
@@ -980,12 +1025,7 @@ namespace Ogre
         mLightVctBounceInject->_setUavTexture( 0, uavSlot );
 
         if( mAnisotropic )
-        {
-            texSlot.texture = mLightVoxel[0];
-            mAnisoGeneratorStep0->setTexture( 0, texSlot );
-
             generateAnisotropicMips();
-        }
 
         if( mLightVoxel[0]->getNumMipmaps() > 1u )
         {
@@ -1071,6 +1111,48 @@ namespace Ogre
             directTex->setPixelFormat( PFG_RGBA8_UNORM_SRGB );
             directTex->scheduleTransitionTo( GpuResidency::Resident );
             mLightDirect = directTex;
+
+            if( mAnisotropic )
+            {
+                // Jahshaka (PHOTON-VOXEL-5): the BACK side's direct term and the directional level
+                // 0's direct part per axis (8-bit sRGB like the direct term: it is normalised to
+                // the ceiling by construction), born and buried with the bounce - the bounce's
+                // fixed point per side and step 0's per half need them - and step 0 itself.
+                texName.clear();
+                texName.a( "VctLightingDirectBack/Id", getId() );
+                mLightDirectBack = textureManager->createTexture(
+                    texName.c_str(), GpuPageOutStrategy::Discard,
+                    TextureFlags::Uav | TextureFlags::Reinterpretable, TextureTypes::Type3D );
+                mLightDirectBack->setResolution( mLightVoxel[0]->getWidth(), mLightVoxel[0]->getHeight(),
+                                                 mLightVoxel[0]->getDepth() );
+                mLightDirectBack->setNumMipmaps( 1u );
+                mLightDirectBack->setPixelFormat( PFG_RGBA8_UNORM_SRGB );
+                mLightDirectBack->scheduleTransitionTo( GpuResidency::Resident );
+                for( uint8 i = 0u; i < 3u; ++i )
+                {
+                    texName.clear();
+                    texName.a( "VctLightingDirectDir", i, "/Id", getId() );
+                    TextureGpu *t = textureManager->createTexture(
+                        texName.c_str(), GpuPageOutStrategy::Discard,
+                        TextureFlags::Uav | TextureFlags::Reinterpretable, TextureTypes::Type3D );
+                    t->setResolution( mLightVoxel[1]->getWidth(), mLightVoxel[1]->getHeight(),
+                                      mLightVoxel[1]->getDepth() );
+                    t->setNumMipmaps( 1u );
+                    t->setPixelFormat( PFG_RGBA8_UNORM_SRGB );
+                    t->scheduleTransitionTo( GpuResidency::Resident );
+                    mLightDirectDir[i] = t;
+                }
+
+                HlmsCompute *hlmsCompute = mVoxelizer->getHlmsManager()->getComputeHlms();
+                HlmsComputeJob *baseJob = hlmsCompute->findComputeJob( "VCT/AnisotropicMipStep0" );
+                texName.clear();
+                texName.a( "VCT/AnisotropicMipStep0/Id", getId() );
+                mAnisoGeneratorStep0 = baseJob->clone( texName.c_str() );
+                ShaderParams *shaderParams = &mAnisoGeneratorStep0->getShaderParams( "default" );
+                shaderParams->mParams.back().setManualValue(
+                    static_cast<int32>( mLightVoxel[1]->getWidth() >> 1u ) );
+                shaderParams->setDirty();
+            }
         }
         else
         {
@@ -1081,6 +1163,26 @@ namespace Ogre
             {
                 textureManager->destroyTexture( mLightDirect );  // JAHSHAKA PATCH 0076
                 mLightDirect = 0;
+            }
+            if( mLightDirectBack )
+            {
+                textureManager->destroyTexture( mLightDirectBack );
+                mLightDirectBack = 0;
+            }
+
+            for( uint8 i = 0u; i < 3u; ++i )
+            {
+                if( mLightDirectDir[i] )
+                {
+                    textureManager->destroyTexture( mLightDirectDir[i] );
+                    mLightDirectDir[i] = 0;
+                }
+            }
+            if( mAnisoGeneratorStep0 )
+            {
+                HlmsCompute *hlmsCompute = mVoxelizer->getHlmsManager()->getComputeHlms();
+                hlmsCompute->destroyComputeJob( mAnisoGeneratorStep0->getName() );
+                mAnisoGeneratorStep0 = 0;
             }
         }
 
@@ -1114,19 +1216,6 @@ namespace Ogre
         OGRE_ASSERT_LOW( rayMarchStepScale >= 1.0f );
 
         checkTextures();
-
-        // "VCT/LightInjection" is a job SHARED by every VctLighting in the process
-        // (they all find it by name), while this property is a property of the
-        // VOXELIZER being injected -- whether its albedo has the mips the area-light
-        // shadow correction reads. createTextures() writes it, so with more than one
-        // VctLighting alive the value in force is whichever one created its textures
-        // LAST, not the one about to dispatch. Re-asserted here, per injection, from
-        // the voxelizer this lighting actually samples. setProperty() only invalidates
-        // the PSO cache when the value changes, so re-asserting the same value costs
-        // nothing.
-        mLightInjectionJob->setProperty(
-            "correct_area_light_shadows",
-            mVoxelizer->getAlbedoVox()->getNumMipmaps() > 1u ? 1 : 0 );
 
         RenderSystem *renderSystem = mVoxelizer->getRenderSystem();
 
@@ -1165,23 +1254,51 @@ namespace Ogre
         // voxel inside a job that already walks every light's shadow ray per voxel;
         // no copy, no second dispatch, no encoder switch.
         //
-        // RE-ASSERTED PER INJECTION, both the property and the slot, for the same
-        // reason `correct_area_light_shadows` is above: "VCT/LightInjection" is ONE
+        // RE-ASSERTED PER INJECTION, both the property and the slot:
+        // "VCT/LightInjection" is ONE
         // HlmsComputeJob shared by name by every VctLighting in the process, and the
         // state in force belongs to whoever touched it last. A cascade with bounces
         // and a volume without them would otherwise take each other's UAV count --
         // and an unbound u1 on a shader that declares it is a dead descriptor.
         // The count is change-guarded because setNumUavUnits() invalidates the PSO
         // cache hash unconditionally.
-        const uint8 numUavsNeeded = mLightDirect ? 2u : 1u;
+        //
+        // Jahshaka (PHOTON-VOXEL-5): on the anisotropic tiers the same dispatch writes level 0's
+        // BACK side, the back's direct term (with a bounce) and the directional volumes' level 0
+        // (the fused step 0: from each voxel's light per half-axis) - into the volumes themselves
+        // without a bounce, into the direct part's own volumes with one (step 0 adds the bounce's
+        // part after every bounce). The slots follow u0 in LightInjection_cs.glsl's order.
+        const uint8 numUavsNeeded =
+            uint8( 1u + ( mLightDirect ? 1u : 0u ) + ( mAnisotropic ? ( mLightDirect ? 5u : 4u ) : 0u ) );
         if( mLightInjectionJob->getNumUavUnits() != numUavsNeeded )
             mLightInjectionJob->setNumUavUnits( numUavsNeeded );
         mLightInjectionJob->setProperty( "vct_keep_direct", mLightDirect ? 1 : 0 );
+        mLightInjectionJob->setProperty( "vct_anisotropic", mAnisotropic ? 1 : 0 );
+        uint8 uavIdx = 1u;
         if( mLightDirect )
         {
             uavSlot.texture = mLightDirect;
             uavSlot.pixelFormat = PFG_RGBA8_UNORM;
-            mLightInjectionJob->_setUavTexture( 1, uavSlot );
+            mLightInjectionJob->_setUavTexture( uavIdx++, uavSlot );
+        }
+        if( mAnisotropic )
+        {
+            uavSlot.texture = mLightVoxel[backIndex()];
+            uavSlot.pixelFormat = jahLightVoxelUavFormat();
+            mLightInjectionJob->_setUavTexture( uavIdx++, uavSlot );
+            if( mLightDirect )
+            {
+                uavSlot.texture = mLightDirectBack;
+                uavSlot.pixelFormat = PFG_RGBA8_UNORM;
+                mLightInjectionJob->_setUavTexture( uavIdx++, uavSlot );
+            }
+            for( uint8 i = 0u; i < 3u; ++i )
+            {
+                uavSlot.texture = mLightDirect ? mLightDirectDir[i] : mLightVoxel[i + 1u];
+                uavSlot.pixelFormat = mLightDirect ? PFG_RGBA8_UNORM : jahLightVoxelUavFormat();
+                mLightInjectionJob->_setUavTexture( uavIdx++, uavSlot );
+            }
+            mInjectHigherMipHalfWidth->setManualValue( static_cast<int32>( mLightVoxel[1]->getWidth() >> 1u ) );
         }
 
         float autoMultiplierValue = 0.0f;
@@ -1329,14 +1446,6 @@ namespace Ogre
 
         if( getAllowMultipleBounces() )
             setupBounceTextures();
-
-        if( mAnisotropic )
-        {
-            DescriptorSetTexture2::TextureSlot texSlot(
-                DescriptorSetTexture2::TextureSlot::makeEmpty() );
-            texSlot.texture = mVoxelizer->getNormalVox();
-            mAnisoGeneratorStep0->setTexture( 1, texSlot );
-        }
     }
     //-------------------------------------------------------------------------
     size_t VctLighting::getConstBufferSize() const

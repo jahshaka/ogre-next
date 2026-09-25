@@ -79,7 +79,14 @@ namespace Ogre
         /// reads the opacity along its ray from the coverage and the origin plane from the
         /// position, so they ride the same list and every reader that binds
         /// getNumVoxelTextures() volumes per cascade binds them too.
-        TextureGpu             *mLightVoxel[8];
+        ///
+        /// Jahshaka (PHOTON-VOXEL-5): on the anisotropic tiers two more follow - mLightVoxel[8],
+        /// level 0's BACK side (owned; backIndex()), and mLightVoxel[9], the voxelizer's NORMAL
+        /// (not owned; normalIndex()): level 0 holds the MEAN of a voxel's two sides
+        /// (mLightVoxel[0]) and its back, and the normal says which side a half-axis's faces look
+        /// to. The directional volumes' level 0 is composited by the light injection itself from
+        /// each voxel's light PER HALF-AXIS (the fused step 0).
+        TextureGpu             *mLightVoxel[10];
         HlmsSamplerblock const *mSamplerblockTrilinear;
 
         VctVoxelizerSourceBase *mVoxelizer;
@@ -96,6 +103,10 @@ namespace Ogre
         ///
         /// Step 2 takes mLightVoxel[i].mip[n] and computes mLightVoxel[i].mip[n+1]
         /// where i is in range [1; 3] and n is the number of mipmaps in those textures.
+        /// Jahshaka (PHOTON-VOXEL-5): step 0 is the BOUNCE'S part of the directional level 0 -
+        /// the injection composites the direct part itself (into mLightDirectDir when a bounce
+        /// follows); after every bounce this job adds the bounce's part per half-axis to it.
+        /// Created with the bounce textures, on the anisotropic tiers.
         HlmsComputeJob             *mAnisoGeneratorStep0;
         FastArray<HlmsComputeJob *> mAnisoGeneratorStep1;
 
@@ -121,6 +132,13 @@ namespace Ogre
         /// exactly as long as mLightBounce does (see setAllowMultipleBounces): a
         /// volume that cannot bounce has no use for it.
         TextureGpu *mLightDirect;
+        /// Jahshaka (PHOTON-VOXEL-5), the anisotropic tiers with a bounce: the BACK side's direct
+        /// term (8-bit sRGB like mLightDirect) and the directional level 0's direct part per axis
+        /// (8-bit sRGB, level 0 only; both signs packed along x like mLightVoxel[1..3]) - what
+        /// the bounce's fixed point and step 0 need per side and per half.
+        TextureGpu *mLightDirectBack;
+        TextureGpu *mLightDirectDir[3];
+        ShaderParams::Param *mInjectHigherMipHalfWidth;
 
         float mBakingMultiplier;
         float mInvBakingMultiplier;
@@ -459,7 +477,13 @@ namespace Ogre
         /// The light volumes a reader binds per cascade: the total (and its three
         /// anisotropic axes), then the coverage per half-axis (+a, -a; PHOTON-VOXEL-3/-4),
         /// then the surface position per half (PHOTON-VOXEL-4).
-        uint32       getNumVoxelTextures() const { return mAnisotropic ? 8u : 5u; }
+        /// ...and on the anisotropic tiers (PHOTON-VOXEL-5) level 0's back side and the
+        /// voxelizer's normal, the last two (backIndex / normalIndex).
+        uint32       getNumVoxelTextures() const { return mAnisotropic ? 10u : 5u; }
+        /// Jahshaka (PHOTON-VOXEL-5): level 0's BACK side (the front = 2 x mLightVoxel[0] - it)
+        /// and the voxelizer's normal (the side a half-axis looks to), anisotropic tiers only.
+        uint32       backIndex() const { return 8u; }
+        uint32       normalIndex() const { return 9u; }
         /// Where the coverage of half `h` (0: the faces looking +a, 1: -a) sits in
         /// getLightVoxelTextures().
         uint32       coverageIndex( uint32 h ) const { return ( mAnisotropic ? 4u : 1u ) + h; }

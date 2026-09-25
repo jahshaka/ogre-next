@@ -580,7 +580,8 @@ namespace Ogre
             // + the three anisotropic axes, then (Jahshaka, PHOTON-VOXEL-3/-4) the
             // coverage per half-axis and the surface position per half: one array
             // each, in setTextureReg's order.
-            const int32 numMoreArrays = getProperty( tid, PbsProperty::VctAnisotropic ) ? 7 : 4;
+            // + (PHOTON-VOXEL-5) the back side and the normal on the anisotropic tiers.
+            const int32 numMoreArrays = getProperty( tid, PbsProperty::VctAnisotropic ) ? 9 : 4;
             for( int32 i = 0; i < numMoreArrays; ++i )
             {
                 vctProbeIdx += numVctProbes;
@@ -1407,6 +1408,15 @@ namespace Ogre
             for( size_t k = 0u; k < 4u; ++k )
             {
                 setTextureReg( tid, PixelShader, splitNames[k], texUnit, numVctProbes );
+                texUnit += numVctProbes;
+            }
+            // Jahshaka (PHOTON-VOXEL-5): level 0's back side and the voxelizer's normal - the
+            // anisotropic tiers' last two light-volume entries (VctLighting::backIndex/normalIndex).
+            if( getProperty( tid, PbsProperty::VctAnisotropic ) )
+            {
+                setTextureReg( tid, PixelShader, "vctProbeBack", texUnit, numVctProbes );
+                texUnit += numVctProbes;
+                setTextureReg( tid, PixelShader, "vctProbeNrm", texUnit, numVctProbes );
                 texUnit += numVctProbes;
             }
         }

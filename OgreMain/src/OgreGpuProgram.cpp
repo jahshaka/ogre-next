@@ -128,8 +128,11 @@ namespace Ogre
         uint16 maxTextures = 4u;
         if( prefab == PrefabRootLayout::High )
             maxTextures = 8u;
+        // Jahshaka (PHOTON-VOXEL-5): the "max" prefab is the dynamic binding table's own size
+        // (NUM_BIND_TEXTURES / NUM_BIND_SAMPLERS, 64 since the fork widened the Vulkan table) - the
+        // voxel reader parity's fragment half binds forty volumes.
         if( prefab == PrefabRootLayout::Max )
-            maxTextures = 32u;
+            maxTextures = 64u;
 
         descBindingRange[DescBindingTypes::Texture].start = 0u;
         descBindingRange[DescBindingTypes::Texture].end = maxTextures;
