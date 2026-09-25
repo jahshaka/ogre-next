@@ -29,19 +29,15 @@ RWTexture3D<@insertpiece(uav0_pf_type)> lightVoxel;
 @insertpiece( HeaderCS )
 
 uniform uint numLights;
-uniform float4 rayMarchStepSize_bakingMultiplier;
+uniform float bakingMultiplier;
 //uniform float3 voxelOrigin;
 uniform float3 voxelCellSize;
-uniform float4 dirCorrectionRatio_thinWallCounter;
 uniform float3 invVoxelResolution;
 
 #define p_numLights numLights
-#define p_rayMarchStepSize rayMarchStepSize_bakingMultiplier.xyz
-#define p_bakingMultiplier rayMarchStepSize_bakingMultiplier.w
+#define p_bakingMultiplier bakingMultiplier
 //#define p_voxelOrigin voxelOrigin
 #define p_voxelCellSize voxelCellSize
-#define p_dirCorrectionRatio dirCorrectionRatio_thinWallCounter.xyz
-#define p_thinWallCounter dirCorrectionRatio_thinWallCounter.w
 #define p_invVoxelResolution invVoxelResolution
 
 //in uvec3 gl_NumWorkGroups;

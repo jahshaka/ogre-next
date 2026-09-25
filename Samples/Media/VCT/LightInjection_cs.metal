@@ -16,20 +16,16 @@
 struct Params
 {
 	uint numLights;
-	float4 rayMarchStepSize_bakingMultiplier;
+	float bakingMultiplier;
 	//float3 voxelOrigin;
 	float3 voxelCellSize;
-	float4 dirCorrectionRatio_thinWallCounter;
 	float3 invVoxelResolution;
 };
 
 #define p_numLights p.numLights
-#define p_rayMarchStepSize p.rayMarchStepSize_bakingMultiplier.xyz
-#define p_bakingMultiplier p.rayMarchStepSize_bakingMultiplier.w
+#define p_bakingMultiplier p.bakingMultiplier
 //#define p_voxelOrigin p.voxelOrigin
 #define p_voxelCellSize p.voxelCellSize
-#define p_dirCorrectionRatio p.dirCorrectionRatio_thinWallCounter.xyz
-#define p_thinWallCounter p.dirCorrectionRatio_thinWallCounter.w
 #define p_invVoxelResolution p.invVoxelResolution
 
 //in uvec3 gl_NumWorkGroups;

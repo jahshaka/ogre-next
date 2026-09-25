@@ -72,9 +72,8 @@
             "params" :
             [
                 ["numLights",               [0],        "uint"],
-                ["rayMarchStepSize_bakingMultiplier",   [1,1,1,1],  "float"],
+                ["bakingMultiplier",        [1],        "float"],
                 ["voxelCellSize",           [1,1,1],    "float"],
-                ["dirCorrectionRatio_thinWallCounter", [1,1,1,1],   "float"],
                 ["invVoxelResolution",      [1,1,1],    "float"],
                 ["jahCloudMap",             [0,0,0,0],  "float"],
                 ["jahCloudSun",             [0,0,0,1],  "float"],

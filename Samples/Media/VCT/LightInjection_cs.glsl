@@ -101,10 +101,9 @@ layout( local_size_x = @value( threads_per_group_x ),
 
 vulkan( layout( ogre_P0 ) uniform Params { )
 	uniform uint numLights;
-	uniform float4 rayMarchStepSize_bakingMultiplier;
+	uniform float bakingMultiplier;
 	//uniform float3 voxelOrigin;
 	uniform float3 voxelCellSize;
-	uniform float4 dirCorrectionRatio_thinWallCounter;
 	uniform float3 invVoxelResolution;
 	// JAHSHAKA (CLOUDS-2D-2): the cloud layer's map (1 / tile, strength,
 	// scroll xz), its sun throw (toSun.xz / toSun.y, altitude, 1 / mu_s) and
@@ -117,12 +116,9 @@ vulkan( layout( ogre_P0 ) uniform Params { )
 vulkan( }; )
 
 #define p_numLights numLights
-#define p_rayMarchStepSize rayMarchStepSize_bakingMultiplier.xyz
-#define p_bakingMultiplier rayMarchStepSize_bakingMultiplier.w
+#define p_bakingMultiplier bakingMultiplier
 //#define p_voxelOrigin voxelOrigin
 #define p_voxelCellSize voxelCellSize
-#define p_dirCorrectionRatio dirCorrectionRatio_thinWallCounter.xyz
-#define p_thinWallCounter dirCorrectionRatio_thinWallCounter.w
 #define p_invVoxelResolution invVoxelResolution
 #define p_higherMipHalfWidth higherMipHalfWidth
 
