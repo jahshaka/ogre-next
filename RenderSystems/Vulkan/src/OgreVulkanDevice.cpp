@@ -1318,6 +1318,13 @@ namespace Ogre
             else if( !jahNoRayQuery() &&
                      extensionName == VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME );
+            // Jahshaka (ATOM S3-DRAW, N-1): vkCmdDrawIndexedIndirectCountKHR, so the
+            // visibility buffer's id pass draws exactly the cull's survivors with the
+            // count the GPU wrote, never a capacity's worth of stale commands. The
+            // extension has no feature struct: enabling it is the whole request.
+            // Ogre itself never calls it; hasDeviceExtension() says whether it is on.
+            else if( extensionName == VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME )
+                outExtensions.push_back( VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME );
         }
 
         outExtensions.push_back( VK_KHR_SWAPCHAIN_EXTENSION_NAME );
