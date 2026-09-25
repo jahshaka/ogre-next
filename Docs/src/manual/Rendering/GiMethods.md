@@ -204,7 +204,7 @@ This technique works by voxelizing the entire scene (i.e. turning the whole scen
 	3. Via `VctLighting::mSpecularSdfQuality`
     4. Lower resolution
 6. Light leaking is still a problem, but less so than other techniques
-    1. Use `thinWallCounter` in `VctLighting::update` to tweak this
+    1. Jahshaka: the injection's shadow march is an exact DDA from each face (no `thinWallCounter` to tweak)
 7. Supports changing lighting position/direction with a small performance cost
     1. This ability can be sacrificed by destroying VctVoxelizer to free up VRAM
 8. Camera independent

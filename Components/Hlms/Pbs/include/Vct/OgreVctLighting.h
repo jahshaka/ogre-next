@@ -162,9 +162,8 @@ namespace Ogre
         FastArray<VctLighting *> mExtraCascades;
 
         ShaderParams::Param *mNumLights;
-        ShaderParams::Param *mRayMarchStepSize;
+        ShaderParams::Param *mBakingMultiplierParam;
         ShaderParams::Param *mVoxelCellSize;
-        ShaderParams::Param *mDirCorrectionRatioThinWallCounter;
         ShaderParams::Param *mInvVoxelResolution;
         ShaderParams        *mShaderParams;
 
@@ -328,34 +327,16 @@ namespace Ogre
         @param sceneManager
         @param numBounces
             Number of GI bounces. This value must be 0 if getAllowMultipleBounces() == false
-        @param thinWallCounter
-            Shadows are calculated by raymarching towards the light source. However sometimes
-            the ray 'may go through' a wall due to how bilinear interpolation works.
-
-            Bilinear interpolation can produce nicer soft shaddows, but it can also cause
-            this light leaking from behind a wall.
-
-            Increase this value (e.g. to 2.0f) to fight light leaking.
-            This should generally (over-)darken the scene
-
-            Lower values will lighten the scene and allow more light leaking
-
-            Note that thinWallCounter can *not* fight all sources of light leaking,
-            thus increasing it to ridiculous high values may not yield any benefit.
         @param autoMultiplier
             Whether we should calculate the ideal multiplier based on lights on scene.
             See VctLighting::setMultiplier
-        @param rayMarchStepScale
-            Scale for the ray march step size. A value < 1.0f makes little sense
-            and will trigger an assert.
-
-            Bigger values means the shadow raymarching during light injection
-            pass is faster, but may cause glitches if too high (areas that
-            are supposed to be shadowed won't be shadowed)
         @param lightMask
+        @remarks
+            Jahshaka (PHOTON-VOXEL-5): the injection's shadow march is exact - a 3D-DDA over
+            the level-0 voxels from each half's face - so upstream's thinWallCounter and
+            rayMarchStepScale (a stepped march's wall counter and step length) are gone.
         */
-        void update( SceneManager *sceneManager, uint32 numBounces, float thinWallCounter = 1.0f,
-                     bool autoMultiplier = true, float rayMarchStepScale = 1.0f,
+        void update( SceneManager *sceneManager, uint32 numBounces, bool autoMultiplier = true,
                      uint32 lightMask = 0xffffffff );
 
         /** Points this VctLighting at a DIFFERENT voxelizer, in place.

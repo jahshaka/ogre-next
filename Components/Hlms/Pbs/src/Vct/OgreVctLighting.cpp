@@ -106,9 +106,8 @@ namespace Ogre
         mDefaultLightDistThreshold( 0.5f ),
         mAnisotropic( bAnisotropic ),
         mNumLights( 0 ),
-        mRayMarchStepSize( 0 ),
+        mBakingMultiplierParam( 0 ),
         mVoxelCellSize( 0 ),
-        mDirCorrectionRatioThinWallCounter( 0 ),
         mInvVoxelResolution( 0 ),
         mShaderParams( 0 ),
         mBounceVoxelCellSize( 0 ),
@@ -143,10 +142,8 @@ namespace Ogre
 
         mShaderParams = &mLightInjectionJob->getShaderParams( "default" );
         mNumLights = mShaderParams->findParameter( "numLights" );
-        mRayMarchStepSize = mShaderParams->findParameter( "rayMarchStepSize_bakingMultiplier" );
+        mBakingMultiplierParam = mShaderParams->findParameter( "bakingMultiplier" );
         mVoxelCellSize = mShaderParams->findParameter( "voxelCellSize" );
-        mDirCorrectionRatioThinWallCounter =
-            mShaderParams->findParameter( "dirCorrectionRatio_thinWallCounter" );
         mInvVoxelResolution = mShaderParams->findParameter( "invVoxelResolution" );
         mInjectHigherMipHalfWidth = mShaderParams->findParameter( "higherMipHalfWidth" );
 
@@ -1210,11 +1207,9 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VctLighting::setBakingMultiplier( float bakingMult ) { mBakingMultiplier = bakingMult; }
     //-------------------------------------------------------------------------
-    void VctLighting::update( SceneManager *sceneManager, uint32 numBounces, float thinWallCounter,
-                              bool autoMultiplier, float rayMarchStepScale, uint32 _lightMask )
+    void VctLighting::update( SceneManager *sceneManager, uint32 numBounces, bool autoMultiplier,
+                              uint32 _lightMask )
     {
-        OGRE_ASSERT_LOW( rayMarchStepScale >= 1.0f );
-
         checkTextures();
 
         RenderSystem *renderSystem = mVoxelizer->getRenderSystem();
@@ -1373,19 +1368,11 @@ namespace Ogre
             autoMultiplierValue = 1.0f / autoMultiplierValue;
         mInvBakingMultiplier = 1.0f / autoMultiplierValue;
 
-        const Vector3 voxelRes( Real( mLightVoxel[0]->getWidth() ), Real( mLightVoxel[0]->getHeight() ),
-                                Real( mLightVoxel[0]->getDepth() ) );
         const Vector3 voxelCellSize( mVoxelizer->getVoxelCellSize() );
 
-        Vector3 dirCorrection( 1.0f / voxelCellSize );
-        dirCorrection /= std::max( std::max( fabsf( dirCorrection.x ), fabsf( dirCorrection.y ) ),
-                                   fabsf( dirCorrection.z ) );
-
         mNumLights->setManualValue( numCollectedLights );
-        mRayMarchStepSize->setManualValue(
-            Vector4( rayMarchStepScale / voxelRes, autoMultiplierValue ) );
+        mBakingMultiplierParam->setManualValue( autoMultiplierValue );
         mVoxelCellSize->setManualValue( voxelCellSize );
-        mDirCorrectionRatioThinWallCounter->setManualValue( Vector4( dirCorrection, thinWallCounter ) );
         mInvVoxelResolution->setManualValue( invVoxelRes );
         mShaderParams->setDirty();
 
