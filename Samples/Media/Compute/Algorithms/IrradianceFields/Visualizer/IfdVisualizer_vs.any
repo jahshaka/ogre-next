@@ -59,6 +59,11 @@ INLINE float3 getSphereVertex( uint vertexId PARAMS_ARG_DECL )
 	xyzCoord.y = yRow % p_numProbes.y;
 	xyzCoord.z = yRow / p_numProbes.y;
 
+	// Jahshaka (PHOTON-VIEW-1): the field is a TOROIDAL WINDOW over a lattice fixed in the
+	// world (IrradianceField::scrollWindow) - probeIdx is the atlas tile (the SLOT), and
+	// the probe in slot s stands at window-local position ( s - windowOffset ) mod N.
+	xyzCoord = ( xyzCoord + p_numProbes - p_windowOffset ) % p_numProbes;
+
 	uint sphereVertId = clamp( uVertexId % ( p_totalPoints + 2u ), 1u, p_totalPoints ) - 1u;
 	float3 localPos = getSphereVertex( sphereVertId PARAMS_ARG );
 

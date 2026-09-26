@@ -19,6 +19,7 @@ struct Params
 
 	uint3 numProbes;
 	float3 aspectRatioFixer;
+	uint3 windowOffset;
 };
 
 #define p_worldViewProjMatrix p.worldViewProjMatrix
@@ -32,6 +33,7 @@ struct Params
 
 #define p_numProbes			p.numProbes
 #define p_aspectRatioFixer	p.aspectRatioFixer
+#define p_windowOffset		p.windowOffset
 
 struct PS_INPUT
 {
