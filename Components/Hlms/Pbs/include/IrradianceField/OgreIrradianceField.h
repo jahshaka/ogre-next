@@ -353,6 +353,10 @@ namespace Ogre
                                       HlmsComputeJob    *job );
 
         void setTextureToDebugVisualizer();
+        /// Jahshaka (PHOTON-VIEW-1): the debug visualizer's static node at the field's
+        /// origin and probe spacing, marked dirty for the scene manager, and its window
+        /// offset - every place the field is (re)placed or scrolls calls it.
+        void placeDebugVisualizer();
 
         /// Jahshaka (PHOTON-READER-1): binds EVERY cascade's light volumes to the
         /// generation job, from the pointers the chain holds NOW. Called before every
@@ -537,8 +541,14 @@ namespace Ogre
         */
         void  setDebugVisualization( IrradianceField::DebugVisualizationMode mode,
                                      SceneManager *sceneManager, uint8 tessellation );
-        bool  getDebugVisualizationMode() const;
-        uint8 getDebugTessellation() const;
+        /// Jahshaka (PHOTON-VIEW-1): the MODE (upstream returned it as a bool, so
+        /// DebugVisualizationColour - 0 - read as "off").
+        DebugVisualizationMode getDebugVisualizationMode() const;
+        uint8                  getDebugTessellation() const;
+        /// Jahshaka (PHOTON-VIEW-1): the visualizer setDebugVisualization created (null
+        /// while the mode is DebugVisualizationNone) - a host puts it on its own
+        /// visibility channel or render queue without searching the scene graph for it.
+        IfdProbeVisualizer *getDebugVisualizer() const { return mDebugIfdProbeVisualizer; }
 
         TextureGpu *getIrradianceTex() const { return mIrradianceTex; }
         TextureGpu *getDepthVarianceTex() const { return mDepthVarianceTex; }

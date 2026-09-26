@@ -402,6 +402,10 @@ namespace Ogre
 
         void setDebugVisualization( bool bShow, SceneManager *sceneManager );
         bool getDebugVisualizationMode() const;
+        /// Jahshaka (PHOTON-VIEW-1): the visualizer setDebugVisualization created (null
+        /// while it is off) - a host puts it on its own visibility channel or render queue
+        /// without searching the scene graph for it.
+        VoxelVisualizer *getDebugVisualizer() const { return mDebugVoxelVisualizer; }
 
         /** Toggles anisotropic mips.
 

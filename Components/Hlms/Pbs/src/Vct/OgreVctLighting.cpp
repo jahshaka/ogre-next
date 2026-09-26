@@ -1407,7 +1407,14 @@ namespace Ogre
         }
 
         if( mDebugVoxelVisualizer )
+        {
             mDebugVoxelVisualizer->setTrackingVoxel( mLightVoxel[0], mLightVoxel[0], true );
+            // Jahshaka (PHOTON-VIEW-1; an upstream defect): setTrackingVoxel writes the
+            // voxel-space box into the WORLD slot too, and the visualizer is STATIC - nothing
+            // re-derives it, so the picture was culled wherever the volume is not at the
+            // world origin. Re-derived here, as resetTexturesFromBuildRelative does.
+            mDebugVoxelVisualizer->getWorldAabbUpdated();
+        }
 
         renderSystem->debugAnnotationPop();
     }
@@ -1662,6 +1669,12 @@ namespace Ogre
             visNode->setPosition( mVoxelizer->getVoxelOrigin() );
             visNode->setScale( mVoxelizer->getVoxelCellSize() );
             visNode->attachObject( mDebugVoxelVisualizer );
+
+            // Jahshaka (PHOTON-VIEW-1): the node and the box are STATIC - forced current
+            // here as resetTexturesFromBuildRelative does, or the first frames cull the
+            // picture against the voxel-space box.
+            visNode->_getFullTransformUpdated();
+            mDebugVoxelVisualizer->getWorldAabbUpdated();
         }
     }
     //-------------------------------------------------------------------------

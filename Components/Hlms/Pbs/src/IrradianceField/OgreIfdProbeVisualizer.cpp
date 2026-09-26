@@ -154,6 +154,12 @@ namespace Ogre
         mObjectData.mWorldRadius[mObjectData.mIndex] = aabb.getRadius();
     }
     //-----------------------------------------------------------------------------------
+    void IfdProbeVisualizer::setWindowOffset( const uint32 offset[3] )
+    {
+        Pass *pass = mMaterial->getTechnique( 0 )->getPass( 0 );
+        pass->getVertexProgramParameters()->setNamedConstant( "windowOffset", offset, 1u, 3u );
+    }
+    //-----------------------------------------------------------------------------------
     const String &IfdProbeVisualizer::getMovableType() const { return BLANKSTRING; }
     //-----------------------------------------------------------------------------------
     const LightList &IfdProbeVisualizer::getLights() const

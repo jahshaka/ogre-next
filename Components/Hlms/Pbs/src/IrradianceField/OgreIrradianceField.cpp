@@ -595,10 +595,7 @@ namespace Ogre
             mDebugIfdProbeVisualizer->setVisible( true );
 
             // Field AABB may have changed
-            SceneNode *sceneNode = mDebugIfdProbeVisualizer->getParentSceneNode();
-            sceneNode->setPosition( mFieldOrigin );
-            sceneNode->setScale( mFieldSize / mSettings.getNumProbes3f() );
-            sceneNode->getCreator()->notifyStaticDirty( sceneNode );
+            placeDebugVisualizer();
         }
 
         if( !mVctLighting )
@@ -687,12 +684,7 @@ namespace Ogre
         mFieldSize += probeBlockSize * 2.0f;
 
         if( mDebugIfdProbeVisualizer )
-        {
-            SceneNode *sceneNode = mDebugIfdProbeVisualizer->getParentSceneNode();
-            sceneNode->setPosition( mFieldOrigin );
-            sceneNode->setScale( mFieldSize / mSettings.getNumProbes3f() );
-            sceneNode->getCreator()->notifyStaticDirty( sceneNode );
-        }
+            placeDebugVisualizer();
 
         // A raster field's probe cameras are derived from mFieldOrigin/mFieldSize on
         // every renderProbes() call, so there is nothing else to do for it; the voxel
@@ -971,12 +963,10 @@ namespace Ogre
         // The probe-to-voxel transform reads the (moved) origin.
         if( mVctLighting )
             setIrradianceFieldGenParams();
+        // Jahshaka (PHOTON-VIEW-1): and the visualizer's WINDOW OFFSET - its spheres are
+        // drawn by atlas slot, and a scroll moved every probe's slot.
         if( mDebugIfdProbeVisualizer )
-        {
-            SceneNode *sceneNode = mDebugIfdProbeVisualizer->getParentSceneNode();
-            sceneNode->setPosition( mFieldOrigin );
-            sceneNode->getCreator()->notifyStaticDirty( sceneNode );
-        }
+            placeDebugVisualizer();
     }
     //-------------------------------------------------------------------------
     void IrradianceField::update( uint32 probesPerFrame )
@@ -1209,13 +1199,24 @@ namespace Ogre
 
             setTextureToDebugVisualizer();
 
-            visNode->setPosition( mFieldOrigin );
-            visNode->setScale( mFieldSize / mSettings.getNumProbes3f() );
             visNode->attachObject( mDebugIfdProbeVisualizer );
+            placeDebugVisualizer();
         }
     }
     //-------------------------------------------------------------------------
-    bool IrradianceField::getDebugVisualizationMode() const { return mDebugVisualizationMode; }
+    void IrradianceField::placeDebugVisualizer()
+    {
+        SceneNode *sceneNode = mDebugIfdProbeVisualizer->getParentSceneNode();
+        sceneNode->setPosition( mFieldOrigin );
+        sceneNode->setScale( mFieldSize / mSettings.getNumProbes3f() );
+        sceneNode->getCreator()->notifyStaticDirty( sceneNode );
+        mDebugIfdProbeVisualizer->setWindowOffset( mWindowOffset );
+    }
+    //-------------------------------------------------------------------------
+    IrradianceField::DebugVisualizationMode IrradianceField::getDebugVisualizationMode() const
+    {
+        return mDebugVisualizationMode;
+    }
     //-------------------------------------------------------------------------
     uint8 IrradianceField::getDebugTessellation() const { return mDebugTessellation; }
     //-------------------------------------------------------------------------

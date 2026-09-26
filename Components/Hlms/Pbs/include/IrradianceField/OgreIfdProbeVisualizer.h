@@ -46,6 +46,12 @@ namespace Ogre
                              uint8 resolution, TextureGpu *ifdTex, const Vector2 &rangeMult,
                              uint8_t tessellation );
 
+        /// Jahshaka (PHOTON-VIEW-1): the field's WINDOW OFFSET (IrradianceField::scrollWindow,
+        /// getWindowOffset): atlas tile s holds the probe at window-local position
+        /// ( s - offset ) mod N per axis, so a scrolled field draws each probe's sphere where
+        /// that probe stands. All zeros until the field scrolls.
+        void setWindowOffset( const uint32 offset[3] );
+
         // Overrides from MovableObject
         const String &getMovableType() const override;
 
