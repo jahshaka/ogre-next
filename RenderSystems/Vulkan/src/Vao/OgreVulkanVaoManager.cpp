@@ -1187,7 +1187,27 @@ namespace Ogre
             }
 
             VkResult result = vkAllocateMemory( mDevice->mDevice, &memAllocInfo, NULL, &newVbo.vboName );
-            checkVkResult( mDevice, result, "vkAllocateMemory" );
+            if( result != VK_SUCCESS )
+            {
+                // Jahshaka: SAY WHICH POOL. The failure of this call is the out-of-memory a busy
+                // card actually produces, and "vkAllocateMemory failed" alone does not tell the
+                // reader whether a 64 MB pool or a multi-GB request was refused, from which heap,
+                // or how much of that heap Ogre already holds.
+                const uint32 heapIdx = memTypes[chosenMemoryTypeIdx].heapIndex;
+                const String what =
+                    "vkAllocateMemory failed for a " + StringConverter::toString( poolSize ) +
+                    "-byte pool (memory type " + StringConverter::toString( chosenMemoryTypeIdx ) +
+                    ", heap " + StringConverter::toString( heapIdx ) + " of " +
+                    StringConverter::toString( static_cast<size_t>( memHeaps[heapIdx].size ) ) +
+                    " bytes, " + StringConverter::toString( mUsedHeapMemory[heapIdx] ) +
+                    " already held by Ogre)";
+                // An allocation failure is recoverable (onVulkanFailure no longer latches it),
+                // so it must not leak the buffer created for this pool just above.
+                if( newVbo.vkBuffer )
+                    vkDestroyBuffer( mDevice->mDevice, newVbo.vkBuffer, 0 );
+                onVulkanFailure( mDevice, result, what.c_str(), OGRE_CURRENT_FUNCTION, __FILE__,
+                                 __LINE__ );
+            }
 
             mUsedHeapMemory[memTypes[chosenMemoryTypeIdx].heapIndex] += poolSize;
 

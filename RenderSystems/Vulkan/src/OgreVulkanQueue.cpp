@@ -1327,6 +1327,16 @@ namespace Ogre
 
         mPendingCmds.clear();
 
+        // Jahshaka: A FAILED SUBMIT LATCHES, WHATEVER ITS RESULT. onVulkanFailure latches only
+        // VK_ERROR_DEVICE_LOST (an allocation's OOM leaves the device valid); a submit is the one
+        // place where an OOM is not recoverable either, because the bookkeeping above already ran
+        // as if it had succeeded: the command buffers are retired and `fence` (never signalled -
+        // the submit did not happen) is parked as the frame's protecting fence, which the next
+        // wait on this frame slot would block on for ever. That is what upstream did before
+        // dc15628b21 (any failed vkQueueSubmit set the old mIsDeviceLost).
+        if( result != VK_SUCCESS && mOwnerDevice && mOwnerDevice->mDeviceLostReason == VK_SUCCESS )
+            mOwnerDevice->mDeviceLostReason = result;
+
         checkVkResult( mOwnerDevice, result, "vkQueueSubmit" );
 
         if( submissionType >= SubmissionType::EndFrameAndSwap )

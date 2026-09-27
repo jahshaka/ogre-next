@@ -192,9 +192,20 @@ namespace Ogre
                           const char *file, long line )
     {
         VkResult vkResult = (VkResult)result;
+        // Jahshaka: ONLY VK_ERROR_DEVICE_LOST latches the device as lost. Upstream (dc15628b21,
+        // "somewhat similar to ID3D11Device::GetDeviceRemovedReason()") latched
+        // VK_ERROR_OUT_OF_HOST_MEMORY and VK_ERROR_OUT_OF_DEVICE_MEMORY here too, from EVERY
+        // checkVkResult. Vulkan defines both as runtime errors of the one command that returned
+        // them (spec "Return Codes"); the logical device stays valid, and only
+        // VK_ERROR_DEVICE_LOST says it is gone. Latching an allocation failure
+        // (a 64 MB VBO/texture pool in VulkanVaoManager::allocateVbo on a busy card) made the
+        // render system veto every later frame and the host end the process over a device that
+        // was fine. The OOM still THROWS, exactly as before - the caller sees the failure.
+        // The one OOM that IS unrecoverable in Ogre's own bookkeeping is a failed
+        // vkQueueSubmit (the batch and its fence are already retired); VulkanQueue latches that
+        // one itself, whatever its result.
         if( device != nullptr && device->mDeviceLostReason == VK_SUCCESS &&
-            ( vkResult == VK_ERROR_OUT_OF_HOST_MEMORY || vkResult == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-              vkResult == VK_ERROR_DEVICE_LOST ) )
+            vkResult == VK_ERROR_DEVICE_LOST )
         {
             device->mDeviceLostReason = vkResult;
         }
