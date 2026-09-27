@@ -579,8 +579,24 @@ namespace Ogre
         mRenderSystem( renderSystem ),
         mSupportedStages( 0xFFFFFFFF ),
         mDeviceLostReason( VK_SUCCESS ),
-        mIsExternal( false )
+        mIsExternal( false ),
+        mOutOfMemoryFailures( 0u )
     {
+    }
+    //-------------------------------------------------------------------------
+    void VulkanDevice::_notifyOutOfMemory( const String &description )
+    {
+        {
+            std::lock_guard<std::mutex> lock( mLastOutOfMemoryMutex );
+            mLastOutOfMemory = description;
+        }
+        ++mOutOfMemoryFailures;
+    }
+    //-------------------------------------------------------------------------
+    String VulkanDevice::getLastOutOfMemory() const
+    {
+        std::lock_guard<std::mutex> lock( mLastOutOfMemoryMutex );
+        return mLastOutOfMemory;
     }
     //-------------------------------------------------------------------------
     VulkanDevice::~VulkanDevice() { destroy(); }

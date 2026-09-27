@@ -210,8 +210,15 @@ namespace Ogre
             device->mDeviceLostReason = vkResult;
         }
 
-        ExceptionFactory::throwException( Exception::ERR_RENDERINGAPI_ERROR, vkResult,
-                                          desc + ( "\nVkResult = " + vkResultToString( vkResult ) ), src,
+        const String fullDesc = desc + ( "\nVkResult = " + vkResultToString( vkResult ) );
+        // Counted, never latched (VulkanDevice::mOutOfMemoryFailures).
+        if( device != nullptr &&
+            ( vkResult == VK_ERROR_OUT_OF_HOST_MEMORY || vkResult == VK_ERROR_OUT_OF_DEVICE_MEMORY ) )
+        {
+            device->_notifyOutOfMemory( fullDesc );
+        }
+
+        ExceptionFactory::throwException( Exception::ERR_RENDERINGAPI_ERROR, vkResult, fullDesc, src,
                                           file, line );
     }
     //-------------------------------------------------------------------------

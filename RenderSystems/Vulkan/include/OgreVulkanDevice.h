@@ -35,6 +35,9 @@ THE SOFTWARE.
 
 #include "vulkan/vulkan_core.h"
 
+#include <atomic>
+#include <mutex>
+
 #include "OgreHeaderPrefix.h"
 
 namespace Ogre
@@ -205,6 +208,21 @@ namespace Ogre
 
         VkResult mDeviceLostReason;
         bool mIsExternal;
+
+        /// Jahshaka: THE OUT-OF-MEMORY RECORD. onVulkanFailure no longer latches
+        /// VK_ERROR_OUT_OF_HOST_MEMORY / VK_ERROR_OUT_OF_DEVICE_MEMORY as a device loss;
+        /// it counts them here instead (from any thread), with the last one's text, so an
+        /// application can tell that an OOM happened inside a window of its own - e.g. a
+        /// frame, where a caller deep inside may have caught and swallowed the exception -
+        /// and decide what that means. Read with getOutOfMemoryFailures() /
+        /// getLastOutOfMemory().
+        std::atomic<uint32> mOutOfMemoryFailures;
+        mutable std::mutex mLastOutOfMemoryMutex;
+        String mLastOutOfMemory;
+
+        void _notifyOutOfMemory( const String &description );
+        uint32 getOutOfMemoryFailures() const { return mOutOfMemoryFailures.load(); }
+        String getLastOutOfMemory() const;
 
         void fillDeviceFeatures();
         bool fillDeviceFeatures2(
