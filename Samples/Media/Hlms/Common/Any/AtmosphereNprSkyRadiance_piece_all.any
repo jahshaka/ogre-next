@@ -1,0 +1,85 @@
+// NPR = Non-Physically-based Rendering Atmo
+//
+// THE SKY'S RADIANCE FOR A VIEW DIRECTION, ONCE. This file is read by TWO
+// consumers and is written so that both can:
+//   * the sky quad's low-level material (2.0/scripts/materials/Common/Any/
+//     AtmosphereNprSky_ps.any, header section) includes it by file name — the
+//     directive lines below are plain comments there;
+//   * the Hlms, whose parser executes directive lines even inside comments,
+//     finds it in its Hlms/Common/Any library folder and gets one piece,
+//     DeclAtmosphereNprSkyRadiance, which a pixel shader inserts at global
+//     scope to evaluate the sky behind a surface (aerial perspective).
+// The arithmetic is the sky quad's own, moved here unchanged; the CPU copy in
+// AtmosphereNpr::getAtmosphereAt is upstream's and stays where it is. The
+// per-vertex Hlms fog colour (Pbs/Any/Atmosphere, DoAtmosphereNprSky) is a
+// different, older function and is untouched.
+//
+// phaseBeforeClamp: the sky quad passes false (its phase term reads the
+// horizon-clamped direction, exactly as before). A caller evaluating the sky
+// for a ray that points INTO THE GROUND passes true: the phase term then reads
+// the ray's own scattering angle (the direction before the horizon clamp),
+// while the radiance lookup still reads the clamped one, so a ground ray is
+// not lit like the sunset horizon at every downward angle.
+//
+// The parameters are NOT named like the sky material's p_ uniforms: those are
+// preprocessor macros in its wrappers and would rewrite a parameter list.
+//
+// Never put an at-sign in a comment of this file: the Hlms parser executes it.
+
+// @piece( DeclAtmosphereNprSkyRadiance )
+float3 atmoNprSkyRadiance( float3 atmoCameraDir, const float3 aCameraDisplacement,
+						   const float3 aSunDir, const float aBorderLimit,
+						   const float aDensityDiffusion, const float aDensityCoeff,
+						   const float aSunHeight, const float aSunHeightWeight,
+						   const float aLightDensity, const float3 aSkyColour,
+						   const float3 aSunAbsorption, const float3 aSkyLightAbsorption,
+						   const float3 aMieAbsorption, const float aFinalMultiplier,
+						   const bool phaseBeforeClamp )
+{
+	atmoCameraDir.y +=
+		aDensityDiffusion * 0.075f * ( 1.0f - atmoCameraDir.y ) * ( 1.0f - atmoCameraDir.y );
+	atmoCameraDir += aCameraDisplacement.xyz;
+	atmoCameraDir = normalize( atmoCameraDir );
+
+	const float phaseLdotV360 = dot( atmoCameraDir, aSunDir ) * 0.5f + 0.5f;
+
+	atmoCameraDir.y = max( atmoCameraDir.y, aBorderLimit );
+
+	// It's not a mistake. We do this twice. Doing it before p_borderLimit
+	// allows the horizon to shift. Doing it after p_borderLimit lets
+	// the sky to get darker as we get upwards.
+	atmoCameraDir += aCameraDisplacement.xyz;
+	atmoCameraDir = normalize( atmoCameraDir );
+
+	const float LdotV360 =
+		phaseBeforeClamp ? phaseLdotV360 : ( dot( atmoCameraDir, aSunDir ) * 0.5f + 0.5f );
+
+	// ptDensity gets smaller as sunHeight gets bigger
+	// ptDensity gets smaller as atmoCameraDir.y gets bigger
+	const float ptDensity =
+		aDensityCoeff / pow( max( atmoCameraDir.y / ( 1.0f - aSunHeight ), 0.0035f ),
+							  lerp( 0.10f, aDensityDiffusion, pow( atmoCameraDir.y, 0.3f ) ) );
+
+	const float antiMie = max( aSunHeightWeight, 0.08f );
+
+	// The Rayleigh-inspired absorption ( exp2( -density * colour ) * 2 ) and
+	// the colour gradient ( exp2( -y / colour ) to the power 1.5 ).
+	const float3 skyAbsorption = exp2( -ptDensity * aSkyColour ) * 2.0f;
+	const float3 skyColourGradient =
+		pow( exp2( -atmoCameraDir.y / aSkyColour ), float3( 1.5f, 1.5f, 1.5f ) );
+
+	const float mie = pow( LdotV360, lerp( 1.0f, 1.0f, aSunHeightWeight ) );
+
+	float3 atmoColour = float3( 0.0f, 0.0f, 0.0f );
+
+	const float3 sharedTerms = skyColourGradient * skyAbsorption;
+
+	atmoColour += antiMie * sharedTerms * aSunAbsorption;
+	atmoColour += ( mie * ptDensity * aLightDensity ) * sharedTerms * aSkyLightAbsorption;
+	atmoColour += mie * aMieAbsorption;
+	atmoColour *= aLightDensity;
+
+	atmoColour *= aFinalMultiplier;
+	return atmoColour;
+}
+// @end
