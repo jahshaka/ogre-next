@@ -691,7 +691,7 @@ namespace Ogre
     void HlmsComputeJob::setIndirectDispatchBuffer( BufferPacked *buffer, size_t offsetBytes,
                                                     bool issueBarrier )
     {
-        // Jahshaka patch 0032. See the header. Vulkan's vkCmdDispatchIndirect requires the
+        // Jahshaka fork 1bccc3f93+a98e2b0af (was 0032). See the header. Vulkan's vkCmdDispatchIndirect requires the
         // offset to be 4-byte aligned and three uint32s to fit.
         //
         // OGRE_EXCEPT and not OGRE_ASSERT_LOW: this engine ships RelWithDebInfo, where
@@ -1060,7 +1060,7 @@ namespace Ogre
     {
         OGRE_ASSERT_LOW( slotIdx < mTexSlots.size() );
 
-        // JAHSHAKA PATCH 0041. Stamp the buffer's per-instance identity HERE, where the buffer is
+        // JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041). Stamp the buffer's per-instance identity HERE, where the buffer is
         // known to be alive, so neither the comparison below nor the HlmsManager cache lookup that
         // follows has to dereference a pointer that may already be dangling. Without it a buffer
         // created at the address of a destroyed one compares EQUAL to the dead one's slot, the
@@ -1082,7 +1082,7 @@ namespace Ogre
 
             slot.slotType = DescriptorSetTexture2::SlotTypeBuffer;
             DescriptorSetTexture2::BufferSlot &bufferSlot = slot.getBuffer();
-            bufferSlot = stampedSlot;  // JAHSHAKA PATCH 0041
+            bufferSlot = stampedSlot;  // JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041)
             destroyDescriptorTextures();  // Descriptor is dirty
 
             // Remove sampler
@@ -1184,7 +1184,7 @@ namespace Ogre
     {
         assert( slotIdx < mUavSlots.size() );
 
-        // JAHSHAKA PATCH 0041 -- see setTexBuffer above.
+        // JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041) -- see setTexBuffer above.
         DescriptorSetUav::BufferSlot stampedSlot = newSlot;
         stampedSlot.creationSerial = newSlot.buffer ? newSlot.buffer->getCreationSerial() : 0u;
 
@@ -1200,7 +1200,7 @@ namespace Ogre
             slot.slotType = DescriptorSetUav::SlotTypeBuffer;
             DescriptorSetUav::BufferSlot &bufferSlot = slot.getBuffer();
 
-            bufferSlot = stampedSlot;  // JAHSHAKA PATCH 0041
+            bufferSlot = stampedSlot;  // JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041)
             destroyDescriptorUavs();  // Descriptor is dirty
         }
     }
@@ -1338,7 +1338,7 @@ namespace Ogre
                     }
                     else if( origBuffer )
                     {
-                        // JAHSHAKA PATCH 0041. A PLAIN TexBufferPacked read by a compute job got no
+                        // JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041). A PLAIN TexBufferPacked read by a compute job got no
                         // transition resolved at all: the branch above only fires for a read-only
                         // VIEW of a UAV buffer. The solver then has no record of the buffer, so a
                         // later write to it cannot be ordered against this read. Registering it

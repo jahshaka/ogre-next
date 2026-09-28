@@ -60,7 +60,7 @@ namespace Ogre
     {
         VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mVaoManager );
 
-        // Jahshaka (ogre-patch 0069): DO NOT WAIT ON A LOST DEVICE FROM A DESTRUCTOR.
+        // Jahshaka (fork b028638c1 (was 0069)): DO NOT WAIT ON A LOST DEVICE FROM A DESTRUCTOR.
         //
         // wait() ends in checkVkResult(), which THROWS on VK_ERROR_DEVICE_LOST - and a
         // throw leaving a destructor (implicitly noexcept since C++11) is

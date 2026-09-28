@@ -202,7 +202,7 @@ namespace Ogre
         uint32 mBytesPerElement;
         uint32 mNumElementsPadding;
 
-        /** JAHSHAKA PATCH 0041 — the per-INSTANCE identity a raw pointer cannot give.
+        /** JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041) — the per-INSTANCE identity a raw pointer cannot give.
         @remarks
             Descriptor-set slots (DescriptorSetTexture2::BufferSlot, DescriptorSetUav::BufferSlot)
             identify a buffer by its ADDRESS, and HlmsManager caches whole descriptor sets keyed
@@ -215,7 +215,7 @@ namespace Ogre
         */
         uint32 mCreationSerial;
 
-        /// JAHSHAKA PATCH 0041. Process-wide, monotonic, never reused.
+        /// JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041). Process-wide, monotonic, never reused.
         static std::atomic<uint32> msNextCreationSerial;
 
         BufferType  mBufferType;
@@ -383,7 +383,7 @@ namespace Ogre
         uint32 getBytesPerElement() const { return mBytesPerElement; }
         size_t getTotalSizeBytes() const { return mNumElements * mBytesPerElement; }
 
-        /// JAHSHAKA PATCH 0041. Unique for the lifetime of the process; never 0 for a real
+        /// JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041). Unique for the lifetime of the process; never 0 for a real
         /// buffer, so 0 is usable as "no buffer" in a descriptor slot.
         uint32 getCreationSerial() const { return mCreationSerial; }
 

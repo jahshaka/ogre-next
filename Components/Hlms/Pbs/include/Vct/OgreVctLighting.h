@@ -113,7 +113,7 @@ namespace Ogre
         HlmsComputeJob *mLightVctBounceInject;
         TextureGpu     *mLightBounce;
 
-        /// JAHSHAKA PATCH 0076: THE DIRECT TERM, KEPT.
+        /// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): THE DIRECT TERM, KEPT.
         ///
         /// The bounce is a fixed-point iteration over the radiance in the volume,
         /// L = D + rho * G( L ), and it needs D -- the light INJECTED from the
@@ -245,7 +245,7 @@ namespace Ogre
 
         void generateAnisotropicMips();
 
-        /// JAHSHAKA PATCH 0076: the pass index is gone with the per-iteration
+        /// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): the pass index is gone with the per-iteration
         /// dampening it fed (upstream's commented-out 1 / ( pi * ( n/2 + 1 ) )).
         /// Every pass of a Jacobi iteration is the same operator; nothing about it
         /// depends on which pass it is.
@@ -452,7 +452,7 @@ namespace Ogre
         float getFinalMultiplier() const { return mInvBakingMultiplier * mMultiplier; }
 
         TextureGpu **getLightVoxelTextures() { return mLightVoxel; }
-        /// JAHSHAKA PATCH: THE DIRECT TERM'S VOLUME (patch 0076's D term), or null
+        /// JAHSHAKA PATCH: THE DIRECT TERM'S VOLUME (fork ae2ed529f+155a56bf8 (was 0076)'s D term), or null
         /// on a VctLighting that cannot bounce. Read-only, and it exists so a host
         /// can MEASURE the store -- the normalisation's own self-check is "the
         /// direct term is <= the ceiling by construction", and nothing outside this

@@ -183,7 +183,7 @@ namespace Ogre
 #    define _OgreVulkanExport
 #endif
 
-// Jahshaka (ogre-patch 0040): onVulkanFailure MUST be declared after
+// Jahshaka (fork 1a81f866a (was 0040)): onVulkanFailure MUST be declared after
 // _OgreVulkanExport is defined, and it must carry it. VulkanQueue is an exported
 // class whose PUBLIC INLINE getCurrentCmdBuffer() expands checkVkResult(), so
 // every caller outside the plugin emits a reference to this symbol - and without

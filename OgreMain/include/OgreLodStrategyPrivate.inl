@@ -42,7 +42,7 @@ namespace Ogre
                     std::lower_bound( owner->mLodMesh->begin(), owner->mLodMesh->end(), lodValues[j] );
                 ptrdiff_t newLod = std::max<ptrdiff_t>( it - owner->mLodMesh->begin() - 1, 0 );
 
-                // JAHSHAKA (ogre-patch 0075): THE HYSTERESIS BAND, PER PASS.
+                // JAHSHAKA (fork 5230c9390+8282f6d70 (was 0075)): THE HYSTERESIS BAND, PER PASS.
                 // Without it this comparison is a step in both directions, so
                 // an object parked on a threshold — a camera breathing at a
                 // switch distance, a dolly crawling past one — changes level

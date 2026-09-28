@@ -355,7 +355,7 @@ namespace Ogre
         pso.mNumThreadGroups[1] = (uint32)( getProperty( kNoTid, ComputeProperty::NumThreadGroupsY ) );
         pso.mNumThreadGroups[2] = (uint32)( getProperty( kNoTid, ComputeProperty::NumThreadGroupsZ ) );
 
-        // Jahshaka patch 0032: a job dispatched INDIRECTLY has no CPU-side group count by
+        // Jahshaka fork 1bccc3f93+a98e2b0af (was 0032): a job dispatched INDIRECTLY has no CPU-side group count by
         // definition — the whole point is that only the GPU knows it — so requiring one here
         // would force every such job to carry a meaningless dummy. The threads per group are
         // still required (Metal needs them on the C++ side, and both back ends bake them into
@@ -568,7 +568,7 @@ namespace Ogre
         csParams->_updateAutoParams( mAutoParamDataSource, GPV_ALL );
         mRenderSystem->bindGpuProgramParameters( GPT_COMPUTE_PROGRAM, csParams, GPV_ALL );
 
-        // Jahshaka patch 0032: a job that has been given an indirect buffer is sized by
+        // Jahshaka fork 1bccc3f93+a98e2b0af (was 0032): a job that has been given an indirect buffer is sized by
         // the GPU, not by mNumThreadGroups.
         if( job->mIndirectDispatchBuffer )
         {

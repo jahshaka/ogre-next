@@ -70,7 +70,7 @@ namespace Ogre
         /** Transform LOD bias so it only needs to be multiplied by the LOD value. */
         virtual Real transformBias( Real factor ) const = 0;
 
-        /** JAHSHAKA (ogre-patch 0075): `hysteresis` is THE PASS'S SWITCH BAND, as a
+        /** JAHSHAKA (fork 5230c9390+8282f6d70 (was 0075)): `hysteresis` is THE PASS'S SWITCH BAND, as a
             fraction of the threshold being crossed, and it comes from the pass
             definition that asked for this update
             (`CompositorPassSceneDef::mLodHysteresis`, default 0 = upstream to the

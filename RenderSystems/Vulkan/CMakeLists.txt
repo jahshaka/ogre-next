@@ -103,7 +103,7 @@ if( OGRE_VULKAN_USE_SWAPPY )
 	target_link_libraries(RenderSystem_Vulkan ${AndroidSwappy_LIBRARY})
 endif()
 
-# --- Jahshaka local patch 0027: GPU timestamp sampling ----------------------
+# --- Jahshaka local fork 1a81f866a+1bccc3f93 (was 0027): GPU timestamp sampling ----------------------
 # OFF BY DEFAULT, and that is lock 1 of the two the owner asked for (D3,
 # 2026-09-12): without this option the three GPU-profiling hooks compile to
 # upstream's empty stubs byte for byte, the render system carries no extra

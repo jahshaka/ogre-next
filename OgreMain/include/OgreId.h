@@ -29,7 +29,7 @@ THE SOFTWARE.
 #ifndef __Id_H__
 #define __Id_H__
 
-// Jahshaka patch 0015: <atomic>, for the id counter below.
+// Jahshaka fork 6130df9d1 (was 0015): <atomic>, for the id counter below.
 #include <atomic>
 
 namespace Ogre
@@ -45,7 +45,7 @@ namespace Ogre
     class _OgreExport Id
     {
     public:
-        // Jahshaka patch 0015: THE COUNTER IS ATOMIC.
+        // Jahshaka fork 6130df9d1 (was 0015): THE COUNTER IS ATOMIC.
         //
         // Upstream's comment used to read "This function assumes creation of
         // new objects can't be made from multiple threads!!!" and the counter

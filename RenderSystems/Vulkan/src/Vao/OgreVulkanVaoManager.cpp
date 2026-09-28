@@ -1137,7 +1137,7 @@ namespace Ogre
                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
                 if( vboFlag == CPU_READ_WRITE )
                     bufferCi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-                // Jahshaka (ogre-patch 0039, WIDENED): the DEVICE-LOCAL VBO pools (the
+                // Jahshaka (fork b028638c1 (was 0039), WIDENED): the DEVICE-LOCAL VBO pools (the
                 // ones v2 vertex and index buffers live in) get a device address, so a
                 // compute shader or an acceleration structure can read the SAME
                 // triangles the raster draws. Without it every such consumer would have
@@ -1175,7 +1175,7 @@ namespace Ogre
             memAllocInfo.allocationSize = poolSize;
             memAllocInfo.memoryTypeIndex = chosenMemoryTypeIdx;
 
-            // Jahshaka (ogre-patch 0039): memory backing a buffer created with
+            // Jahshaka (fork b028638c1 (was 0039)): memory backing a buffer created with
             // VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT must carry this allocate flag.
             VkMemoryAllocateFlagsInfo memAllocFlags;
             makeVkStruct( memAllocFlags, VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO );
@@ -2263,7 +2263,7 @@ namespace Ogre
                 mDelayedFuncs[mDynamicBufferCurrentFrame].begin(), itor );
         }
 
-        // Jahshaka patch 0067: the same window as flushGpuDelayedBlocks' own test.
+        // Jahshaka fork b028638c1 (was 0067): the same window as flushGpuDelayedBlocks' own test.
         if( !mDelayedBlocks.empty() &&
             ( mFrameCount - mDelayedBlocks.front().frameIdx ) >= mDynamicBufferMultiplier )
         {

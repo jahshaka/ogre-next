@@ -418,7 +418,7 @@ namespace Ogre
                                              "SHARED_DEMAND_REFRESH_KHR",
                                              "SHARED_CONTINUOUS_REFRESH_KHR" };
 
-        // Jahshaka patch 0013 (rev 2): FIFO_LATEST_READY = vsync pacing
+        // Jahshaka fork d014b064f+1a64cd1d8 (was 0013) (rev 2): FIFO_LATEST_READY = vsync pacing
         // without the FIFO queue backlog, ONLY AS A FALLBACK when the surface
         // does not expose the REQUESTED mode (MAILBOX under Lowest Latency —
         // NVIDIA xcb never offers it). Rev 1 pre-empted MAILBOX everywhere it
@@ -610,7 +610,7 @@ namespace Ogre
 
         if( mSwapchainSemaphore )
         {
-            // JAHSHAKA PATCH 0073: a swapchain's acquire semaphore may not be
+            // JAHSHAKA fork 1a64cd1d8 (was 0073): a swapchain's acquire semaphore may not be
             // DESTROYED while it still carries an unconsumed signal (or a wait
             // that has been recorded but not yet submitted). vkAcquireNextImageKHR
             // signals this semaphore; only a queue submit that WAITS on it
@@ -738,7 +738,7 @@ namespace Ogre
                   ( result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ) ) &&
                 !mRebuildingSwapchain )
             {
-                // JAHSHAKA PATCH 0073: if the acquire RETURNED AN IMAGE (SUCCESS
+                // JAHSHAKA fork 1a64cd1d8 (was 0073): if the acquire RETURNED AN IMAGE (SUCCESS
                 // with mSuboptimal from the last present, or SUBOPTIMAL), the
                 // semaphore WILL be signalled, and the rebuild's destroySwapchain
                 // must retire it through a submitted wait, not destroy it. Say so
@@ -821,7 +821,7 @@ namespace Ogre
         // Don't do it right now because we need to recreate the surface as well.
         OGRE_ANDROID_SURFACE_PREVENT_USE;
 
-        // JAHSHAKA PATCH 0073: the presentable images of the swapchain about to
+        // JAHSHAKA fork 1a64cd1d8 (was 0073): the presentable images of the swapchain about to
         // be destroyed may still be in flight in a submitted frame
         // (VUID-vkDestroySwapchainKHR-swapchain-01282). Every other rebuild site
         // knows this — VulkanXcbWindow::windowMovedOrResized stalls before its
@@ -843,7 +843,7 @@ namespace Ogre
         // Don't do it right now because we need to recreate the surface as well.
         OGRE_ANDROID_SURFACE_PREVENT_USE;
 
-        // JAHSHAKA PATCH 0073, as in setVSync above: a rebuild waits for the
+        // JAHSHAKA fork 1a64cd1d8 (was 0073), as in setVSync above: a rebuild waits for the
         // frames that are still using the old swapchain's images.
         mDevice->stallIgnoringDeviceLost();
 

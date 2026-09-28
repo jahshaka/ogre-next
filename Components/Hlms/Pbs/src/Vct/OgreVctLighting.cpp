@@ -72,7 +72,7 @@ namespace Ogre
 
     static const size_t c_maxCascades = 8u;
 
-    // JAHSHAKA PATCH 0080: THE FORMAT OF THE TOTAL VOLUME.
+    // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080): THE FORMAT OF THE TOTAL VOLUME.
     //
     // The volume holds the fixed point of L = D + rho * G( L ). The DIRECT term D
     // is normalised to <= 1 by VctLighting::update's auto multiplier; the FIXED
@@ -83,7 +83,7 @@ namespace Ogre
     // desaturates as it darkens and reads downstream exactly like a scene with
     // less bounce in it; and every fixed headroom that clears one room costs the
     // dark end, where the GI signal lives. So the total is a float. The direct
-    // volume (patch 0076) keeps its 8-bit sRGB store: D <= 1 by construction.
+    // volume (fork ae2ed529f+155a56bf8 (was 0076)) keeps its 8-bit sRGB store: D <= 1 by construction.
     static PixelFormatGpu jahLightVoxelFormat() { return PFG_RGBA16_FLOAT; }
     static PixelFormatGpu jahLightVoxelUavFormat() { return PFG_RGBA16_FLOAT; }
     //-------------------------------------------------------------------------
@@ -98,7 +98,7 @@ namespace Ogre
         mAnisoGeneratorStep0( 0 ),
         mLightVctBounceInject( 0 ),
         mLightBounce( 0 ),
-        mLightDirect( 0 ),  // JAHSHAKA PATCH 0076
+        mLightDirect( 0 ),  // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076)
         mLightDirectBack( 0 ),
         mInjectHigherMipHalfWidth( 0 ),
         mBakingMultiplier( 1.0f ),
@@ -325,7 +325,7 @@ namespace Ogre
 
         TextureGpuManager *textureManager = mVoxelizer->getTextureGpuManager();
 
-        // JAHSHAKA PATCH 0080: NOT Reinterpretable. The flag existed for the 8-bit
+        // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080): NOT Reinterpretable. The flag existed for the 8-bit
         // store, whose UAV view (RGBA8_UNORM) reinterpreted the sRGB texture; a float
         // store's UAV view IS its format. And the flag is not free: a reinterpretable
         // texture is created as its format FAMILY -- R16G16B16A16_UINT for 16F --
@@ -388,7 +388,7 @@ namespace Ogre
                 texture->setResolution( widthAniso, heightAniso, depthAniso );
                 texture->setNumMipmaps( numMipsAniso );
             }
-            texture->setPixelFormat( jahLightVoxelFormat() );  // JAHSHAKA PATCH 0080
+            texture->setPixelFormat( jahLightVoxelFormat() );  // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080)
             texture->scheduleTransitionTo( GpuResidency::Resident );
             mLightVoxel[i] = texture;
 
@@ -456,7 +456,7 @@ namespace Ogre
                     uavSlot.access = ResourceAccess::Write;
                     uavSlot.texture = mLightVoxel[axis + 1u];
                     uavSlot.mipmapLevel = i + 1u;
-                    uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
+                    uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080)
                     mipJob->_setUavTexture( axis, uavSlot );
                 }
 
@@ -580,7 +580,7 @@ namespace Ogre
     {
         const size_t numExtraCascades = mExtraCascades.size();
 
-        // JAHSHAKA PATCH 0076: +1 for `directVoxel`, the fixed point's D term. It is
+        // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): +1 for `directVoxel`, the fixed point's D term. It is
         // bound LAST so that every existing slot index -- albedo, normal, this
         // cascade's probes, the extra cascades', the three anisotropic sets -- keeps
         // the number it had, in the C++ and in the shader's ogre_tN layout alike.
@@ -704,7 +704,7 @@ namespace Ogre
             }
         }
 
-        // JAHSHAKA PATCH 0076: THE DIRECT TERM, at the last unit. Read with a plain
+        // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): THE DIRECT TERM, at the last unit. Read with a plain
         // Load3D at the voxel being written, so it needs no sampler of its own (the
         // OpenGL path's samplerblock loop above deliberately skips it).
         texSlot.texture = mLightDirect;
@@ -756,7 +756,7 @@ namespace Ogre
         DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
         uavSlot.access = ResourceAccess::Write;
         uavSlot.texture = mLightBounce;
-        uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
+        uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080)
         mLightVctBounceInject->_setUavTexture( 0, uavSlot );
         if( mAnisotropic )
         {
@@ -771,7 +771,7 @@ namespace Ogre
         // THE LIST'S LENGTH IS PARAMETERS, NOT UNITS (Jahshaka, PHOTON-VOXEL-5; the VOXEL-4
         // audit's F1): the two fixed textures, then ONE array parameter per texture variable
         // (vctProbes, the three axes when anisotropic, the four split kinds - each an array over
-        // every cascade), then `directVoxel` (JAHSHAKA PATCH 0076) and voxelEmissiveTex
+        // every cascade), then `directVoxel` (JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076)) and voxelEmissiveTex
         // (PHOTON-WRITER-1). It was compared with a unit count (8 + 6e + 2 / 5 + 3e + 2), which the
         // list never had, so the "glsl" list was rebuilt and set dirty on every bounce dispatch.
         const size_t numTextureVariables = mAnisotropic ? 8u : 5u;
@@ -809,7 +809,7 @@ namespace Ogre
                 glslShaderParams.mParams.push_back( param );
             }
 
-            // JAHSHAKA PATCH 0076: the direct volume's own unit, after every probe
+            // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): the direct volume's own unit, after every probe
             // array -- the same order setupBounceTextures() binds them in.
             param.name = "directVoxel";
             param.setManualValue( texSlotIdx );
@@ -892,7 +892,7 @@ namespace Ogre
 
         mBounceVoxelCellSize->setManualValue( mVoxelizer->getVoxelCellSize() );
         mBounceInvVoxelResolution->setManualValue( 1.0f / mVoxelizer->getVoxelResolution() );
-        // JAHSHAKA PATCH 0076: ONE, AND IT IS THE PHYSICS.
+        // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): ONE, AND IT IS THE PHYSICS.
         //
         // The bounce adds `albedo * G` where G is the six-cone weighted mean of the
         // voxel radiance -- weights that sum to 1 over a cosine-ish set, i.e. an
@@ -1018,7 +1018,7 @@ namespace Ogre
         DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
         uavSlot.access = ResourceAccess::Write;
         uavSlot.texture = mLightBounce;
-        uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
+        uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080)
         mLightVctBounceInject->_setUavTexture( 0, uavSlot );
 
         if( mAnisotropic )
@@ -1073,7 +1073,7 @@ namespace Ogre
         TextureGpuManager *textureManager = mVoxelizer->getTextureGpuManager();
         if( bAllowMultipleBounces )
         {
-            // JAHSHAKA PATCH 0080: not Reinterpretable -- see createTextures.
+            // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080): not Reinterpretable -- see createTextures.
             uint32 texFlags = TextureFlags::Uav;
             if( !mAnisotropic || shouldEnableSpecularSdfQuality() )
                 texFlags |= TextureFlags::RenderToTexture | TextureFlags::AllowAutomipmaps;
@@ -1087,11 +1087,11 @@ namespace Ogre
             texture->setResolution( mLightVoxel[0]->getWidth(), mLightVoxel[0]->getHeight(),
                                     mLightVoxel[0]->getDepth() );
             texture->setNumMipmaps( mLightVoxel[0]->getNumMipmaps() );
-            texture->setPixelFormat( jahLightVoxelFormat() );  // JAHSHAKA PATCH 0080
+            texture->setPixelFormat( jahLightVoxelFormat() );  // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080)
             texture->scheduleTransitionTo( GpuResidency::Resident );
             mLightBounce = texture;
 
-            // JAHSHAKA PATCH 0076: the direct term's own volume, born and buried with
+            // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): the direct term's own volume, born and buried with
             // the bounce texture -- it is the bounce iteration that needs it, and
             // nothing else reads it. ONE mip: the bounce job reads it with a Load3D at
             // the voxel it is writing (the fixed point's D term at this cell), never
@@ -1158,7 +1158,7 @@ namespace Ogre
             mLightBounce = 0;
             if( mLightDirect )
             {
-                textureManager->destroyTexture( mLightDirect );  // JAHSHAKA PATCH 0076
+                textureManager->destroyTexture( mLightDirect );  // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076)
                 mLightDirect = 0;
             }
             if( mLightDirectBack )
@@ -1240,10 +1240,10 @@ namespace Ogre
         DescriptorSetUav::TextureSlot uavSlot( DescriptorSetUav::TextureSlot::makeEmpty() );
         uavSlot.access = ResourceAccess::Write;
         uavSlot.texture = mLightVoxel[0];
-        uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA PATCH 0080
+        uavSlot.pixelFormat = jahLightVoxelUavFormat();  // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080)
         mLightInjectionJob->_setUavTexture( 0, uavSlot );
 
-        // JAHSHAKA PATCH 0076: THE SAME DISPATCH WRITES THE DIRECT TERM TWICE -- once
+        // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): THE SAME DISPATCH WRITES THE DIRECT TERM TWICE -- once
         // into the running total the bounce gathers from, once into the volume the
         // bounce's fixed point needs as its D term. It is one extra image store per
         // voxel inside a job that already walks every light's shadow ray per voxel;

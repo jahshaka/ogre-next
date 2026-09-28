@@ -1182,7 +1182,7 @@ namespace Ogre
 
         virtual void _dispatch( const HlmsComputePso &pso ) = 0;
 
-        /** GPU-DRIVEN COMPUTE DISPATCH (Jahshaka patch 0032).
+        /** GPU-DRIVEN COMPUTE DISPATCH (Jahshaka fork 1bccc3f93+a98e2b0af (was 0032)).
 
             Same as _dispatch, except the three thread-group counts are NOT known to
             the CPU: they are read by the GPU out of `indirectBuffer` at `offsetBytes`,
