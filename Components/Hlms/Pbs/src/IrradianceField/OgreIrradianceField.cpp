@@ -29,7 +29,6 @@ THE SOFTWARE.
 #include "IrradianceField/OgreIrradianceField.h"
 
 #include "IrradianceField/OgreIfdProbeVisualizer.h"
-#include "IrradianceField/OgreIrradianceFieldRaster.h"
 #include "Vct/OgreVctLighting.h"
 #include "Vct/OgreVctVoxelizerSourceBase.h"
 
@@ -51,15 +50,6 @@ THE SOFTWARE.
 
 namespace Ogre
 {
-    RasterParams::RasterParams() :
-        mPixelFormat( PFG_RGBA8_UNORM_SRGB ),
-        mCameraNear( 0.01f ),
-        mCameraFar( 500.0f )
-    {
-    }
-    //-------------------------------------------------------------------------
-    //-------------------------------------------------------------------------
-    //-------------------------------------------------------------------------
     IrradianceFieldSettings::IrradianceFieldSettings() :
         mNumRaysPerPixel( 1u ),
         mDepthProbeResolution( 12u ),
@@ -69,8 +59,6 @@ namespace Ogre
             mNumProbes[i] = 32u;
         mNumProbes[1] = 8u;
     }
-    //-------------------------------------------------------------------------
-    bool IrradianceFieldSettings::isRaster() const { return mRasterParams.mWorkspaceName != IdString(); }
     //-------------------------------------------------------------------------
     uint32 IrradianceFieldSettings::getTotalNumProbes() const
     {
@@ -138,26 +126,19 @@ namespace Ogre
         mRefinesOwed( 0u ),
         mFieldOrigin( Vector3::ZERO ),
         mFieldSize( Vector3::ZERO ),
-        mDepthMaxIntegrationTapsPerPixel( 0u ),
-        mColourMaxIntegrationTapsPerPixel( 0u ),
         mVctLighting( 0 ),
         mIrradianceTex( 0 ),
         mDepthVarianceTex( 0 ),
         mGenerationWorkspace( 0 ),
         mGenerationJob( 0 ),
-        mDepthIntegrationJob( 0 ),
-        mColourIntegrationJob( 0 ),
         mDepthMirrorBorderJob( 0 ),
         mColourMirrorBorderJob( 0 ),
         mIfGenParamsBuffer( 0 ),
         mIfGenParamsRingFrame( 0u ),
         mIfGenParamsRingNext( 0u ),
         mDirectionsBuffer( 0 ),
-        mDepthTapsIntegrationBuffer( 0 ),
-        mColourTapsIntegrationBuffer( 0 ),
         mIfdDepthBorderMirrorParamsBuffer( 0 ),
         mIfdColourBorderMirrorParamsBuffer( 0 ),
-        mIfRaster( 0 ),
         mDebugVisualizationMode( DebugVisualizationNone ),
         mDebugTessellation( 4u ),
         mDebugIfdProbeVisualizer( 0 ),
@@ -205,8 +186,6 @@ namespace Ogre
                          "IrradianceField::IrradianceField" );
         }
 
-        mDepthIntegrationJob = hlmsCompute->findComputeJob( "IrradianceField/Integration/Depth" );
-        mColourIntegrationJob = hlmsCompute->findComputeJob( "IrradianceField/Integration/Colour" );
 
         mDepthMirrorBorderJob = hlmsCompute->findComputeJob( "IrradianceField/BorderMirror/Depth" );
         mColourMirrorBorderJob = hlmsCompute->findComputeJob( "IrradianceField/BorderMirror/Colour" );
@@ -216,9 +195,6 @@ namespace Ogre
     {
         setDebugVisualization( DebugVisualizationNone, 0, mDebugTessellation );
         destroyTextures();
-
-        delete mIfRaster;
-        mIfRaster = 0;
 
         VaoManager *vaoManager = mRoot->getRenderSystem()->getVaoManager();
         for( ConstBufferPacked *buffer : mIfGenParamsRing )
@@ -243,8 +219,6 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void IrradianceField::fillDirections( float *RESTRICT_ALIAS outBuffer )
     {
-        OGRE_ASSERT_LOW( !mSettings.isRaster() );
-
         // Jahshaka (PHOTON-FIELD-ROTATE-1): THE PROBE'S RAYS ARE A SPHERICAL FIBONACCI SET,
         // uniform in SOLID ANGLE, and they belong to no texel. Upstream shot one ray (or a
         // fixed subsample pattern) per depth texel, at the texel's octahedral direction,
@@ -270,149 +244,8 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    TexBufferPacked *IrradianceField::setupIntegrationTaps( VaoManager *vaoManager, uint32 probeRes,
-                                                            uint32 fullWidth,
-                                                            HlmsComputeJob *integrationJob,
-                                                            ConstBufferPacked *ifGenParamsBuffer,
-                                                            uint32 &outMaxIntegrationTapsPerPixel )
-    {
-        const uint32 maxIntegrationTapsPerPixel = countNumIntegrationTaps( probeRes );
-        const size_t bufferSize = probeRes * probeRes * maxIntegrationTapsPerPixel * sizeof( float2 );
-        float2 *integrationTapsBuffer =
-            reinterpret_cast<float2 *>( OGRE_MALLOC_SIMD( bufferSize, MEMCATEGORY_GEOMETRY ) );
-        FreeOnDestructor dataPtr( integrationTapsBuffer );
-
-        fillIntegrationWeights( integrationTapsBuffer, probeRes, maxIntegrationTapsPerPixel );
-
-        TexBufferPacked *retVal = vaoManager->createTexBuffer( PFG_RG32_FLOAT, bufferSize, BT_DEFAULT,
-                                                               integrationTapsBuffer, false );
-
-        integrationJob->setConstBuffer( 0, ifGenParamsBuffer );
-        DescriptorSetTexture2::BufferSlot bufferSlot( DescriptorSetTexture2::BufferSlot::makeEmpty() );
-        bufferSlot.buffer = retVal;
-        integrationJob->setTexBuffer( 0, bufferSlot );
-        integrationJob->setProperty( "num_taps", static_cast<int32>( maxIntegrationTapsPerPixel ) );
-        integrationJob->setProperty( "probe_resolution", static_cast<int32>( probeRes ) );
-        integrationJob->setProperty( "full_width", static_cast<int32>( fullWidth ) );
-
-        integrationJob->setThreadsPerGroup( probeRes, probeRes, 1u );
-
-        outMaxIntegrationTapsPerPixel = maxIntegrationTapsPerPixel;
-
-        return retVal;
-    }
-    //-------------------------------------------------------------------------
-    uint32 IrradianceField::countNumIntegrationTaps( uint32 probeRes )
-    {
-        uint32 maxNumTaps = 0u;
-
-        for( size_t y = 0u; y < probeRes; ++y )
-        {
-            for( size_t x = 0u; x < probeRes; ++x )
-            {
-                Vector2 uvOct = Vector2( (Real)x, (Real)y );
-                uvOct /= static_cast<float>( probeRes );
-                Vector3 directionVector = Math::octahedronMappingDecode( uvOct );
-
-                uint32 numTaps = 0u;
-
-                for( size_t otherY = 0u; otherY < probeRes; ++otherY )
-                {
-                    for( size_t otherX = 0u; otherX < probeRes; ++otherX )
-                    {
-                        Vector2 otherUv = Vector2( (Real)otherX, (Real)otherY );
-                        otherUv /= static_cast<float>( probeRes );
-                        Vector3 otherDir = Math::octahedronMappingDecode( otherUv );
-
-                        const Real dotProduct = directionVector.dotProduct( otherDir );
-                        if( dotProduct > 0 )
-                            ++numTaps;
-                    }
-                }
-
-                maxNumTaps = std::max( numTaps, maxNumTaps );
-            }
-        }
-
-        return maxNumTaps;
-    }
-    //-------------------------------------------------------------------------
-    void IrradianceField::fillIntegrationWeights( float2 *RESTRICT_ALIAS outBuffer, uint32 probeRes,
-                                                  uint32 maxTapsPerPixel )
-    {
-        float2 *RESTRICT_ALIAS updateData = reinterpret_cast<float2 * RESTRICT_ALIAS>( outBuffer );
-#if OGRE_DEBUG_MODE >= OGRE_DEBUG_LOW
-        const float2 *RESTRICT_ALIAS updateDataStart = updateData;
-#endif
-
-        for( size_t y = 0u; y < probeRes; ++y )
-        {
-            for( size_t x = 0u; x < probeRes; ++x )
-            {
-                Vector2 uvOct = Vector2( (Real)x, (Real)y );
-                uvOct /= static_cast<float>( probeRes );
-                Vector3 directionVector = Math::octahedronMappingDecode( uvOct );
-
-                float2 *RESTRICT_ALIAS updateDataCheckpoint = updateData;
-
-                float accumWeight = 0.0f;
-
-                for( size_t otherY = 0u; otherY < probeRes; ++otherY )
-                {
-                    for( size_t otherX = 0u; otherX < probeRes; ++otherX )
-                    {
-                        Vector2 otherUv = Vector2( (Real)otherX, (Real)otherY );
-                        otherUv /= static_cast<float>( probeRes );
-                        Vector3 otherDir = Math::octahedronMappingDecode( otherUv );
-
-                        const Real dotProduct = directionVector.dotProduct( otherDir );
-                        if( dotProduct > 0 )
-                        {
-                            updateData->x = static_cast<float>( otherY * probeRes + otherX );
-                            updateData->y = dotProduct;
-                            ++updateData;
-                            accumWeight += dotProduct;
-                        }
-                    }
-                }
-
-                const uint32 numTaps = static_cast<uint32>( updateData - updateDataCheckpoint );
-
-                OGRE_ASSERT_LOW( accumWeight > 0 &&
-                                 "accumWeight can't be 0. It must've at least evalute to itself!" );
-
-                // Normalize weights
-                updateData = updateDataCheckpoint;
-                const float invAccumWeight = 1.0f / accumWeight;
-                for( size_t i = 0u; i < numTaps; ++i )
-                {
-                    updateData->y *= invAccumWeight;
-                    ++updateData;
-                }
-
-                const uint32 maxIntegrationTapsPerPixel = maxTapsPerPixel;
-                for( size_t i = numTaps; i < maxIntegrationTapsPerPixel; ++i )
-                {
-                    updateData->x = float( y * probeRes + x );
-                    updateData->y = 0;
-                    ++updateData;
-                }
-            }
-        }
-
-        OGRE_ASSERT_LOW( (size_t)( updateData - updateDataStart ) <=
-                         ( probeRes * probeRes * maxTapsPerPixel ) );
-    }
-    //-------------------------------------------------------------------------
     void IrradianceField::setIrradianceFieldGenParams()
     {
-        if( mSettings.isRaster() )
-        {
-            // Avoid Valgrind from complaining when we copy the whole struct to GPU for the integrator
-            silent_memset( &mIfGenParams, 0, sizeof( mIfGenParams ) );
-            return;
-        }
-
         const uint32 depthProbeRes = mSettings.mDepthProbeResolution;
         const uint32 irradProbeRes = mSettings.mIrradianceResolution;
         const uint32 numRaysPerProbe = mSettings.getNumRaysPerProbe();
@@ -504,14 +337,10 @@ namespace Ogre
                                       VctLighting *vctLighting )
     {
         mSettings = settings;
-        OGRE_ASSERT_LOW( mSettings.isRaster() || mSettings.getNumRaysPerProbe() <= 1024u );
+        OGRE_ASSERT_LOW( mSettings.getNumRaysPerProbe() <= 1024u );
 
-        OGRE_ASSERT_LOW( ( vctLighting || mSettings.isRaster() ) &&
-                         "vctLighting param must be provided when not using rasterization" );
-        if( !mSettings.isRaster() )
-            mVctLighting = vctLighting;
-        else
-            mVctLighting = 0;
+        OGRE_ASSERT_LOW( vctLighting && "vctLighting param must be provided" );
+        mVctLighting = vctLighting;
         mFieldOrigin = fieldOrigin;
         mFieldSize = fieldSize;
 
@@ -528,18 +357,6 @@ namespace Ogre
         mRefinesOwed = mTargetSamples - 1u;
         createTextures();
         setIrradianceFieldGenParams();
-
-        if( mSettings.isRaster() )
-        {
-            if( !mIfRaster )
-                mIfRaster = OGRE_NEW IrradianceFieldRaster( this );
-            mIfRaster->createWorkspace();
-        }
-        else
-        {
-            delete mIfRaster;
-            mIfRaster = 0;
-        }
     }
     //-------------------------------------------------------------------------
     void IrradianceField::createTextures()
@@ -580,19 +397,6 @@ namespace Ogre
         mDepthVarianceTex->scheduleTransitionTo( GpuResidency::Resident );
 
         VaoManager *vaoManager = textureManager->getVaoManager();
-
-        // Upstream's per-texel integration taps: the RASTER path's only (its cubemaps
-        // write one value per texel and its IntegrationOnly workspace convolves them).
-        // The voxel path integrates every texel from every ray in the generation job.
-        if( mSettings.isRaster() )
-        {
-            mDepthTapsIntegrationBuffer = setupIntegrationTaps(
-                vaoManager, mSettings.mDepthProbeResolution, depthWidth, mDepthIntegrationJob,
-                mIfGenParamsBuffer, mDepthMaxIntegrationTapsPerPixel );
-            mColourTapsIntegrationBuffer = setupIntegrationTaps(
-                vaoManager, mSettings.mIrradianceResolution, irradWidth, mColourIntegrationJob,
-                mIfGenParamsBuffer, mColourMaxIntegrationTapsPerPixel );
-        }
 
         setupBorderMirrorParams( mSettings.getBorderedDepthResolution(), mDepthVarianceTex->getWidth(),
                                  mIfdDepthBorderMirrorParamsBuffer, mDepthMirrorBorderJob );
@@ -660,16 +464,6 @@ namespace Ogre
             vaoManager->destroyTexBuffer( mDirectionsBuffer );
             mDirectionsBuffer = 0;
         }
-        if( mDepthTapsIntegrationBuffer )
-        {
-            vaoManager->destroyTexBuffer( mDepthTapsIntegrationBuffer );
-            mDepthTapsIntegrationBuffer = 0;
-        }
-        if( mColourTapsIntegrationBuffer )
-        {
-            vaoManager->destroyTexBuffer( mColourTapsIntegrationBuffer );
-            mColourTapsIntegrationBuffer = 0;
-        }
     }
     //-------------------------------------------------------------------------
     void IrradianceField::setFieldVolume( const Vector3 &fieldOrigin, const Vector3 &fieldSize )
@@ -683,8 +477,7 @@ namespace Ogre
         setWholeWork();
         mWorkMode = IntegrateFresh;
         mRefinesOwed = mTargetSamples - 1u;
-        if( !mSettings.isRaster() )
-            invalidateAllProbes();
+        invalidateAllProbes();
 
         // The same enlargement initialize() applies, for the same reason (limited
         // information at the borders), so that a moved field is placed exactly as a
@@ -696,17 +489,15 @@ namespace Ogre
         if( mDebugIfdProbeVisualizer )
             placeDebugVisualizer();
 
-        // A raster field's probe cameras are derived from mFieldOrigin/mFieldSize on
-        // every renderProbes() call, so there is nothing else to do for it; the voxel
-        // source's probe-to-voxel transform lives in the generation params and must be
+        // The probe-to-voxel transform lives in the generation params and must be
         // re-derived (the voxelizer may have moved too, which is the whole point).
-        if( !mSettings.isRaster() && mVctLighting )
+        if( mVctLighting )
             setIrradianceFieldGenParams();
     }
     //-------------------------------------------------------------------------
     void IrradianceField::bindChainToGenerationJob()
     {
-        OGRE_ASSERT_LOW( mVctLighting && !mSettings.isRaster() );
+        OGRE_ASSERT_LOW( mVctLighting );
 
         // The job's texture units, in the order the shader declares them (the same
         // order VctLighting::setupBounceTextures binds the bounce job's): unit 0 the
@@ -827,7 +618,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void IrradianceField::setVctLighting( VctLighting *vctLighting )
     {
-        if( mSettings.isRaster() || !vctLighting || !mGenerationJob )
+        if( !vctLighting || !mGenerationJob )
             return;
 
         mVctLighting = vctLighting;
@@ -911,7 +702,6 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void IrradianceField::scrollWindow( const int32 delta[3] )
     {
-        OGRE_ASSERT_LOW( !mSettings.isRaster() );
         const Vector3 spacing = getProbeSpacing();
         uint32 enteredLo[3];   // per axis: the first ENTERED slot (valid where delta != 0)
         uint32 enteredNum[3];
@@ -996,51 +786,35 @@ namespace Ogre
         probesPerFrame = std::min( totalNumProbes - mNumProbesProcessed, probesPerFrame );
 
         // THIS DISPATCH'S OWN PARAMETER BUFFER (the ring's reason is at its declaration).
-        ConstBufferPacked *paramsBuffer = mIfGenParamsBuffer;
-        if( !mSettings.isRaster() )
+        VaoManager *vaoManager = mRoot->getRenderSystem()->getVaoManager();
+        if( vaoManager->getFrameCount() != mIfGenParamsRingFrame )
         {
-            VaoManager *vaoManager = mRoot->getRenderSystem()->getVaoManager();
-            if( vaoManager->getFrameCount() != mIfGenParamsRingFrame )
-            {
-                mIfGenParamsRingFrame = vaoManager->getFrameCount();
-                mIfGenParamsRingNext = 0u;
-            }
-            if( mIfGenParamsRingNext >= mIfGenParamsRing.size() )
-            {
-                mIfGenParamsRing.push_back( vaoManager->createConstBuffer(
-                    sizeof( IrradianceFieldGenParams ), BT_DYNAMIC_PERSISTENT, 0, false ) );
-            }
-            paramsBuffer = mIfGenParamsRing[mIfGenParamsRingNext++];
-            mGenerationJob->setConstBuffer( 0, paramsBuffer );
+            mIfGenParamsRingFrame = vaoManager->getFrameCount();
+            mIfGenParamsRingNext = 0u;
         }
+        if( mIfGenParamsRingNext >= mIfGenParamsRing.size() )
+        {
+            mIfGenParamsRing.push_back( vaoManager->createConstBuffer(
+                sizeof( IrradianceFieldGenParams ), BT_DYNAMIC_PERSISTENT, 0, false ) );
+        }
+        ConstBufferPacked *paramsBuffer = mIfGenParamsRing[mIfGenParamsRingNext++];
+        mGenerationJob->setConstBuffer( 0, paramsBuffer );
         IrradianceFieldGenParams *ifGenParams = reinterpret_cast<IrradianceFieldGenParams *>(
             paramsBuffer->map( 0, paramsBuffer->getNumElements() ) );
 
         // Most GPUs allow up to 65535 thread groups per dimension
-        uint32 numThreadGroupsX, numThreadGroupsY;
-        if( !mSettings.isRaster() )
-        {
-            // Jahshaka (PHOTON-FIELD-ROTATE-1): ONE WORK GROUP PER PROBE, one thread per
-            // ray (setIrradianceFieldGenParams). Any probe count dispatches (upstream's
-            // ray-count arithmetic could dispatch zero groups and throw); groups past
-            // the work's end exit at once (windowOffset.w).
-            const uint32 numRays = mSettings.getNumRaysPerProbe();
-            mGenerationJob->setThreadsPerGroup( std::min( numRays, 1024u ), 1u, 1u );
-            numThreadGroupsY = probesPerFrame / 65535u + 1u;
-            numThreadGroupsX = ( probesPerFrame + numThreadGroupsY - 1u ) / numThreadGroupsY;
-            mGenerationJob->setNumThreadGroups( numThreadGroupsX, numThreadGroupsY, 1u );
-        }
-        else
-        {
-            // The raster path's integration jobs, one probe per group (the voxel path
-            // never dispatches them).
-            numThreadGroupsY = probesPerFrame / 65535u + 1u;
-            numThreadGroupsX = probesPerFrame / numThreadGroupsY;
-            mDepthIntegrationJob->setNumThreadGroups( numThreadGroupsX, numThreadGroupsY, 1u );
-            mColourIntegrationJob->setNumThreadGroups( numThreadGroupsX, numThreadGroupsY, 1u );
-        }
+        // Jahshaka (PHOTON-FIELD-ROTATE-1): ONE WORK GROUP PER PROBE, one thread per
+        // ray (setIrradianceFieldGenParams). Any probe count dispatches (upstream's
+        // ray-count arithmetic could dispatch zero groups and throw); groups past
+        // the work's end exit at once (windowOffset.w).
+        const uint32 numRays = mSettings.getNumRaysPerProbe();
+        mGenerationJob->setThreadsPerGroup( std::min( numRays, 1024u ), 1u, 1u );
+        const uint32 numThreadGroupsY = probesPerFrame / 65535u + 1u;
+        const uint32 numThreadGroupsX =
+            ( probesPerFrame + numThreadGroupsY - 1u ) / numThreadGroupsY;
+        mGenerationJob->setNumThreadGroups( numThreadGroupsX, numThreadGroupsY, 1u );
 
-        if( !mSettings.isRaster() && mVctLighting )
+        if( mVctLighting )
         {
             // THE CHAIN AS IT IS NOW (Jahshaka, PHOTON-READER-1): every cascade's volumes
             // and placement, re-read per dispatch. The outer cascades scroll and rebuild
@@ -1105,16 +879,9 @@ namespace Ogre
 
         paramsBuffer->unmap( UO_KEEP_PERSISTENT );
 
-        if( !mSettings.isRaster() )
-        {
-            mGenerationWorkspace->_beginUpdate( false );
-            mGenerationWorkspace->_update();
-            mGenerationWorkspace->_endUpdate( false );
-        }
-        else
-        {
-            mIfRaster->renderProbes( probesPerFrame );
-        }
+        mGenerationWorkspace->_beginUpdate( false );
+        mGenerationWorkspace->_update();
+        mGenerationWorkspace->_endUpdate( false );
 
         mNumProbesProcessed += probesPerFrame;
     }
