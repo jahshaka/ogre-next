@@ -151,7 +151,7 @@ namespace Ogre
             /// binds from offset until the end of the buffer.
             size_t sizeBytes;
 
-            /** JAHSHAKA PATCH 0041 — `buffer` alone is not an identity.
+            /** JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041) — `buffer` alone is not an identity.
             @remarks
                 HlmsManager caches whole descriptor sets keyed on these slots and nothing
                 invalidates an entry when a buffer is destroyed, so a new buffer handed the

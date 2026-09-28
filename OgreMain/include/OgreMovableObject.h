@@ -121,7 +121,7 @@ namespace Ogre
         // One for each submesh/Renderable
         FastArray<Real> const *mLodMesh;
         unsigned char          mCurrentMeshLod;
-        /// JAHSHAKA (ogre-patch 0075): the LAST LEVEL A BANDED PASS CHOSE for
+        /// JAHSHAKA (fork 5230c9390+8282f6d70 (was 0075)): the LAST LEVEL A BANDED PASS CHOSE for
         /// this object — the direction state of the hysteresis band, and only
         /// that (what is DRAWN is `mCurrentMeshLod`, which every pass writes).
         /// 0xFF = no banded pass has seen this object yet. Costs nothing: it
@@ -248,7 +248,7 @@ namespace Ogre
 
         unsigned char getCurrentMeshLod() const { return mCurrentMeshLod; }
 
-        /** JAHSHAKA (ogre-patch 0085): sets the mesh LOD level this object is
+        /** JAHSHAKA (fork 5230c9390 (was 0085)): sets the mesh LOD level this object is
             DRAWN at, for a pass that chooses the level itself instead of
             deriving it from a camera.
         @remarks

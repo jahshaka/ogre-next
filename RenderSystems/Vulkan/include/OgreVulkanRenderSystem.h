@@ -106,7 +106,7 @@ namespace Ogre
 
         VulkanDevice *mDevice;
 
-        /// Jahshaka patch 0072: the "device lost, not recreated" line is said once.
+        /// Jahshaka fork d014b064f+1bccc3f93 (was 0072): the "device lost, not recreated" line is said once.
         bool mReportedDeviceLost = false;
 
         VulkanCache *mCache;
@@ -153,7 +153,7 @@ namespace Ogre
         void destroyVkResources1();
 
 #ifdef JAH_GPU_TIMESTAMPS
-        // ---- JAHSHAKA patch 0027: GPU timestamp sampling ------------------
+        // ---- JAHSHAKA fork 1a81f866a+1bccc3f93 (was 0027): GPU timestamp sampling ------------------
         //
         // Upstream leaves initGPUProfiling / beginGPUSampleProfile /
         // endGPUSampleProfile as empty stubs on Vulkan, so there is no GPU time
@@ -326,7 +326,7 @@ namespace Ogre
         VertexElementType getColourVertexElementType() const override;
 
         void _dispatch( const HlmsComputePso &pso ) override;
-        /// Jahshaka patch 0032 — GPU-driven dispatch, plus the compute-write ->
+        /// Jahshaka fork 1bccc3f93+a98e2b0af (was 0032) — GPU-driven dispatch, plus the compute-write ->
         /// indirect-read barrier BarrierSolver cannot express.
         void _dispatchIndirect( const HlmsComputePso &pso, BufferPacked *indirectBuffer,
                                 size_t offsetBytes, bool issueBarrier ) override;

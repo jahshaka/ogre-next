@@ -463,7 +463,7 @@ namespace Ogre
 
         // Add some padding.
         //
-        // Jahshaka patch 0049: ONCE. The padding exists so that adjacent probe
+        // Jahshaka fork 618d95cca (was 0049): ONCE. The padding exists so that adjacent probe
         // areas overlap instead of leaving a crack between them, and so that a
         // shape fitted to its area still contains it — both properties of the
         // boxes the CALLER authored. A caller re-publishing boxes this probe

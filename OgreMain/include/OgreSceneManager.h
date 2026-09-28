@@ -148,7 +148,7 @@ namespace Ogre
     struct UpdateLodRequest : public CullFrustumRequest
     {
         Real lodBias;
-        /// JAHSHAKA (ogre-patch 0075): the requesting PASS's switch band.
+        /// JAHSHAKA (fork 5230c9390+8282f6d70 (was 0075)): the requesting PASS's switch band.
         /// @see LodStrategy::lodSet.
         Real lodHysteresis;
 
@@ -1938,7 +1938,7 @@ namespace Ogre
 
         /** Updates the Lod values of all objects relative to the given camera.
         @param lodHysteresis
-            JAHSHAKA (ogre-patch 0075): the calling PASS's switch band, as a
+            JAHSHAKA (fork 5230c9390+8282f6d70 (was 0075)): the calling PASS's switch band, as a
             fraction of the threshold being crossed. 0 — the default, and what
             every caller but Jahshaka's watched views passes — is upstream's
             behaviour to the bit. @see LodStrategy::lodSet.

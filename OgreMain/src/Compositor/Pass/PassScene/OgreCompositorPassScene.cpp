@@ -241,7 +241,7 @@ namespace Ogre
             setViewportSizeToViewport( 0u, &localVp );
             mLodCamera->_notifyViewport( &localVp );
 
-            // JAHSHAKA (ogre-patch 0075): ...and THIS pass's switch band, which
+            // JAHSHAKA (fork 5230c9390+8282f6d70 (was 0075)): ...and THIS pass's switch band, which
             // is 0 for every pass that has not asked for one.
             // JAHSHAKA (SHADOW-LOD-1): ...and not over the queues it skips.
             sceneManager->updateAllLods( usedLodCamera, mDefinition->mLodBias,  //

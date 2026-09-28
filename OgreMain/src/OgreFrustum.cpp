@@ -68,7 +68,7 @@ namespace Ogre
         mCustomProjMatrix( false ),
         mFrustumExtentsManuallySet( false ),
         mFrustrumExtentsType( FET_PROJ_PLANE_POS ),
-        // Jahshaka patch 0078: the four extents were the only members of this
+        // Jahshaka fork 6130df9d1 (was 0078): the four extents were the only members of this
         // class left indeterminate by the constructor, and they are readable
         // from outside (getFrustumExtents) before anything writes them.
         mLeft( 0 ),
@@ -350,7 +350,7 @@ namespace Ogre
             bottom = bottomRight.y / bottomRight.w;
 
             // ...AND PUBLISH THEM, exactly as the two branches below do
-            // (Jahshaka patch 0078). Without this, mLeft/mRight/mTop/mBottom —
+            // (Jahshaka fork 6130df9d1 (was 0078)). Without this, mLeft/mRight/mTop/mBottom —
             // which is what getFrustumExtents() returns and the only route any
             // caller has to this frustum's shape — keep whatever they held
             // before the custom matrix was set: the values of the AUTO frustum

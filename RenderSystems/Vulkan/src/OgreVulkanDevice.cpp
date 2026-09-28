@@ -290,7 +290,7 @@ namespace Ogre
                 appInfo.pApplicationName = appName.c_str();
             appInfo.pEngineName = "Ogre3D Vulkan Engine";
             appInfo.engineVersion = OGRE_VERSION;
-            // Jahshaka (ogre-patch 0038): ask for Vulkan 1.2 when the LOADER can give
+            // Jahshaka (fork d014b064f (was 0038)): ask for Vulkan 1.2 when the LOADER can give
             // it. VK_KHR_acceleration_structure and VK_KHR_ray_query are only usable
             // above 1.0, and the instance's apiVersion is the ceiling for the whole
             // process. vkEnumerateInstanceVersion is itself a 1.1 entry point, so a
@@ -589,7 +589,7 @@ namespace Ogre
     {
         if( mDevice )
         {
-            // NOT ON A LOST DEVICE (Jahshaka patch 0072). The spec says this
+            // NOT ON A LOST DEVICE (Jahshaka fork d014b064f+1bccc3f93 (was 0072)). The spec says this
             // returns VK_ERROR_DEVICE_LOST; this driver may instead block until a
             // hung channel is reclaimed, which after an Xid 109 is not bounded.
             // Everything submitted is finished by definition once the device is
@@ -619,7 +619,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanDevice::fillDeviceFeatures()
     {
-        // Jahshaka (ogre-patch 0068): one implementation, shared with the exported
+        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): one implementation, shared with the exported
         // creation request - see fillDeviceFeaturesFor below.
         fillDeviceFeaturesFor( mPhysicalDevice, mDeviceFeatures );
     }
@@ -702,7 +702,7 @@ namespace Ogre
         VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures,
         RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures )
     {
-        // Jahshaka (ogre-patch 0068): this WAS fillDeviceFeatures2()'s body. It is a
+        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): this WAS fillDeviceFeatures2()'s body. It is a
         // static now, over an explicitly given extension list, because the OpenXR route
         // must build the very same chain BEFORE any VulkanDevice exists - and because a
         // second, hand-copied chain would be a workaround with a shelf life.
@@ -745,7 +745,7 @@ namespace Ogre
             lastNext = &deviceCacheControlFeatures.pNext;
         }
 
-        // Jahshaka (ogre-patch 0038): the ray-query feature structs. Chained only
+        // Jahshaka (fork d014b064f (was 0038)): the ray-query feature structs. Chained only
         // when every extension they belong to was requested; the structs live on the
         // device object so the chain survives until vkCreateDevice reads it.
         memset( &rayQueryFeatures, 0, sizeof( rayQueryFeatures ) );
@@ -790,7 +790,7 @@ namespace Ogre
         outExtraFeatures.pipelineCreationCacheControl =
             deviceCacheControlFeatures.pipelineCreationCacheControl;
 
-        // Jahshaka (ogre-patch 0038): the query above FILLED these structs with
+        // Jahshaka (fork d014b064f (was 0038)): the query above FILLED these structs with
         // everything the driver can do, and this same chain is handed straight to
         // vkCreateDevice - so anything left set here is ENABLED. Keep exactly the
         // four bits a ray-query tier needs and clear the rest, so enabling the tier
@@ -854,7 +854,7 @@ namespace Ogre
         VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
         VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures )
     {
-        // Jahshaka (ogre-patch 0068): the chain is built by the shared builder above.
+        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the chain is built by the shared builder above.
         return buildFeatureChain( mInstance->mVkInstance, mPhysicalDevice, mDeviceExtensions,
                                   deviceFeatures2, device16BitStorageFeatures,
                                   deviceShaderFloat16Int8Features, deviceCacheControlFeatures,
@@ -881,7 +881,7 @@ namespace Ogre
         const FastArray<VkExtensionProperties> &availableExtensions,
         VulkanDeviceCreationRequest &outRequest )
     {
-        // Jahshaka (ogre-patch 0068): createDevice() for a device we are NOT the ones
+        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): createDevice() for a device we are NOT the ones
         // creating. Same extension list, same base features, same feature chain, same
         // order - the only difference is that the result is handed back to the caller
         // instead of to vkCreateDevice.
@@ -915,7 +915,7 @@ namespace Ogre
             outRequest.features2.features = outRequest.features;
 #ifdef VK_KHR_present_mode_fifo_latest_ready
             // createDevice()'s own ordering: this one goes on AFTER the query, at the
-            // head of the chain (patch 0013).
+            // head of the chain (fork d014b064f+1a64cd1d8 (was 0013)).
             bool bHasFifoLatestReady = false;
             for( const char *ext : outRequest.extensions )
             {
@@ -1028,7 +1028,7 @@ namespace Ogre
 
             // Filter wrongly-provided extensions
             //
-            // Jahshaka (ogre-patch 0068): the per-extension "Found device extension"
+            // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the per-extension "Found device extension"
             // line is NOT repeated here. On the OpenXR route the caller has already
             // enumerated and logged the very same list to build the creation request,
             // so this loop printed every name on this device a second time.
@@ -1063,7 +1063,7 @@ namespace Ogre
             fillDeviceFeatures2( deviceFeatures2, device16BitStorageFeatures,
                                  deviceShaderFloat16Int8Features, deviceCacheControlFeatures );
 
-            // Jahshaka (ogre-patch 0068): the call above asked the PHYSICAL DEVICE what
+            // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the call above asked the PHYSICAL DEVICE what
             // it SUPPORTS. On an external device that is not what was ENABLED: the
             // device belongs to somebody else (an OpenXR runtime), and believing the
             // hardware makes Ogre compile shaders against features - shaderFloat16 and
@@ -1254,7 +1254,7 @@ namespace Ogre
         VkPhysicalDevice physicalDevice, const FastArray<VkExtensionProperties> &availableExtensions,
         FastArray<const char *> &outExtensions )
     {
-        // Jahshaka (ogre-patch 0068): lifted verbatim out of createDevice() so that an
+        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): lifted verbatim out of createDevice() so that an
         // EXTERNAL device creator (OpenXR's xrCreateVulkanDeviceKHR) asks for exactly
         // what Ogre would have asked for. createDevice() is now its only other caller,
         // which is what keeps the two lists from drifting apart.
@@ -1289,7 +1289,7 @@ namespace Ogre
             // purpose: the name macro lives behind VK_ENABLE_BETA_EXTENSIONS.
             else if( extensionName == "VK_KHR_portability_subset" )
                 outExtensions.push_back( "VK_KHR_portability_subset" );
-            // Jahshaka (ogre-patch 0038): the hardware ray-query set. Every one of
+            // Jahshaka (fork d014b064f (was 0038)): the hardware ray-query set. Every one of
             // these is requested ONLY if the driver advertises it, exactly like the
             // names above; on a device without them nothing changes. Ogre itself uses
             // none of them - they exist so a Jahshaka-owned compute pass can build
@@ -1329,9 +1329,9 @@ namespace Ogre
 
         outExtensions.push_back( VK_KHR_SWAPCHAIN_EXTENSION_NAME );
 
-        // Jahshaka patch 0013: fifo_latest_ready = vsync without the FIFO
+        // Jahshaka fork d014b064f+1a64cd1d8 (was 0013): fifo_latest_ready = vsync without the FIFO
         // queue backlog (NVIDIA xcb has no MAILBOX). A separate pass on
-        // purpose - this block must stay clear of patch 0006's context.
+        // purpose - this block must stay clear of fork d014b064f (was 0006)'s context.
         // String literals like portability_subset: the name macros need a
         // recent SDK and the KHR/EXT spellings alias the same enum value.
         for( const VkExtensionProperties &ext : availableExtensions )
@@ -1394,7 +1394,7 @@ namespace Ogre
     void VulkanDevice::createDevice( const FastArray<VkExtensionProperties> &availableExtensions,
                                      uint32 maxComputeQueues, uint32 maxTransferQueues )
     {
-        // Jahshaka (ogre-patch 0068): the list itself lives in fillDeviceExtensionRequest().
+        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the list itself lives in fillDeviceExtensionRequest().
         FastArray<const char *> deviceExtensions;
         fillDeviceExtensionRequest( mPhysicalDevice, availableExtensions, deviceExtensions );
 
@@ -1435,7 +1435,7 @@ namespace Ogre
         VkPhysicalDeviceShaderFloat16Int8Features deviceShaderFloat16Int8Features;
         VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT deviceCacheControlFeatures;
 #ifdef VK_KHR_present_mode_fifo_latest_ready
-        // Jahshaka patch 0013: the present mode is legal only when its feature
+        // Jahshaka fork d014b064f+1a64cd1d8 (was 0013): the present mode is legal only when its feature
         // was enabled at device creation. Guarded on the SDK macro so an older
         // SDK compiles this patch to nothing (and the window side then never
         // selects the mode, because the extension was never requested).

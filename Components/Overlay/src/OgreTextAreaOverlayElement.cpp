@@ -616,7 +616,7 @@ namespace Ogre
                 break;
             }
 
-            // Jahshaka patch 0014: the font must be LOADED before
+            // Jahshaka fork 6130df9d1 (was 0014): the font must be LOADED before
             // OverlayElement::_update() runs updatePositionGeometry() —
             // otherwise the one and only geometry build (for a caption set
             // once) uses getGlyphAspectRatio()==1.0 for every missing

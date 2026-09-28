@@ -446,7 +446,7 @@ namespace Ogre
         */
         void addArrayBinding( DescBindingTypes::DescBindingTypes bindingType, ArrayDesc arrayDesc );
 
-        /** Jahshaka ogre-patch 0063: read access to the array bindings.
+        /** Jahshaka fork 5bfe24cd9 (was 0063): read access to the array bindings.
 
             A shader whose root layout is DISCOVERED by reflecting its own SPIR-V
             (see GpuProgram::setAutoReflectArrayBindingsInRootLayout) has to be

@@ -74,7 +74,7 @@ namespace Ogre
     {
         if( mDevice )
         {
-            // NOT ON A LOST DEVICE (Jahshaka patch 0072) -- see VulkanDevice::destroy.
+            // NOT ON A LOST DEVICE (Jahshaka fork d014b064f+1bccc3f93 (was 0072)) -- see VulkanDevice::destroy.
             if( !mOwnerDevice || !mOwnerDevice->isDeviceLost() )
                 vkDeviceWaitIdle( mDevice );  // intentionally ignore result in destroy()
 

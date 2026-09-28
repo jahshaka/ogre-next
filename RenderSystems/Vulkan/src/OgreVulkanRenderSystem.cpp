@@ -1433,7 +1433,7 @@ namespace Ogre
         if( mDevice == nullptr )
             return false;
 
-        // Jahshaka (ogre-patch 0068): an EXTERNAL device or instance used to return
+        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): an EXTERNAL device or instance used to return
         // false here UNCONDITIONALLY - and Root::_fireFrameStarted treats a false from
         // validateDevice as a VETO on the frame (OgreRoot.cpp), so an engine booted on
         // somebody else's VkDevice (the OpenXR route: the runtime creates the device via
@@ -1474,7 +1474,7 @@ namespace Ogre
             }
         }
 
-        // A LOST DEVICE IS NOT RECREATED (Jahshaka patch 0072). handleDeviceLost()
+        // A LOST DEVICE IS NOT RECREATED (Jahshaka fork d014b064f+1bccc3f93 (was 0072)). handleDeviceLost()
         // ends in VulkanDevice::setPhysicalDevice -> destroy() -> vkDestroyDevice,
         // and on NVIDIA 595.84 after an Xid 109 CTX SWITCH TIMEOUT that call does
         // not return: it spins at 100 % of a core inside libnvidia-glcore for
@@ -2220,7 +2220,7 @@ namespace Ogre
                                                 BufferPacked *indirectBuffer, size_t offsetBytes,
                                                 bool issueBarrier )
     {
-        // JAHSHAKA PATCH 0032 — GPU-driven compute dispatch.
+        // JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0032) — GPU-driven compute dispatch.
         //
         // The argument buffer has to be a real VkBuffer. Note that Ogre's own
         // IndirectBufferPacked is NOT one on this pin: VulkanVaoManager forces
@@ -2816,7 +2816,7 @@ namespace Ogre
 #endif
     }
     //-------------------------------------------------------------------------
-    // JAHSHAKA patch 0027: the GPU timestamp half of these hooks. Upstream
+    // JAHSHAKA fork 1a81f866a+1bccc3f93 (was 0027): the GPU timestamp half of these hooks. Upstream
     // leaves all four empty on Vulkan, so nothing in this render system can say
     // what the GPU spent on a pass. See OgreVulkanRenderSystem.h for the design
     // and for why every line of it is behind JAH_GPU_TIMESTAMPS.
@@ -3048,7 +3048,7 @@ namespace Ogre
             return;
         }
 #ifdef JAH_GPU_TIMESTAMPS
-        // JAHSHAKA patch 0027 — the readback channel for the GPU timestamps
+        // JAHSHAKA fork 1a81f866a+1bccc3f93 (was 0027) — the readback channel for the GPU timestamps
         // above. getCustomAttribute is used rather than new virtuals so the
         // patch adds NO OgreMain ABI surface, and the names simply do not exist
         // in a build without the define: the host asks for "JahGpuTimestamps",
@@ -4216,7 +4216,7 @@ namespace Ogre
         if( mGlobalTable.bakedDescriptorSets[BakedDescriptorSets::Samplers] ==
             &vulkanSet->mWriteDescSet )
         {
-            // JAHSHAKA PATCH 0041. Was `= &vulkanSet->mWriteDescSet`, i.e. the address of the
+            // JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041). Was `= &vulkanSet->mWriteDescSet`, i.e. the address of the
             // object being destroyed on the very next line -- a dangling pointer that the
             // comparison in _setSamplers then matches against a recycled allocation, skipping the
             // rebind. The compute twin eight lines below has always cleared it correctly; this is

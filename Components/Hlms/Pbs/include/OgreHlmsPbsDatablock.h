@@ -402,7 +402,7 @@ namespace Ogre
         void    setSpecular( const Vector3 &specularColour );
         Vector3 getSpecular() const;
 
-        /** JAHSHAKA PATCH 0028 — THE ONE DEFINITION of "this material cannot
+        /** JAHSHAKA fork 36162ff37+16d8e29d4 (was 0028) — THE ONE DEFINITION of "this material cannot
             reflect anything", shared by the three setters that can cross it
             and by HlmsPbs::calculateHashForPreCreate, which turns it into the
             zero_specular_response shader property.

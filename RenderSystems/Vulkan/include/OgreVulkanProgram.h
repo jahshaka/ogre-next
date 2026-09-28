@@ -213,7 +213,7 @@ namespace Ogre
         bool mReflectArrayRootLayouts;
         bool mReplaceVersionMacro;
 
-        /// Jahshaka ogre-patch 0063. The microcode-cache key this program was
+        /// Jahshaka fork 5bfe24cd9 (was 0063). The microcode-cache key this program was
         /// LOOKED UP under, captured in loadFromSource() before anything is
         /// compiled.
         ///

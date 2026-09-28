@@ -506,7 +506,7 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void HlmsPbsDatablock::setSpecular( const Vector3 &specularColour )
     {
-        // JAHSHAKA PATCH 0028: kS is the term the reflection-probe gate is
+        // JAHSHAKA fork 36162ff37+16d8e29d4 (was 0028): kS is the term the reflection-probe gate is
         // decided on, so an edit that CROSSES it has to rebuild the shader, not
         // just the const buffer. Same shape as setClearCoat below: evaluate
         // before and after, flush only on a crossing, so the common case (an
@@ -533,7 +533,7 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     bool HlmsPbsDatablock::hasZeroSpecularResponse() const
     {
-        // JAHSHAKA PATCH 0028 — see the header's @remarks. This is the ONLY
+        // JAHSHAKA fork 36162ff37+16d8e29d4 (was 0028) — see the header's @remarks. This is the ONLY
         // place the rule is written down: HlmsPbs::calculateHashForPreCreate
         // and the three setters that can cross it all call this.
         const Real kEps = Real( 1e-4 );
@@ -645,7 +645,7 @@ namespace Ogre
     void HlmsPbsDatablock::setMetalness( float metalness )
     {
         assert( mWorkflow == MetallicWorkflow );
-        // JAHSHAKA PATCH 0028: metalness IS the authored F0 in this workflow,
+        // JAHSHAKA fork 36162ff37+16d8e29d4 (was 0028): metalness IS the authored F0 in this workflow,
         // i.e. half of the probe gate's predicate — see setSpecular.
         const bool bWasZeroSpecularResponse = hasZeroSpecularResponse();
         mFresnelR = metalness;
@@ -668,7 +668,7 @@ namespace Ogre
     void HlmsPbsDatablock::setFresnel( const Vector3 &fresnel, bool separateFresnel )
     {
         assert( mWorkflow != MetallicWorkflow );
-        // JAHSHAKA PATCH 0028: the authored F0 — the other half of the probe
+        // JAHSHAKA fork 36162ff37+16d8e29d4 (was 0028): the authored F0 — the other half of the probe
         // gate's predicate. See setSpecular. Folded into the flush this
         // function already owns, so a call can never flush twice.
         const bool bWasZeroSpecularResponse = hasZeroSpecularResponse();
