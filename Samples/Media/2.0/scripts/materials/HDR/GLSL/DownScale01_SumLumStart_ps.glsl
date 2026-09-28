@@ -46,7 +46,7 @@ vulkan( layout( ogre_P0 ) uniform Params { )
 	uniform vec4 viewportSize;
 vulkan( }; )
 
-// JAHSHAKA patch 0042 - A SAMPLE THAT IS NOT A NUMBER MUST NOT POISON THE FRAME.
+// JAHSHAKA fork feab041c6 (was 0042) - A SAMPLE THAT IS NOT A NUMBER MUST NOT POISON THE FRAME.
 //
 // This pass is the WHOLE SCENE's luminance measurement: it takes the mean of
 // log( luminance ) over a sparse grid, and DownScale02/03 then average those
@@ -93,7 +93,7 @@ float jahUsableLuminance( float lum )
 	// THE TEST IS ON THE BITS, NOT `lum == lum`, AND THAT IS NOT A STYLE CHOICE.
 	// Jahshaka measured (lane HDR-1, NVIDIA 595.84, Vulkan/SPIR-V) that `x == x`
 	// is FOLDED TO TRUE by the shader compiler on this stack: a deliberately
-	// absurd value placed on the NaN branch of patch 0034's guard in DownScale03
+	// absurd value placed on the NaN branch of fork feab041c6 (was 0034)'s guard in DownScale03
 	// never appeared in 120 frames that demonstrably carried NaN texels. An
 	// IEEE-754 float is a NaN exactly when its exponent is all ones and its
 	// mantissa is not zero, i.e. when the magnitude of its bit pattern exceeds

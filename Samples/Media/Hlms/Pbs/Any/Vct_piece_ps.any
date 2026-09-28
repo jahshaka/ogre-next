@@ -351,7 +351,7 @@
 
 			// THE SPECULAR CONE'S ESCAPE SEES THE ENVIRONMENT IN THE REFLECTED
 			// DIRECTION AT THE CONE'S OWN APERTURE (PHOTON-ENV-1) - the rule that
-			// ogre-patch 0048 used to apply downstream as a swap (the cone added a
+			// fork 4d5fbef16+8f09c0cd4 (was 0048) used to apply downstream as a swap (the cone added a
 			// flat ambient, exported what it added, and the probe piece traded it
 			// for the sky). Radiance, weighted by the share of the cone the voxels
 			// did not stop, beside the voxels' own share decoded by the volume's
@@ -383,7 +383,7 @@
 										 float( pixelData.perceptualRoughness ) ) * specAlpha;
 		@end
 
-			// JAHSHAKA PATCH 0077: THE FUDGE IS GONE, AT ITS CAUSE.
+			// JAHSHAKA fork 8f09c0cd4+155a56bf8 (was 0077): THE FUDGE IS GONE, AT ITS CAUSE.
 			// Upstream's comment here read "0.31831 = 1 / PI, but I'm not sure why
 			// is it even needed. It's clearly overbrightened when it's not there".
 			// It was needed because the light injection stored PI times the
@@ -442,7 +442,7 @@
 @end
 
 @piece( applyVoxelConeTracing )
-	// Jahshaka patch 0083: the cones get their own frame, and THE FRAME IS
+	// Jahshaka fork 8f09c0cd4 (was 0083): the cones get their own frame, and THE FRAME IS
 	// ANCHORED IN THE WORLD, not in the camera.
 	//
 	// Everything in this shader is in VIEW space -- the vertex shader
@@ -489,7 +489,7 @@
 
 	@property( !vct_disable_diffuse )
 		@property( irradiance_field )
-			// Jahshaka patch 0045: an irradiance field over PART of what the
+			// Jahshaka fork 8f09c0cd4 (was 0045): an irradiance field over PART of what the
 			// cones cover. With a cascade chain the field rides the innermost
 			// cascade only, so the cone diffuse is the answer for every pixel
 			// the field cannot reach and the two must be blended rather than

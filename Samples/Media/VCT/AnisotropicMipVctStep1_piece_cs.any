@@ -25,7 +25,7 @@
 	}
 
 	@insertpiece( DeclSRgbFuncs )
-	// JAHSHAKA PATCH 0080: THE STORE'S ENCODING FOLLOWS ITS FORMAT.
+	// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080): THE STORE'S ENCODING FOLLOWS ITS FORMAT.
 	// `uav0_orig_pf_srgb` is the property HlmsComputeJob derives from the pixel
 	// format of the texture actually bound, so this one branch covers both
 	// stores: an 8-bit UNORM_SRGB volume is written through the sRGB encode --

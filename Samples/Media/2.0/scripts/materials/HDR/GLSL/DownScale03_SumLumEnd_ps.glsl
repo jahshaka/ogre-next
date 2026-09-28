@@ -57,9 +57,9 @@ void main()
 	// so a chain that was already producing numbers produces exactly the same
 	// numbers. exposure.y is the log-luminance floor the clamp below already
 	// uses, i.e. what this pass would have written for a dark frame.
-	// JAHSHAKA patch 0042 - AN UNUSABLE MEASUREMENT MUST MOVE THE EXPOSURE NOWHERE.
+	// JAHSHAKA fork feab041c6 (was 0042) - AN UNUSABLE MEASUREMENT MUST MOVE THE EXPOSURE NOWHERE.
 	//
-	// Patch 0034 made a NaN survivable (it can no longer latch this 1x1 history
+	// fork feab041c6 (was 0034) made a NaN survivable (it can no longer latch this 1x1 history
 	// for ever) by reading it as exposure.y. That is the LOG-LUMINANCE FLOOR, so
 	// an unusable frame was read as 'the darkest scene this chain admits' - and
 	// exposure.x / exp( exposure.y ) is the LARGEST exposure the chain can
@@ -80,7 +80,7 @@ void main()
 	// history that is ALSO unusable, where there is nothing to hold.
 	//
 	// ON THE BITS, NOT `x == x`: measured on this stack (NVIDIA 595.84,
-	// Vulkan/SPIR-V), patch 0034's `x == x` tests are FOLDED TO TRUE by the
+	// Vulkan/SPIR-V), fork feab041c6 (was 0034)'s `x == x` tests are FOLDED TO TRUE by the
 	// shader compiler and never fire; what produced 0034's constant was the
 	// DRIVER's clamp( NaN, lo, hi ) returning lo, the same number by accident. A
 	// float is a NaN exactly when the magnitude of its bit pattern exceeds +Inf's,

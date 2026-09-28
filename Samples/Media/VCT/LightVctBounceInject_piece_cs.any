@@ -117,7 +117,7 @@
 	}
 
 	@insertpiece( DeclSRgbFuncs )
-	// JAHSHAKA PATCH 0080: THE STORE'S ENCODING FOLLOWS ITS FORMAT.
+	// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080): THE STORE'S ENCODING FOLLOWS ITS FORMAT.
 	// `uav0_orig_pf_srgb` is the property HlmsComputeJob derives from the pixel
 	// format of the texture actually bound, so this one branch covers both
 	// stores: an 8-bit UNORM_SRGB volume is written through the sRGB encode --
@@ -144,7 +144,7 @@
 
 	float4 albedoVal = OGRE_Load3D( voxelAlbedoTex, gl_GlobalInvocationID.xyz, 0 );
 	float4 normalVal = OGRE_Load3D( voxelNormalTex, gl_GlobalInvocationID.xyz, 0 );
-	// JAHSHAKA PATCH 0076: JACOBI, NOT ACCUMULATION.
+	// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): JACOBI, NOT ACCUMULATION.
 	//
 	// What this pass writes is  new = direct + rho * G( total )  -- the fixed point
 	// of the radiance in the volume, iterated once. The base term is therefore the
@@ -209,7 +209,7 @@
 	}
 
 	wshort3 voxelCelUvw = wshort3( gl_GlobalInvocationID.xyz );
-	OGRE_imageWrite3D4( lightVoxel, voxelCelUvw, jahStoreLight( currentLight ) );  // JAHSHAKA PATCH 0080
+	OGRE_imageWrite3D4( lightVoxel, voxelCelUvw, jahStoreLight( currentLight ) );  // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080)
 	@property( vct_anisotropic )
 		OGRE_imageWrite3D4( backVoxel, voxelCelUvw, float4( backLight.xyz, currentLight.w ) );
 	@end
