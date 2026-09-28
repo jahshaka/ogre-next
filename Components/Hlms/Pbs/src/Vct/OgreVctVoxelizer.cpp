@@ -228,17 +228,6 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    /// JAHSHAKA TEST HOOK: refuse every (mesh, level, submesh), which is the state a
-    /// device with no buffer device addresses is in for every mesh in the scene. It is
-    /// unreachable on hardware this engine ships on, and the path it exercises - a
-    /// build with items queued and NO geometry - used to segfault, so it needs a way to
-    /// be tested. Read per build, like the GI cascade fault hooks on the host side: a
-    /// getenv against a build that costs milliseconds is not a cost anyone can measure.
-    static bool jahRefuseGeometry()
-    {
-        return getenv( "JAH_VCT_REFUSE_GEOMETRY" ) != 0;
-    }
-    //-------------------------------------------------------------------------
     /// The normal / uv formats a geometry row can name, mirrored in
     /// Voxelizer_piece_cs.any. A FORMAT IS DATA, NOT A SHADER PERMUTATION: the old
     /// `compressed_vertex_format` property existed only because this class chose the
@@ -279,15 +268,6 @@ namespace Ogre
         if( !indexBuffer )
         {
             TODO_deal_no_index_buffer;
-            return false;
-        }
-
-        if( jahRefuseGeometry() )
-        {
-            LogManager::getSingleton().logMessage(
-                "WARNING: JAH_VCT_REFUSE_GEOMETRY: refusing mesh '" + mesh->getName() +
-                    "'. It will not contribute to GI.",
-                LML_CRITICAL );
             return false;
         }
 
