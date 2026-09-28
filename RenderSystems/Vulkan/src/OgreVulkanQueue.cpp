@@ -534,10 +534,16 @@ namespace Ogre
             {
                 if( !it->second )
                 {
-                    // bufferAccessFlags = VK_ACCESS_TRANSFER_WRITE_BIT;
-                    // We assume consecutive writes means we're writing to non-overlapping areas
-                    // Do not wait for previous transfers.
-                    bufferAccessFlags = 0;
+                    // Jahshaka: A SECOND WRITE TO A BUFFER IN ONE COPY SESSION WAITS FOR THE
+                    // FIRST. Upstream assumed consecutive writes to one buffer never overlap
+                    // and waited for nothing; they can: a buffer's CREATION upload and its first
+                    // update land in the same session and write the same bytes (the Atom late
+                    // list's params and count on their first frame - 14 WRITE_AFTER_WRITE
+                    // hits under synchronization validation, ATOM-BLACK-FRAMES-1), and the
+                    // order of the two copies is then undefined. The copy session carries no
+                    // byte ranges, so the dependency is per buffer: a TRANSFER -> TRANSFER
+                    // barrier, only on the second and later write of one buffer in a session.
+                    bufferAccessFlags = VK_ACCESS_TRANSFER_WRITE_BIT;
                 }
                 else
                     bufferAccessFlags = VK_ACCESS_TRANSFER_READ_BIT;
