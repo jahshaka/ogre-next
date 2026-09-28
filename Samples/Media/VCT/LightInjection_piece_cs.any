@@ -150,7 +150,7 @@
 	#define lightType uvwPos.w
 	#define spotDirection points[0].xyz
 	#define spotParams points[1]
-	// JAHSHAKA PATCH 0077: 1 / PI, WHICH IS WHAT THE NAME SAYS.
+	// JAHSHAKA fork 8f09c0cd4+155a56bf8 (was 0077): 1 / PI, WHICH IS WHAT THE NAME SAYS.
 	// Upstream defined `c_invPI` as PI and never used it. The direct term below
 	// needs exactly this factor -- see the unit chain there.
 	#define c_invPI 0.318309886f
@@ -160,7 +160,7 @@
 	// function the pixel's environment lobe reads (jah_diffuse_albedo.glsl).
 	@insertpiece( JahDiffuseAlbedo )
 	@insertpiece( DeclSRgbFuncs )
-	// JAHSHAKA PATCH 0080: THE STORE'S ENCODING FOLLOWS ITS FORMAT.
+	// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080): THE STORE'S ENCODING FOLLOWS ITS FORMAT.
 	// `uav0_orig_pf_srgb` is the property HlmsComputeJob derives from the pixel
 	// format of the texture actually bound, so this one branch covers both
 	// stores: an 8-bit UNORM_SRGB volume is written through the sRGB encode --
@@ -174,7 +174,7 @@
 	@else
 		#define jahStoreLight( x ) ( x )
 	@end
-	// JAHSHAKA PATCH 0080: the DIRECT volume keeps its 8-bit sRGB store and so
+	// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080): the DIRECT volume keeps its 8-bit sRGB store and so
 	// keeps its encode -- D is normalised to at most the ceiling by construction
 	// (VctLighting::update's auto multiplier), so nothing about it needs range.
 	@property( uav1_orig_pf_srgb )
@@ -302,7 +302,7 @@
 				marchEnd = 1.0f;
 			}
 
-			// JAHSHAKA PATCH 0077: THE VOXEL STORES RADIANCE. What a face reflects of this lamp
+			// JAHSHAKA fork 8f09c0cd4+155a56bf8 (was 0077): THE VOXEL STORES RADIANCE. What a face reflects of this lamp
 			// is rho * E / PI = rho * NdotL * D / PI (light.diffuse = D = PI * I in this tree),
 			// exactly what HlmsPbs computes for the direct lighting of the same surface
 			// (NdotL * D * kD); the store below is scaled by p_bakingMultiplier = PI / D_max.
@@ -422,9 +422,9 @@
 	// one-sided voxel's light unchanged); the anisotropic tiers keep the back beside it.
 	float4 injectedVoxel = float4( ( ( front + back ) * 0.5f + emissive ) * ( bm * c ), c );
 	OGRE_imageWrite3D4( lightVoxel, voxelCelUvw, jahStoreLight( injectedVoxel ) );
-	// JAHSHAKA PATCH 0076: the same value, kept apart as the bounce iteration's
+	// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): the same value, kept apart as the bounce iteration's
 	// D term. One extra image store; no copy and no second dispatch.
-	// JAHSHAKA PATCH 0080: encoded for ITS OWN format, which is not the total's
+	// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080): encoded for ITS OWN format, which is not the total's
 	// any more -- the total may be float and this one is always 8-bit sRGB.
 	@property( vct_keep_direct )
 		OGRE_imageWrite3D4( directVoxel, voxelCelUvw, jahStoreDirect( injectedVoxel ) );

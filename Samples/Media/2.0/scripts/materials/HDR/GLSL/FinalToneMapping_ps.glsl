@@ -48,7 +48,7 @@ vulkan_layout( ogre_t2 ) uniform texture2D bloomRt;
 vulkan( layout( ogre_s0 ) uniform sampler samplerPoint );
 vulkan( layout( ogre_s2 ) uniform sampler samplerBilinear );
 
-// JAHSHAKA (patch 0079, lane DITHER-1): the dither that makes this quad's
+// JAHSHAKA (fork feab041c6 (was 0079), lane DITHER-1): the dither that makes this quad's
 // 8-bit write honest. This is THE place a floating-point picture becomes
 // display codes in this engine -- every target this material ever writes is
 // 8-bit UNORM (the window, the offscreen render target, the VR eye image, the
@@ -65,7 +65,7 @@ vulkan( layout( ogre_P0 ) uniform Params { )
 	// clamped to "off", i.e. to the picture this engine drew before the
 	// dither existed. Neither failure can produce noise.
 	uniform float jahDitherOff;	// 0 = dither (normal), 1 = JAHSHAKA_NO_DITHER
-	// JAHSHAKA (patch 0082, lane BLOOM-AMOUNT-1): HOW MUCH of the blurred
+	// JAHSHAKA (fork feab041c6 (was 0082), lane BLOOM-AMOUNT-1): HOW MUCH of the blurred
 	// highlight this quad adds -- the World panel's Bloom Amount, 0 to 2,
 	// with 1 the picture this engine has always drawn.
 	//

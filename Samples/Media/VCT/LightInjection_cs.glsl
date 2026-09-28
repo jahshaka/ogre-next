@@ -16,7 +16,7 @@ vulkan( layout( ogre_s0 ) uniform sampler voxelAlbedoSampler );
 layout( vulkan( ogre_u0 ) vk_comma @insertpiece(uav0_pf_type) )
 uniform restrict writeonly image3D lightVoxel;
 
-// JAHSHAKA PATCH 0076: the DIRECT term's own volume, written by the same dispatch.
+// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): the DIRECT term's own volume, written by the same dispatch.
 // The bounce's fixed point is L = D + rho * G( L ) and needs D at every pass; the
 // total's two textures ping-pong, so D cannot be recovered from them after the first
 // pass. Declared only when the host has a volume to write it to (a VctLighting with

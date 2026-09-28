@@ -100,7 +100,7 @@ fragment_program SMAA/EdgeDetection_ps unified
 	// reflection lookup throws:
 	//     OGRE EXCEPTION(5:ItemIdentityException): Parameter called
 	//     viewportSize does not exist. ... SMAA.material(83)
-	// every boot. Same class as patch 0003 (Sky.material sliceIdx). The
+	// every boot. Same class as fork c290052de (was 0003) (Sky.material sliceIdx). The
 	// binding is kept on the two delegates that actually declare it, so no
 	// backend loses it.
 }

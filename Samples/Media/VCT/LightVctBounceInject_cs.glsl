@@ -42,7 +42,7 @@ vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbePosP[@value(
 vulkan_layout( ogre_t@value(vctTexUnit) ) uniform texture3D vctProbePosN[@value( hlms_num_vct_cascades )];
 @add( vctTexUnit, hlms_num_vct_cascades )
 
-// JAHSHAKA PATCH 0076: THE DIRECT TERM, at the unit after every probe array (the
+// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): THE DIRECT TERM, at the unit after every probe array (the
 // same order VctLighting::setupBounceTextures binds them in). It is read with a
 // plain Load3D at the voxel this invocation writes -- the D of the fixed point
 // L = D + rho * G( L ) -- so it needs no sampler and no mip chain.

@@ -10,7 +10,7 @@
 	@insertpiece( JahDirectionalComposite )
 
 	@insertpiece( DeclSRgbFuncs )
-	// JAHSHAKA PATCH 0080: THE STORE'S ENCODING FOLLOWS ITS FORMAT (the directional volumes are
+	// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080): THE STORE'S ENCODING FOLLOWS ITS FORMAT (the directional volumes are
 	// float: written linear).
 	@property( uav0_orig_pf_srgb )
 		#define jahStoreLight( x ) toSRGB( x )

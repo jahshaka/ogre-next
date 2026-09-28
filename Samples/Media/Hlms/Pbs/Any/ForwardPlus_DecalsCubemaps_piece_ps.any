@@ -96,7 +96,7 @@
 				pixelData.F0		= lerp( pixelData.F0, decalMetalness, decalMask );
 			@else
 				pixelData.specular	= lerp( pixelData.specular.xyz, midf3_c( 1.0f, 1.0f, 1.0f ), decalMask );
-				// JAHSHAKA patch 0031 -- `pixelData.F0` IS NOT ALWAYS A FLOAT3.
+				// JAHSHAKA fork 4d5fbef16 (was 0031) -- `pixelData.F0` IS NOT ALWAYS A FLOAT3.
 				// Its type is `float_fresnel`, which is midf3 only when
 				// `fresnel_scalar` is set and midf otherwise (the FresnelSwizzle
 				// pair, Main/500.Structs_piece_vs_piece_ps.any:283-287). This
@@ -157,7 +157,7 @@
 
 	midf cubemapAccumWeight = _h( 0 );
 
-	// Jahshaka patch 0048: HOW MANY PROBE BOXES CONTAIN THIS POINT. Not a
+	// Jahshaka fork 4d5fbef16+8f09c0cd4 (was 0048): HOW MANY PROBE BOXES CONTAIN THIS POINT. Not a
 	// weight -- a count, and the only thing read off it is whether it is zero.
 	// See the composite at the bottom of this piece.
 	@property( jah_env )
@@ -174,7 +174,7 @@
 	@property( vct_num_probes )
 	if( pixelData.roughness < 1.0f || vctSpecular.w == 0 )
 	{
-		// Jahshaka patch 0017: accumVctLerp is now the probeFade-WEIGHTED sum of
+		// Jahshaka fork 4d5fbef16 (was 0017): accumVctLerp is now the probeFade-WEIGHTED sum of
 		// each probe's PCC trust (1 - vctLerp), so that it shares pccEnvS's own
 		// normalisation by cubemapAccumWeight. The unweighted probe COUNT that
 		// upstream divided the whole blend by is gone -- derivation at the blend
@@ -202,7 +202,7 @@
 
 		if( probeFade > _h( 0 ) )
 		{
-			// Jahshaka patch 0048: this probe's box contains the shaded point.
+			// Jahshaka fork 4d5fbef16+8f09c0cd4 (was 0048): this probe's box contains the shaded point.
 			// The test is the loop's own -- `getProbeFade > 0` is upstream's
 			// statement that a probe may answer for a point at all.
 			@property( jah_env )
@@ -223,7 +223,7 @@
 			probeFade = probeFade * probeFade;
 			probeFade *= midf_c( probePriority );
 
-			// ---- JAHSHAKA PATCH 0029: CAN THIS POINT SEE THE PROBE? ----------
+			// ---- JAHSHAKA fork 4d5fbef16 (was 0029): CAN THIS POINT SEE THE PROBE? ----------
 			//
 			// Owner, 2026-09-13: "why would the outside of a building show the
 			// room inside? That makes zero sense to me." -- and, when the lead
@@ -312,11 +312,11 @@
 			// than one. `pccEnvS` is normalised by cubemapAccumWeight at the
 			// bottom of this piece, so crushing every probe's weight would only
 			// renormalise the SAME probes back to full strength. So `probeFade`
-			// (which multiplies every sampled term below, and patch 0017's
+			// (which multiplies every sampled term below, and fork 4d5fbef16 (was 0017)'s
 			// probe-trust accumulator with it) carries the visibility, while
 			// cubemapAccumWeight keeps accumulating the FULL weight. The share
-			// an occluded probe does not claim is then handed back by patch
-			// 0017's blend to whatever filled envColourS before the probes ran
+			// an occluded probe does not claim is then handed back by fork 4d5fbef16
+			// (was 0017)'s blend to whatever filled envColourS before the probes ran
 			// -- cone tracing, the irradiance field, the sky -- and never to
 			// black, which is what a naive tightening of probe influence
 			// produces in a sealed room.
@@ -400,7 +400,7 @@
 					clearCoatPccSingleEnvS *= 1.0f - vctLerp;
 				@end
 
-				accumVctLerp += probeFade * midf_c( 1.0f - vctLerp );	// Jahshaka patch 0017
+				accumVctLerp += probeFade * midf_c( 1.0f - vctLerp );	// Jahshaka fork 4d5fbef16 (was 0017)
 			@end
 
 			pccEnvS	+= pccSingleEnvS.xyz;
@@ -409,7 +409,7 @@
 				clearCoatPccEnvS += clearCoatPccSingleEnvS;
 			@end
 
-			cubemapAccumWeight += probeFadeFull;	// Jahshaka patch 0029 -- FULL weight
+			cubemapAccumWeight += probeFadeFull;	// Jahshaka fork 4d5fbef16 (was 0029) -- FULL weight
 		}
 	}
 
@@ -423,7 +423,7 @@
 	@end
 
 	@property( vct_num_probes )
-		// Jahshaka patch 0017 -- the overlapping-probe division fix.
+		// Jahshaka fork 4d5fbef16 (was 0017) -- the overlapping-probe division fix.
 		//
 		// Upstream divided the finished blend by numProbesVctLerp, the COUNT of
 		// probes covering this pixel:
@@ -465,7 +465,7 @@
 		@end
 
 		@property( clear_coat )
-			pixelData.clearCoatEnvColourS = clearCoatPccEnvS +	// Jahshaka patch 0017
+			pixelData.clearCoatEnvColourS = clearCoatPccEnvS +	// Jahshaka fork 4d5fbef16 (was 0017)
 											pixelData.clearCoatEnvColourS * ( _h( 1.0f ) - pccVctTrust );
 		@end
 	@else
@@ -481,7 +481,7 @@
 
 
 	// ---- WHERE NO PROBE IS AND NO CONE RAN, THE SKY IS -----------------------
-	// (Jahshaka patch 0048; reduced by PHOTON-ENV-1.)
+	// (Jahshaka fork 4d5fbef16+8f09c0cd4 (was 0048); reduced by PHOTON-ENV-1.)
 	//
 	// The environment slot of this pin's PBS shader has ONE occupant, and under
 	// automatic parallax-corrected cubemaps it is the probe cube ARRAY: the sky

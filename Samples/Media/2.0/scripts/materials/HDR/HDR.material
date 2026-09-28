@@ -32,7 +32,7 @@ fragment_program HDR/DownScale03_SumLumEnd_ps_GLSL glsl
 fragment_program HDR/FinalToneMapping_ps_GLSL glsl
 {
 	source FinalToneMapping_ps.glsl
-	// JAHSHAKA patch 0079: the tonemap includes Jahshaka/JahDither.glsl.
+	// JAHSHAKA fork feab041c6 (was 0079): the tonemap includes Jahshaka/JahDither.glsl.
 	enable_include_header true
 	
 	default_params
