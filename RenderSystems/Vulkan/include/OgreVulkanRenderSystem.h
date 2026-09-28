@@ -205,6 +205,7 @@ namespace Ogre
         std::vector<JahGpuPool>   mJahPools;     ///< every pool created (index = id)
         std::vector<uint32>       mJahPending;   ///< written pools, oldest first
         std::vector<uint32>       mJahFree;      ///< pools ready for a reset + reuse
+        std::vector<uint32>       mJahParked;    ///< "never" answers made with no pool open
         std::vector<JahGpuSample> mJahSampleStack;   ///< samples nest
         std::vector<std::pair<uint32, float> > mJahResults;
         /// Readback scratch, sized to what a pool actually wrote rather than to
