@@ -160,6 +160,12 @@ namespace Ogre
         pass->getVertexProgramParameters()->setNamedConstant( "windowOffset", offset, 1u, 3u );
     }
     //-----------------------------------------------------------------------------------
+    void IfdProbeVisualizer::setColourScale( float scale )
+    {
+        Pass *pass = mMaterial->getTechnique( 0 )->getPass( 0 );
+        pass->getFragmentProgramParameters()->setNamedConstant( "rangeMult", Vector2( scale, scale ) );
+    }
+    //-----------------------------------------------------------------------------------
     const String &IfdProbeVisualizer::getMovableType() const { return BLANKSTRING; }
     //-----------------------------------------------------------------------------------
     const LightList &IfdProbeVisualizer::getLights() const

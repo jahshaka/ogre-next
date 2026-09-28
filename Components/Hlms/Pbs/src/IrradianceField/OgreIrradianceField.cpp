@@ -783,6 +783,12 @@ namespace Ogre
                                                      sh[i * 3u + 1u] * invFinal,
                                                      sh[i * 3u + 2u] * invFinal, 0.0f ) );
         }
+        // Jahshaka (D4-PHOTON-TIERS, PROBE-NAN-1): the DEBUG PROBES are shaded in the unit
+        // the pixel decodes (stored x the decode multiplier), refreshed with it here - the
+        // multiplier moves with the brightest light, and a probe drawn in stored units went
+        // black under a bright lamp (IfdProbeVisualizer::setColourScale).
+        if( mDebugIfdProbeVisualizer && mDebugVisualizationMode == DebugVisualizationColour )
+            mDebugIfdProbeVisualizer->setColourScale( finalMultiplier );
     }
     //-------------------------------------------------------------------------
     void IrradianceField::fillChainParams()
@@ -1233,8 +1239,18 @@ namespace Ogre
             // TODO: Find something better than a hardcoded 500
             rangeMult.x = 500.0f;
             rangeMult.y = rangeMult.x * rangeMult.x;
+            rangeMult = 2.0f / rangeMult;
         }
-        rangeMult = 2.0f / rangeMult;
+        else if( mVctLighting )
+        {
+            // Jahshaka (D4-PHOTON-TIERS, PROBE-NAN-1): the colour probes in the pixel's
+            // unit - the atlas is in the voxels' stored units; see setColourScale.
+            rangeMult = Vector2( mVctLighting->getFinalMultiplier() );
+        }
+        else
+        {
+            rangeMult = 2.0f / rangeMult;
+        }
         mDebugIfdProbeVisualizer->setTrackingIfd( mSettings, mFieldSize, borderedRes, trackedTex,
                                                   rangeMult, mDebugTessellation );
     }
