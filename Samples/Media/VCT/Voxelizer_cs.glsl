@@ -92,7 +92,7 @@ layout( vulkan( ogre_u4 ) vk_comma @insertpiece(uav4_pf_type) )
 uniform restrict image3D voxelEmissiveTex;
 layout( vulkan( ogre_u5 ) vk_comma @insertpiece(uav5_pf_type) )
 uniform restrict uimage3D voxelAccumVal;
-// Jahshaka patch 0065: the per-voxel INTEGER ACCUMULATOR the merge sums into.
+// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): the per-voxel INTEGER ACCUMULATOR the merge sums into.
 layout( vulkan( ogre_u6 ) vk_comma @insertpiece(uav6_pf_type) )
 uniform restrict uimage3D voxelMergeAccum;
 // Jahshaka (PHOTON-VOXEL-3/-4): THE PER-HALF-AXIS COVERAGE - O_a+ (the faces looking +a)

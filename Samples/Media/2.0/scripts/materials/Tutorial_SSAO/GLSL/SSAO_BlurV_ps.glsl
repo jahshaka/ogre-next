@@ -15,7 +15,7 @@ vulkan( layout( ogre_P0 ) uniform Params { )
 	uniform vec4 texelSize;
 	uniform vec2 projectionParams;
 
-	// Jahshaka local patch (orthoview lane, ogre-patch 0019): x = 1 when the
+	// Jahshaka local patch (orthoview lane, fork 3f1ad1110 (was 0019)): x = 1 when the
 	// camera is ORTHOGRAPHIC. See the branch below - none of this file's
 	// position reconstruction is valid under an ortho frustum without it.
 	uniform vec4 jahOrthoParams;

@@ -22,7 +22,7 @@ struct Light
 	float4 diffuse;		//.w contains numNonCasterDirectionalLights
 	float3 specular;
 @property( hlms_num_shadow_map_lights )
-	// Jahshaka patch 0018: was float3. The 4th float was ALWAYS there --
+	// Jahshaka fork 36162ff37+16d8e29d4 (was 0018): was float3. The 4th float was ALWAYS there --
 	// a vec3 occupies 16 bytes in std140, in an HLSL cbuffer and in Metal,
 	// which is why HlmsPbs::preparePassBuffer has always written a padding
 	// float after the quadratic term. It now writes 1 / range there (the

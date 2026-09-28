@@ -418,7 +418,7 @@
 	// (VoxelMerge_piece_cs.any, THE SURFACE POSITION).
 	uint3 accPosP = uint3( 0u, 0u, 0u );
 	uint3 accPosN = uint3( 0u, 0u, 0u );
-	// Jahshaka patch 0065: the SUMS this dispatch adds to the voxel's running
+	// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): the SUMS this dispatch adds to the voxel's running
 	// integer total, on VoxelMerge's fixed-point grid. They are exact and they
 	// are ALL of the state, so neither the split of the instances between
 	// dispatches nor their order inside one decides anything
@@ -520,7 +520,7 @@
 							float3 triNormal = tri_barycentric_normal( pieceCentroid, tri );
 							triNormal = normalize( triNormal );
 
-							// Jahshaka patch 0065: every normal goes into BOTH sums,
+							// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): every normal goes into BOTH sums,
 							// raw and folded, and nothing is dropped. The "these two
 							// surfaces face opposite ways" decision upstream made
 							// here, against the sum SO FAR, is made once at the end
@@ -566,7 +566,7 @@
 		}
 	}
 
-	// Jahshaka patch 0065 — ACCUMULATE, THEN RESOLVE, IN ONE DISPATCH.
+	// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065) — ACCUMULATE, THEN RESOLVE, IN ONE DISPATCH.
 	//
 	// This dispatch adds ITS triangles to the voxel's exact integer sums and then
 	// writes the mean of the TOTAL the accumulator now holds. Whichever dispatch
@@ -683,7 +683,7 @@
 			OGRE_imageWrite3D4( voxelPositionNTex, voxelCelUvw,
 								float4( voxelMergePositionResolve( sumPosN, sumAxisN, voxelCel, invRes ), 0.0f ) );
 		@else
-			// JAHSHAKA PATCH 0087: THE BRANCH THAT CANNOT FOLLOW THE FLOAT STORE.
+			// JAHSHAKA fork ad452604a+155a56bf8 (was 0087): THE BRANCH THAT CANNOT FOLLOW THE FLOAT STORE.
 			// This is D3D11 without typed UAV loads, where each texel is packed
 			// into ONE 32-bit uint, and the emissive volume is now RGBA16_FLOAT
 			// (64 bits per texel, OgreVctVoxelizer.cpp createVoxelTextures): a

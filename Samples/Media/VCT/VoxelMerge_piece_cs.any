@@ -1,4 +1,4 @@
-// Jahshaka patch 0065 — THE ORDER-INDEPENDENT VOXEL MERGE (Voxelizer_piece_cs).
+// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065) — THE ORDER-INDEPENDENT VOXEL MERGE (Voxelizer_piece_cs).
 //
 // WHY IT EXISTS. `VctVoxelizer::build()` issues one compute dispatch per bucket
 // per octant, and upstream merged each dispatch's triangles into the RGBA8 voxel
@@ -7,7 +7,7 @@
 // once per dispatch. An average of the same numbers taken in a different order
 // is the same value only up to that quantisation, so WHICH INSTANCES LANDED IN
 // WHICH DISPATCH decided the picture, by a few 8-bit steps per voxel and by
-// ~6/255 on screen after the bounce. That is why patch 0062 had to give every
+// ~6/255 on screen after the bounce. That is why fork ad452604a+155a56bf8 (was 0062) had to give every
 // MATERIAL its own bucket (one dispatch per material makes the partition a
 // property of the scene rather than of the attach order) — and why the outermost
 // cascade of a scene whose 8,001 primitives each own a material cost 321 ms
@@ -58,9 +58,9 @@
 	/// (VOXMERGE-2, 2026-09-18 — the patch header carries both tables). It used
 	/// to be a hang: clearing a PFG_RGBA32_UINT 3D uav through
 	/// `ComputeTools::clearUavUint` lost the device 8 runs of 8 on the Showroom
-	/// samples. Patch 0067 then found that hazard's real mechanism (a
+	/// samples. fork b028638c1 (was 0067) then found that hazard's real mechanism (a
 	/// device-local block recycled one frame early; the whole-volume clear was
-	/// merely the first write into it) and patch 0071 stopped this accumulator
+	/// merely the first write into it) and fork ad452604a+0338ca7f2+c4c80b5f7 (was 0071) stopped this accumulator
 	/// being recycled at all, and on that stack the 128-bit clear is CLEAN —
 	/// 16 rounds of 16 with zero Xid, against 16 of 16 for this layout. What
 	/// decides it now is cost, and a full RGBA32 arm measured the SAME GPU time
