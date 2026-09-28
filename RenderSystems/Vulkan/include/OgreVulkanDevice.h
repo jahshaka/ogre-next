@@ -253,6 +253,20 @@ namespace Ogre
         void createDevice( const FastArray<VkExtensionProperties> &availableExtensions,
                            uint32 maxComputeQueues, uint32 maxTransferQueues );
 
+        /// Jahshaka: THE NO-RAYS SWITCH, honoured at the DEVICE. false = nothing the
+        /// ray-query work adds happens at all: not one ray extension is requested and
+        /// not one ray feature bit is set, so the process runs on EXACTLY the device
+        /// it would have had without that work - a real fallback picture, not a
+        /// cosmetic one. It is also the escape hatch for a driver that cannot build a
+        /// ray-tracing device in a particular process (MEASURED on NVIDIA 595.84:
+        /// vkCreateDevice returns VK_ERROR_INITIALIZATION_FAILED with these features
+        /// enabled under AddressSanitizer, on the very GPU where the same call
+        /// succeeds without it). A process-wide static like Mesh::
+        /// msOptimizeForShadowMapping, because the device can be built before any
+        /// render system exists (the OpenXR route calls buildDeviceCreationRequest):
+        /// the application sets it before it loads the render system. Default true.
+        static bool msRayQueryAllowed;
+
         /// Jahshaka (ogre-patch 0068): the device-extension names createDevice()
         /// would request on this physical device, in its exact order. createDevice()
         /// calls this, so an external creator that calls it too cannot drift.
