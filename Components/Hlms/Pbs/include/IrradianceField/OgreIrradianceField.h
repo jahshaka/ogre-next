@@ -43,18 +43,7 @@ THE SOFTWARE.
 
 namespace Ogre
 {
-    class IrradianceFieldRaster;
     class IfdProbeVisualizer;
-
-    struct _OgreHlmsPbsExport RasterParams
-    {
-        IdString       mWorkspaceName;
-        PixelFormatGpu mPixelFormat;
-        float          mCameraNear;
-        float          mCameraFar;
-
-        RasterParams();
-    };
 
     struct _OgreHlmsPbsExport IrradianceFieldSettings
     {
@@ -78,9 +67,6 @@ namespace Ogre
         /// Must be power of two
         uint32 mNumProbes[3];
 
-        /// Use rasterization to generate light & depth data, instead of voxelization
-        RasterParams mRasterParams;
-
     public:
         IrradianceFieldSettings();
 
@@ -94,8 +80,6 @@ namespace Ogre
                                  "Num probes must be a power of 2" );
             }
         }
-
-        bool isRaster() const;
 
         uint32 getTotalNumProbes() const;
 
@@ -133,8 +117,6 @@ namespace Ogre
     */
     class _OgreHlmsPbsExport IrradianceField : public IdObject
     {
-        friend class IrradianceFieldRaster;
-
     public:
         enum DebugVisualizationMode
         {
@@ -180,8 +162,7 @@ namespace Ogre
             // Jahshaka (PHOTON-FIELD-ROTATE-1): upstream's per-texel ray counts
             // (invNumRaysPerPixel / invNumRaysPerIrradiancePixel), the old cone start
             // bias pair and the threads-per-row packing are gone - nothing reads them.
-            // One float4 of scalars, then the counts (w unused). The raster path's
-            // integration job declares the same prefix.
+            // One float4 of scalars, then the counts (w unused).
             uint32 probesPerRow;  // groups per dispatch row (one probe per group)
             float  coneAngleTan;
             uint32 numProcessedProbes;
@@ -288,9 +269,6 @@ namespace Ogre
         Vector3 mFieldOrigin;
         Vector3 mFieldSize;
 
-        uint32 mDepthMaxIntegrationTapsPerPixel;
-        uint32 mColourMaxIntegrationTapsPerPixel;
-
         VctLighting *mVctLighting;
 
         TextureGpu *mIrradianceTex;
@@ -298,8 +276,6 @@ namespace Ogre
 
         CompositorWorkspace *mGenerationWorkspace;
         HlmsComputeJob      *mGenerationJob;
-        HlmsComputeJob      *mDepthIntegrationJob;
-        HlmsComputeJob      *mColourIntegrationJob;
         HlmsComputeJob      *mDepthMirrorBorderJob;
         HlmsComputeJob      *mColourMirrorBorderJob;
 
@@ -311,18 +287,13 @@ namespace Ogre
         /// frame but the last ran with the LAST one's parameters - its work, its ray
         /// rotation, its history rule - as soon as a frame integrated twice (an inline
         /// convergence and its refinements, a scroll and a refinement). The ring hands
-        /// each dispatch of a frame its own buffer; [0] is mIfGenParamsBuffer (the
-        /// raster path's integration jobs bind that one).
+        /// each dispatch of a frame its own buffer; [0] is mIfGenParamsBuffer.
         vector<ConstBufferPacked *>::type mIfGenParamsRing;
         uint32                            mIfGenParamsRingFrame;
         uint32                            mIfGenParamsRingNext;
         TexBufferPacked         *mDirectionsBuffer;
-        TexBufferPacked         *mDepthTapsIntegrationBuffer;
-        TexBufferPacked         *mColourTapsIntegrationBuffer;
         ConstBufferPacked       *mIfdDepthBorderMirrorParamsBuffer;
         ConstBufferPacked       *mIfdColourBorderMirrorParamsBuffer;
-
-        IrradianceFieldRaster *mIfRaster;
 
         DebugVisualizationMode mDebugVisualizationMode;
         uint8                  mDebugTessellation;
@@ -333,20 +304,7 @@ namespace Ogre
 
         void fillDirections( float *RESTRICT_ALIAS outBuffer );
 
-        static TexBufferPacked *setupIntegrationTaps( VaoManager *vaoManager, uint32 probeRes,
-                                                      uint32 fullWidth, HlmsComputeJob *integrationJob,
-                                                      ConstBufferPacked *ifGenParamsBuffer,
-                                                      uint32            &outMaxIntegrationTapsPerPixel );
-        static uint32           countNumIntegrationTaps( uint32 probeRes );
-
-        /**
-         * @brief fillIntegrationWeights
-        @param outBuffer
-            Buffer must NOT be write-combined because we write and then read back from it
-        */
-        static void fillIntegrationWeights( float2 *RESTRICT_ALIAS outBuffer, uint32 probeRes,
-                                            uint32 maxTapsPerPixel );
-        void        setIrradianceFieldGenParams();
+        void setIrradianceFieldGenParams();
 
         void setupBorderMirrorParams( uint32 borderedRes, uint32 fullWidth,
                                       ConstBufferPacked *ifdBorderMirrorParamsBuffer,
@@ -382,8 +340,7 @@ namespace Ogre
         @param fieldOrigin
         @param fieldSize
         @param vctLighting
-            This value is ignored if IrradianceFieldSettings::usesRaster() returns true,
-            and must be non-null if it returns false
+            Must be non-null: the field's rays read radiance from it
          */
         void initialize( const IrradianceFieldSettings &settings, const Vector3 &fieldOrigin,
                          const Vector3 &fieldSize, VctLighting *vctLighting );
@@ -394,12 +351,11 @@ namespace Ogre
             createTextures(), which destroys and re-creates both atlases: a field that
             must follow the camera (e.g. one riding the innermost cascade of a
             camera-centred cascade chain) would therefore be born black on every step and
-            re-converge from nothing, and its compositor workspace, directions buffer and
-            integration taps would be rebuilt for a change none of them depend on.
+            re-converge from nothing, and its compositor workspace and directions buffer
+            would be rebuilt for a change neither depends on.
 
             Everything that reads the placement reads it LIVE — fillConstBufferData()
-            rebuilds the pixel transform per pass, IrradianceFieldRaster::renderProbes()
-            derives each probe camera from it, and the generation params below hold the
+            rebuilds the pixel transform per pass and the generation params below hold the
             probe-to-voxel transform — so moving the volume is exactly these two members
             plus a re-derivation of those params.
 
@@ -466,8 +422,7 @@ namespace Ogre
             Cheaper than initialize() and it keeps the atlases: nothing about the field's
             geometry has changed, only where its rays read radiance from.
         @remarks
-            Must not be called before initialize(), nor on a raster-sourced field (which
-            has no VctLighting and no generation job bindings to refresh) — both are no-ops.
+            Must not be called before initialize() — it is a no-op then.
         */
         void setVctLighting( VctLighting *vctLighting );
 
