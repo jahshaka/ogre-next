@@ -166,34 +166,51 @@ namespace Ogre
         // bodies, byte for byte — which is what a production or packaging build
         // gets (owner decision D3, lock 1 of 2).
         //
-        // TWO POOLS, READ TWO FRAMES LATE. A timestamp write is legal inside a
-        // render pass; a query-pool RESET is not. So the pool for frame N is
-        // reset at the START of frame N, outside every encoder, at the one
-        // moment the host calls in (the "JahGpuFrameBegin" custom attribute) —
-        // and the pool being recycled then is the one written two frames ago,
-        // whose results are read back non-blocking with the availability bit
-        // just before it is reset. Nothing ever stalls the CPU on the GPU.
+        // A POOL IS RECYCLED WHEN ITS RESULTS ARE BACK, NOT AFTER A FIXED
+        // NUMBER OF FRAMES. A timestamp write is legal inside a render pass; a
+        // query-pool RESET is not, so every reset happens at the START of a
+        // frame, outside every encoder, at the one moment the host calls in (the
+        // "JahGpuFrameBegin" custom attribute). There each written pool is
+        // polled NON-BLOCKING, oldest first (WITH_AVAILABILITY: a query the GPU
+        // has not written reads zero in its third word); a pool whose every
+        // sample is back is reported and returns to the free list, one that is
+        // not keeps waiting — the GPU runs in submission order, so the poll
+        // stops at the first pool still in flight. The old fixed pair of pools
+        // was read two frames after its frame and reset whatever it held: a
+        // frame the GPU had not finished by then (7.1 M id-pass triangles: 1-4
+        // of ~570 records carried an id-pass time) lost EVERY sample, silently.
+        // Pools are created on demand; Ogre keeps at most its buffer multiplier
+        // of frames in flight, so a handful exist. A pool still unanswered after
+        // kJahMaxPendingPools newer frames (a lost device) is reported as lost.
         static const uint32 kJahMaxGpuQueries = 4096u;
+        static const uint32 kJahMaxPendingPools = 8u;
         /// A sample the pool had no room for. It still rides the stack — that
         /// is how `endGPUSampleProfile` finds its own sample — but no query is
-        /// written for it and it is never reported. Without the sentinel the
-        /// matching `end` popped the ENCLOSING sample and filed a wrong
-        /// duration as a real number.
+        /// written for it; it is REPORTED with a negative time when its pool
+        /// resolves, so the host knows the sample will never arrive. Without
+        /// the sentinel the matching `end` popped the ENCLOSING sample and filed
+        /// a wrong duration as a real number.
         static const uint32 kJahOverflowQuery = 0xFFFFFFFFu;
         struct JahGpuSample
         {
             uint32 hash;   ///< the caller's id for this sample (hashCache)
             uint32 query;  ///< the begin query index; end is query + 1
         };
-        VkQueryPool               mJahQueryPool[2] = { 0, 0 };
-        bool                      mJahPoolWritten[2] = { false, false };
-        std::vector<JahGpuSample> mJahSamples[2];
+        struct JahGpuPool
+        {
+            VkQueryPool               pool;
+            std::vector<JahGpuSample> samples;   ///< complete pairs written into it
+            std::vector<uint32>       lost;      ///< ids that will never have a time
+        };
+        std::vector<JahGpuPool>   mJahPools;     ///< every pool created (index = id)
+        std::vector<uint32>       mJahPending;   ///< written pools, oldest first
+        std::vector<uint32>       mJahFree;      ///< pools ready for a reset + reuse
         std::vector<JahGpuSample> mJahSampleStack;   ///< samples nest
         std::vector<std::pair<uint32, float> > mJahResults;
-        /// Readback scratch, sized to what a frame actually wrote rather than
-        /// to the whole pool (which was 64 KB every frame).
+        /// Readback scratch, sized to what a pool actually wrote rather than to
+        /// the whole pool (which was 64 KB every frame).
         FastArray<uint64>         mJahRawResults;
-        uint32                    mJahPoolIdx;
+        uint32                    mJahPoolIdx;   ///< the pool being written
         uint32                    mJahNextQuery;
         /// Samples dropped for want of query room, this frame and last — the
         /// honest "this capture's GPU numbers are incomplete" signal, read
@@ -202,9 +219,13 @@ namespace Ogre
         uint32                    mJahOverflowedLastFrame;
         float                     mJahTimestampPeriodNs;
         bool                      mJahGpuProfiling;
-        /// Rotates the pools, reads back the one being recycled and resets it.
-        /// Called through getCustomAttribute( "JahGpuFrameBegin" ).
+        /// Closes the frame's pool, reports every pool whose results are back,
+        /// and resets a free pool for the new frame. Called through
+        /// getCustomAttribute( "JahGpuFrameBegin" ).
         void jahGpuFrameBegin();
+        /// Reads a written pool without waiting: true (and its results
+        /// appended) when every sample in it is back.
+        bool jahGpuResolvePool( JahGpuPool &p, bool force );
 #endif
 
     public:
