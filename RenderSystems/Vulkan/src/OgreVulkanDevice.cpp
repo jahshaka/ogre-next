@@ -58,23 +58,7 @@ THE SOFTWARE.
 
 namespace Ogre
 {
-    /// Jahshaka (ogre-patch 0038): THE NO-RAYS SWITCH, honoured at the DEVICE.
-    /// With it in force nothing this patch adds happens at all - the instance
-    /// stays at 1.0.2, not one ray extension is requested and not one feature
-    /// bit is set - so the process runs on EXACTLY the device it would have had
-    /// if this patch did not exist. That is what makes the switch a real
-    /// fallback picture rather than a cosmetic one (Jahshaka reads the same
-    /// variable to decide whether to build acceleration structures at all).
-    ///
-    /// It is also the escape hatch for a driver that cannot build a ray-tracing
-    /// device in a particular process: MEASURED on NVIDIA 595.84, vkCreateDevice
-    /// returns VK_ERROR_INITIALIZATION_FAILED with these features enabled under
-    /// AddressSanitizer, on the very GPU where the same call succeeds without it.
-    static bool jahNoRayQuery()
-    {
-        static const bool noRays = getenv( "JAHSHAKA_NO_RAY_QUERY" ) != 0;
-        return noRays;
-    }
+    bool VulkanDevice::msRayQueryAllowed = true;  // see the declaration
 
     FastArray<const char *> VulkanInstance::enabledExtensions;  // sorted
     FastArray<const char *> VulkanInstance::enabledLayers;      // sorted
@@ -776,7 +760,7 @@ namespace Ogre
         const bool bWantBufferDeviceAddress =
             hasExt( VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME );
         const bool bWantRayQuery =
-            !jahNoRayQuery() &&
+            msRayQueryAllowed &&
             hasExt( VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME ) &&
             hasExt( VK_KHR_RAY_QUERY_EXTENSION_NAME ) &&
             hasExt( VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME ) &&
@@ -1313,12 +1297,12 @@ namespace Ogre
             // Each arm pushes the MACRO, which is a string literal with static
             // storage - never extensionName.c_str(), which dies with this loop
             // iteration while the list keeps the pointer.
-            else if( !jahNoRayQuery() &&
+            else if( msRayQueryAllowed &&
                      extensionName == VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME );
-            else if( !jahNoRayQuery() && extensionName == VK_KHR_RAY_QUERY_EXTENSION_NAME )
+            else if( msRayQueryAllowed && extensionName == VK_KHR_RAY_QUERY_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_RAY_QUERY_EXTENSION_NAME );
-            else if( !jahNoRayQuery() &&
+            else if( msRayQueryAllowed &&
                      extensionName == VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME );
             // Jahshaka: buffer device addresses are NOT part of the ray set - see
@@ -1326,12 +1310,12 @@ namespace Ogre
             // advertises them, rays or no rays.
             else if( extensionName == VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME );
-            else if( !jahNoRayQuery() &&
+            else if( msRayQueryAllowed &&
                      extensionName == VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME )
                 outExtensions.push_back( VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME );
-            else if( !jahNoRayQuery() && extensionName == VK_KHR_SPIRV_1_4_EXTENSION_NAME )
+            else if( msRayQueryAllowed && extensionName == VK_KHR_SPIRV_1_4_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_SPIRV_1_4_EXTENSION_NAME );
-            else if( !jahNoRayQuery() &&
+            else if( msRayQueryAllowed &&
                      extensionName == VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME );
             // Jahshaka (ATOM S3-DRAW, N-1): vkCmdDrawIndexedIndirectCountKHR, so the
