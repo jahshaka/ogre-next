@@ -229,6 +229,16 @@ namespace Ogre
         }
         mIfGenParamsRing.clear();
         mIfGenParamsBuffer = 0;
+        // Jahshaka (POOL-LEAKS-1): the two border-mirror parameter buffers the
+        // constructor creates were never destroyed — every IrradianceField (one per
+        // scene with a field; a project open/close cycle makes one) left two const
+        // buffers behind in the VaoManager's pools.
+        if( mIfdDepthBorderMirrorParamsBuffer )
+            vaoManager->destroyConstBuffer( mIfdDepthBorderMirrorParamsBuffer );
+        mIfdDepthBorderMirrorParamsBuffer = 0;
+        if( mIfdColourBorderMirrorParamsBuffer )
+            vaoManager->destroyConstBuffer( mIfdColourBorderMirrorParamsBuffer );
+        mIfdColourBorderMirrorParamsBuffer = 0;
     }
     //-------------------------------------------------------------------------
     void IrradianceField::fillDirections( float *RESTRICT_ALIAS outBuffer )
