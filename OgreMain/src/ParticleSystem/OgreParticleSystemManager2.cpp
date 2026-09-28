@@ -82,6 +82,25 @@ ParticleSystemManager2::~ParticleSystemManager2()
     mActiveParticleSystemDefs.clear();
     mParticleSystemDefMap.clear();
 
+    // Jahshaka fork (POOL-LEAKS-2): the shared index buffers the billboard sets and particle
+    // systems of THIS manager draw with were never destroyed - every SceneManager destroyed
+    // with a billboard set or particle system in it left one (768,000 B for Studio's light
+    // icons at its quota) in the device-local pool until the render system shut down. The
+    // definitions above held VAOs over them; those are gone, so the buffers go too.
+    if( vaoManager )
+    {
+        if( mSharedIndexBuffer16 )
+        {
+            vaoManager->destroyIndexBuffer( mSharedIndexBuffer16 );
+            mSharedIndexBuffer16 = 0;
+        }
+        if( mSharedIndexBuffer32 )
+        {
+            vaoManager->destroyIndexBuffer( mSharedIndexBuffer32 );
+            mSharedIndexBuffer32 = 0;
+        }
+    }
+
     if( !mSceneManager )
         delete mMemoryManager;
     mMemoryManager = 0;
