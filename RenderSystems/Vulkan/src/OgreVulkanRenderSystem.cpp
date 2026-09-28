@@ -2856,6 +2856,7 @@ namespace Ogre
         mJahPools.clear();
         mJahPending.clear();
         mJahFree.clear();
+        mJahParked.clear();
         mJahPools.push_back( first );
         mJahTimestampPeriodNs = props.limits.timestampPeriod;
         // The first pool is unreset: it is written only after the first
@@ -2887,6 +2888,7 @@ namespace Ogre
         mJahPools.clear();
         mJahPending.clear();
         mJahFree.clear();
+        mJahParked.clear();
         mJahPoolIdx = 0xFFFFFFFFu;
         mJahSampleStack.clear();
         mJahResults.clear();
@@ -2942,10 +2944,15 @@ namespace Ogre
         {
             // The sentinel: no query was ever written for it. It is reported
             // lost with the pool it would have been in (or at once, if none).
+            // With no pool open (a sample before the host's first frame, or after a
+            // failed vkCreateQueryPool with an empty free list) the answer is PARKED:
+            // mJahResults is cleared at the next JahGpuFrameBegin before the host reads
+            // it, so an answer written there now would be lost and the host's frame
+            // would wait for it until it aged out.
             if( mJahPoolIdx < mJahPools.size() )
                 mJahPools[mJahPoolIdx].lost.push_back( sample.hash );
             else
-                mJahResults.push_back( std::pair<uint32, float>( sample.hash, -1.0f ) );
+                mJahParked.push_back( sample.hash );
             return;
         }
         vkCmdWriteTimestamp( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
@@ -3016,6 +3023,10 @@ namespace Ogre
         // one's nesting.
         mJahSampleStack.clear();
         mJahResults.clear();
+        // The answers parked while no pool was open go out with this resolve.
+        for( size_t i = 0u; i < mJahParked.size(); ++i )
+            mJahResults.push_back( std::pair<uint32, float>( mJahParked[i], -1.0f ) );
+        mJahParked.clear();
 
         // The pool the frame that just ended wrote joins the waiting list.
         if( mJahPoolIdx < mJahPools.size() )
