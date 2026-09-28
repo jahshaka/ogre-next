@@ -189,7 +189,7 @@ namespace Ogre
             The OBB should closely match the shape of the environment around it. The better it fits,
             the more accurate the reflections.
         @param bValuesAlreadyPadded
-            Jahshaka patch 0049. False (the default, and every existing caller)
+            Jahshaka fork 618d95cca (was 0049). False (the default, and every existing caller)
             means `area` and `probeShape` are the caller's own boxes and this
             function applies its 1.005 padding to them, exactly as before.
 

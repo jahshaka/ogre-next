@@ -83,7 +83,7 @@ namespace Ogre
         uint8 *mDownloadedImages;
 
         /// WHAT EACH PROBE'S SIX FACES MEASURED, kept instead of thrown away
-        /// (Jahshaka patch 0047). Six entries per probe, in CubemapSide order
+        /// (Jahshaka fork 618d95cca (was 0047)). Six entries per probe, in CubemapSide order
         /// (PX, NX, PY, NY, PZ, NZ), each one the averaged distance that face
         /// saw expressed as a MULTIPLE of the distance from the probe's camera
         /// to mFullRegion's own face along that direction:
@@ -313,7 +313,7 @@ namespace Ogre
          */
         /** @param refreshProbes
             When false, the probes are NOT re-rendered after their shapes have been
-            fitted (Jahshaka patch 0047).
+            fitted (Jahshaka fork 618d95cca (was 0047)).
 
             FOR A MEASURING CALLER ONLY — one that reads getProbeDepthRatios() and
             the fitted shapes and then DESTROYS the probes. A caller that keeps them

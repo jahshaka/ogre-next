@@ -153,7 +153,7 @@ namespace Ogre
         */
         Real mLodBias;
 
-        /** JAHSHAKA (ogre-patch 0075): THIS PASS'S LOD SWITCH HYSTERESIS BAND, as
+        /** JAHSHAKA (fork 5230c9390+8282f6d70 (was 0075)): THIS PASS'S LOD SWITCH HYSTERESIS BAND, as
             a fraction of the threshold being crossed. 0 (the default) is
             upstream's behaviour to the bit — `lodSet` flips at the exact
             threshold in both directions, so an object sitting on one pops
@@ -247,7 +247,7 @@ namespace Ogre
             mCameraCubemapReorient( false ),
             mUpdateLodLists( true ),
             mLodBias( 1.0f ),
-            mLodHysteresis( 0.0f ),  // JAHSHAKA (ogre-patch 0075): upstream by default
+            mLodHysteresis( 0.0f ),  // JAHSHAKA (fork 5230c9390+8282f6d70 (was 0075)): upstream by default
             mInstancedStereo( false ),
             mReuseCullData( false ),
             mFlushCommandBuffersAfterShadowNode( false ),

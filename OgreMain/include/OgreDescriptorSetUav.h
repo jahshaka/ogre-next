@@ -74,7 +74,7 @@ namespace Ogre
             /// resolve memory barrier dependencies.
             ResourceAccess::ResourceAccess access;
 
-            /// JAHSHAKA PATCH 0041 — the buffer's per-instance creation serial, so a new buffer
+            /// JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041) — the buffer's per-instance creation serial, so a new buffer
             /// that reuses a dead one's ADDRESS is not mistaken for it by the descriptor-set
             /// cache. See DescriptorSetTexture2::BufferSlot::creationSerial for the whole story.
             /// 0 = unstamped (makeEmpty, and every call site that assigns `buffer` directly).

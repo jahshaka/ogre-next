@@ -374,7 +374,7 @@ namespace Ogre
         return true;
     }
     //-------------------------------------------------------------------------
-    /// Jahshaka patch 0065: the merge accumulator dies with the voxel textures.
+    /// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): the merge accumulator dies with the voxel textures.
     void VctVoxelizer::destroyVoxelTextures()
     {
         if( mMergeAccumTex )
@@ -391,7 +391,7 @@ namespace Ogre
             mAlbedoVox->getDepth() == mDepth )
         {
             mAccumValVox->scheduleTransitionTo( GpuResidency::Resident );
-            // Jahshaka patch 0071: the merge accumulator is NOT transient. It is
+            // Jahshaka fork ad452604a+0338ca7f2+c4c80b5f7 (was 0071): the merge accumulator is NOT transient. It is
             // created once with the voxel textures and stays Resident until they
             // are destroyed -- see the note at the end of build().
             return;
@@ -452,7 +452,7 @@ namespace Ogre
                     TextureTypes::Type3D );
             }
 
-            // Jahshaka patch 0065 — the order-independent merge's accumulator.
+            // Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065) — the order-independent merge's accumulator.
             mMergeAccumTex = mTextureGpuManager->createTexture(
                 "VctVoxelizer" + StringConverter::toString( getId() ) + "/MergeAccum",
                 GpuPageOutStrategy::Discard,
@@ -464,14 +464,14 @@ namespace Ogre
             textures[i]->scheduleTransitionTo( GpuResidency::OnStorage );
 
         mAlbedoVox->setPixelFormat( PFG_RGBA8_UNORM );
-        // JAHSHAKA PATCH 0087: THE EMISSIVE VOXEL IS A FLOAT.
+        // JAHSHAKA fork ad452604a+155a56bf8 (was 0087): THE EMISSIVE VOXEL IS A FLOAT.
         //
         // Albedo is a RATIO and lives in [0, 1] by definition, so its UNORM store
         // above is exact. EMISSIVE is a RADIANCE -- W/(m^2 sr), no upper bound
         // worth naming -- and this store was the one place it was clipped: the
         // material store carries it as four honest floats (VctMaterial:
         // shaderMaterial.emissive[i] = emissiveCol[i]) and the merge accumulates
-        // it on a fixed-point grid clamped at 16.0 per contribution (patch 0065),
+        // it on a fixed-point grid clamped at 16.0 per contribution (fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065)),
         // but the final imageWrite went into a UNORM8 texel, so an emitter
         // authored at 3.0 was stored as exactly 1.0 and the light injection seeded
         // the radiance volume from that (LightInjection_piece_cs.any:
@@ -498,7 +498,7 @@ namespace Ogre
         else
             mAccumValVox->setPixelFormat( PFG_R32_UINT );
 
-        // Jahshaka patch 0065: thirteen texels per voxel, interleaved in Z — the
+        // Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): thirteen texels per voxel, interleaved in Z — the
         // shader derives their coordinates from the voxel's own, so a dispatch
         // that covers one OCTANT needs to know nothing about the volume's depth.
         // R32_UINT rather than RGBA32_UINT because ComputeTools' clear of a
@@ -507,7 +507,7 @@ namespace Ogre
         mMergeAccumTex->scheduleTransitionTo( GpuResidency::OnStorage );
         mMergeAccumTex->setPixelFormat( PFG_R32_UINT );
         // Jahshaka (PHOTON-WRITER-1): FOURTEEN scalar sums per voxel - the thirteen of
-        // patch 0065 and the material roughness; (PHOTON-VOXEL-3) FIFTEEN - the three
+        // fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065) and the material roughness; (PHOTON-VOXEL-3) FIFTEEN - the three
         // per-axis coverage sums packed into one (VoxelMerge_piece_cs.any, voxelMergeUvw);
         // (PHOTON-VOXEL-4) EIGHTEEN - the coverage split by the side a face looks to
         // (two packed sums) and the two position-weighted sums.
@@ -644,7 +644,7 @@ namespace Ogre
         mComputeTools->prepareForUavClear( mResourceTransitions, mEmissiveVox );
         mComputeTools->prepareForUavClear( mResourceTransitions, mNormalVox );
         mComputeTools->prepareForUavClear( mResourceTransitions, mAccumValVox );
-        // Jahshaka patch 0065: the sums start at zero, every build.
+        // Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): the sums start at zero, every build.
         mComputeTools->prepareForUavClear( mResourceTransitions, mMergeAccumTex );
         for( size_t h = 0u; h < 2u; ++h )
         {
@@ -826,7 +826,7 @@ namespace Ogre
             uavSlot.access = ResourceAccess::ReadWrite;
             mComputeJobs[i]->_setUavTexture( 4, uavSlot );
 
-            // Jahshaka patch 0065: THIS SLOT WAS THE TRIANGLE COUNTER and is now the
+            // Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): THIS SLOT WAS THE TRIANGLE COUNTER and is now the
             // per-voxel INTEGER ACCUMULATOR the merge sums into (the count rides in
             // it). Same slot, same uimage3D, so this job's binding shape — and the
             // Vulkan root layout Ogre derives from it — is exactly the pin's. That
@@ -839,7 +839,7 @@ namespace Ogre
             uavSlot.access = ResourceAccess::ReadWrite;
             mComputeJobs[i]->_setUavTexture( 5, uavSlot );
 
-            // Jahshaka patch 0065: the per-voxel INTEGER ACCUMULATOR the merge
+            // Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): the per-voxel INTEGER ACCUMULATOR the merge
             // sums into (R32_UINT, thirteen texels per voxel — see
             // VoxelMerge_piece_cs.any for why it is not RGBA32_UINT).
             uavSlot.texture = mMergeAccumTex;
@@ -889,7 +889,7 @@ namespace Ogre
 
         // ONE DISPATCH PER (octant, bucket), where a bucket is one of the STORE's
         // material pools. The order is the store's bucket order, which is a stable
-        // order; patch 0065's order-independent merge means it decides nothing about
+        // order; fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065)'s order-independent merge means it decides nothing about
         // the voxels anyway.
         const uint32 numOctants = static_cast<uint32>( mOctants.size() );
         for( uint32 octantIdx = 0u; octantIdx < numOctants; ++octantIdx )
@@ -954,7 +954,7 @@ namespace Ogre
         // phase. Save memory.
         mAccumValVox->scheduleTransitionTo( GpuResidency::OnStorage );
 
-        // THE MERGE ACCUMULATOR STAYS RESIDENT (Jahshaka patch 0071). Patch 0065
+        // THE MERGE ACCUMULATOR STAYS RESIDENT (Jahshaka fork ad452604a+0338ca7f2+c4c80b5f7 (was 0071)). fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065)
         // gave it upstream's transient treatment: OnStorage at the end of every
         // build(), Resident at the start of the next one. On NVIDIA 595.84 that
         // per-build create/destroy of a large 3D storage image, while the
@@ -964,8 +964,8 @@ namespace Ogre
         // show a plane in an Epic scene, 100 cycles a run): 4/4 and 6/6 runs
         // lost the device with the round trip, 0/6 and 0/6 without it, every
         // failure carrying a kernel Xid line from that pid and no passing run
-        // ever carrying one. It is NOT the delayed-block reuse window (patch
-        // 0067's subject: a 16-frame window still hangs 4/6), NOT the 512 MB
+        // ever carrying one. It is NOT the delayed-block reuse window (fork b028638c1
+        // (was 0067)'s subject: a 16-frame window still hangs 4/6), NOT the 512 MB
         // force-flush (disabled: 6/6), NOT the cached image views (purged on
         // residency loss: 6/6) and NOT the ray-query tier (rays off: 6/6).
         // Keeping the image alive is the only arm that cures it, and it is also

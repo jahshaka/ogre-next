@@ -89,7 +89,7 @@ namespace Demo
         mUseMicrocodeCache( true ),
         mBackgroundColour( backgroundColour )
     {
-        // Jahshaka local patch (ogre-patch 0020): let an embedding tool suppress the
+        // Jahshaka local patch (fork ef462c42d (was 0020)): let an embedding tool suppress the
         // config dialog so a seeded ogre.cfg is honoured. mAlwaysAskForConfig
         // short-circuits restoreConfig() below, so seeding alone is not enough.
         const char *jahNoConfig = getenv( "JAH_OGRE_SAMPLE_NO_CONFIG" );

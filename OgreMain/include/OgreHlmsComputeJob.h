@@ -121,7 +121,7 @@ namespace Ogre
         PiecesMap mPieces;
         size_t    mPsoCacheHash;
 
-        /// See setIndirectDispatchBuffer (Jahshaka patch 0032). Null = CPU-sized dispatch.
+        /// See setIndirectDispatchBuffer (Jahshaka fork 1bccc3f93+a98e2b0af (was 0032)). Null = CPU-sized dispatch.
         BufferPacked *mIndirectDispatchBuffer;
         size_t        mIndirectDispatchOffset;
         bool          mIndirectDispatchBarrier;
@@ -245,7 +245,7 @@ namespace Ogre
         /// in setNumThreadGroupsBasedOn, overriding setNumThreadGroups.
         void _calculateNumThreadGroupsBasedOnSetting();
 
-        /** GPU-DRIVEN DISPATCH (Jahshaka patch 0032).
+        /** GPU-DRIVEN DISPATCH (Jahshaka fork 1bccc3f93+a98e2b0af (was 0032)).
 
             While a buffer is set, this job dispatches INDIRECTLY: the three thread-group
             counts are read by the GPU from `buffer` at `offsetBytes` as three uint32

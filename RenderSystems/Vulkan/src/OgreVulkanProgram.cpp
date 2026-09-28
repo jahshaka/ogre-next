@@ -314,7 +314,7 @@ namespace Ogre
         resources.limits.generalConstantMatrixVectorIndexing = 1;
     }
     //-----------------------------------------------------------------------
-    // Jahshaka ogre-patch 0063 — the microcode blob's frame.
+    // Jahshaka fork 5bfe24cd9 (was 0063) — the microcode blob's frame.
     //
     // Upstream stores the raw SPIR-V and nothing else, and therefore cannot
     // cache a shader whose root layout is DISCOVERED by compiling it
@@ -449,7 +449,7 @@ namespace Ogre
         if( mReplaceVersionMacro )
             replaceVersionMacros();
 
-        // Jahshaka ogre-patch 0063: mReflectArrayRootLayouts is no longer a
+        // Jahshaka fork 5bfe24cd9 (was 0063): mReflectArrayRootLayouts is no longer a
         // reason to skip the cache — see jahWriteMicrocodeFrame above.
         mMicrocodeCacheKey.clear();
 
@@ -472,7 +472,7 @@ namespace Ogre
             {
                 mCompiled = true;
 
-                // Jahshaka ogre-patch 0063: put back the root layout the run that
+                // Jahshaka fork 5bfe24cd9 (was 0063): put back the root layout the run that
                 // WROTE this entry discovered by reflection. Without it the
                 // cached SPIR-V's binding numbers would not match the descriptor
                 // sets we are about to build from mRootLayout, and the shader
@@ -908,7 +908,7 @@ namespace Ogre
         if( mCompiled && !mSpirv.empty() )
         {
             GpuProgramManager &gpuProgramManager = GpuProgramManager::getSingleton();
-            // Jahshaka ogre-patch 0063, replacing upstream's TODO here ("Support
+            // Jahshaka fork 5bfe24cd9 (was 0063), replacing upstream's TODO here ("Support
             // caching SPIR-Vs with mReflectArrayRootLayouts == true or with
             // mCustomRootLayout == false"). The first half IS worth it: with the
             // VCT cascade chain on, three compute permutations of the bounce

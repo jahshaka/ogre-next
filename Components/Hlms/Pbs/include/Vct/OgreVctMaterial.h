@@ -166,7 +166,7 @@ namespace Ogre
         ConstBufferPacked *getBucketBuffer( size_t idx ) const { return mBuckets[idx].buffer; }
         bool getBucketHasDiffuse( size_t idx ) const { return mBuckets[idx].hasDiffuse; }
         bool getBucketHasEmissive( size_t idx ) const { return mBuckets[idx].hasEmissive; }
-        /// JAHSHAKA PATCH 0081: FORGET A DATABLOCK THAT IS ABOUT TO DIE. The
+        /// JAHSHAKA fork ad452604a+0338ca7f2+c4c80b5f7 (was 0081): FORGET A DATABLOCK THAT IS ABOUT TO DIE. The
         /// conversion cache is keyed by the raw datablock pointer across builds,
         /// so a datablock destroyed and another created at the same address
         /// would ALIAS the dead one's slot. The host's only answer used to be a

@@ -768,7 +768,7 @@ namespace Ogre
         const bool fresnelWorkflow =
             datablock->getWorkflow() == HlmsPbsDatablock::SpecularAsFresnelWorkflow;
 
-        // JAHSHAKA PATCH 0028 — A MATERIAL WITH NO SPECULAR RESPONSE SAMPLES NO
+        // JAHSHAKA fork 36162ff37+16d8e29d4 (was 0028) — A MATERIAL WITH NO SPECULAR RESPONSE SAMPLES NO
         // REFLECTION PROBE.
         //
         // Owner, 2026-09-13: "[reflection probes] should only affect reflective
@@ -1237,7 +1237,7 @@ namespace Ogre
             setProperty( tid, PbsProperty::EnvProbeMap, 1 );
         setProperty( tid, PbsProperty::TargetEnvprobeMap, envProbeMap == targetEnvProbeMap );
 
-        // JAHSHAKA PATCH 0028: ...and here is where the gate bites. A
+        // JAHSHAKA fork 36162ff37+16d8e29d4 (was 0028): ...and here is where the gate bites. A
         // zero-specular-response datablock (set in calculateHashForPreCreate)
         // takes neither use_envprobe_map nor use_parallax_correct_cubemaps, and
         // the pixel shader's probe loop is inserted under the latter, so the
@@ -1936,7 +1936,7 @@ namespace Ogre
         if( mOptimizationStrategy == LowerGpuOverhead )
             setProperty( kNoTid, PbsProperty::LowerGpuOverhead, 1 );
 
-        // Jahshaka patch 0024: an ORTHOGRAPHIC rendering camera gets its own pass
+        // Jahshaka fork 36162ff37+16d8e29d4 (was 0024): an ORTHOGRAPHIC rendering camera gets its own pass
         // property, so 800.PixelShader_piece_ps.any can take viewDir = +Z instead
         // of normalize( -inPs.pos ) (which assumes a pinhole at the origin and
         // makes every view-dependent term slide with the fragment's screen
@@ -2691,7 +2691,7 @@ namespace Ogre
                     *light0BufferPtr++ = attenRange;
                     *light0BufferPtr++ = attenLinear;
                     *light0BufferPtr++ = attenQuadratic;
-                    // Jahshaka patch 0018: .w = 1 / range, exactly as
+                    // Jahshaka fork 36162ff37+16d8e29d4 (was 0018): .w = 1 / range, exactly as
                     // ForwardPlusBase::collectLights
                     // writes it (OgreForwardPlusBase.cpp), so pass-buffer lights
                     // can apply the same range fade the Forward+ ones do and a

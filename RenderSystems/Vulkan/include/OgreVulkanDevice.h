@@ -75,7 +75,7 @@ namespace Ogre
         VkQueue graphicsQueue;
         VkQueue presentQueue;
 
-        /// Jahshaka (ogre-patch 0068): OPTIONAL. When the caller built this device
+        /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): OPTIONAL. When the caller built this device
         /// from VulkanDevice::buildDeviceCreationRequest() (the OpenXR route:
         /// xrCreateVulkanDeviceKHR is handed exactly the VkDeviceCreateInfo Ogre
         /// would have used), point this at that request and Ogre records the
@@ -151,7 +151,7 @@ namespace Ogre
             VkBool32 pipelineCreationCacheControl;
         };
 
-        /// Jahshaka (ogre-patch 0038): the feature structs a hardware ray-query tier
+        /// Jahshaka (fork d014b064f (was 0038)): the feature structs a hardware ray-query tier
         /// needs at vkCreateDevice time. They are MEMBERS, not locals, because the
         /// pNext chain they are linked into must outlive fillDeviceFeatures2() and
         /// stay valid until vkCreateDevice() reads it.
@@ -267,7 +267,7 @@ namespace Ogre
         /// the application sets it before it loads the render system. Default true.
         static bool msRayQueryAllowed;
 
-        /// Jahshaka (ogre-patch 0068): the device-extension names createDevice()
+        /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the device-extension names createDevice()
         /// would request on this physical device, in its exact order. createDevice()
         /// calls this, so an external creator that calls it too cannot drift.
         static void fillDeviceExtensionRequest(
@@ -275,13 +275,13 @@ namespace Ogre
             const FastArray<VkExtensionProperties> &availableExtensions,
             FastArray<const char *> &outExtensions );
 
-        /// Jahshaka (ogre-patch 0068): the VkPhysicalDeviceFeatures createDevice()
+        /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the VkPhysicalDeviceFeatures createDevice()
         /// would enable (Ogre's opt-in subset of what the driver reports).
         /// fillDeviceFeatures() calls this.
         static void fillDeviceFeaturesFor( VkPhysicalDevice physicalDevice,
                                            VkPhysicalDeviceFeatures &outFeatures );
 
-        /// Jahshaka (ogre-patch 0068): EVERYTHING vkCreateDevice would have been
+        /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): EVERYTHING vkCreateDevice would have been
         /// given by createDevice() - the extension list, the base features and the
         /// whole VkPhysicalDeviceFeatures2 pNext chain - filled into a caller-owned
         /// request, so an external device creator (OpenXR's xrCreateVulkanDeviceKHR)
@@ -299,7 +299,7 @@ namespace Ogre
 
         bool hasDeviceExtension( const IdString extension ) const;
 
-        /// Jahshaka (ogre-patch 0038): true when VK_KHR_acceleration_structure +
+        /// Jahshaka (fork d014b064f (was 0038)): true when VK_KHR_acceleration_structure +
         /// VK_KHR_ray_query were requested at vkCreateDevice and the driver reported
         /// their features. Nothing in Ogre reads this; it is the one honest way for a
         /// Jahshaka-owned compute pass to know whether it may build acceleration
@@ -324,7 +324,7 @@ namespace Ogre
         bool isDeviceLost() const { return mDeviceLostReason != VK_SUCCESS; }
 
     private:
-        /// Jahshaka (ogre-patch 0068): the one implementation of the
+        /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the one implementation of the
         /// VkPhysicalDeviceFeatures2 pNext chain, shared by the plain path
         /// (fillDeviceFeatures2) and the exported request
         /// (buildDeviceCreationRequest) so the two can never disagree.
@@ -338,7 +338,7 @@ namespace Ogre
             RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures );
     };
 
-    /// Jahshaka (ogre-patch 0068): a caller-owned copy of everything
+    /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): a caller-owned copy of everything
     /// VulkanDevice::createDevice() hands to vkCreateDevice. Fill it with
     /// VulkanDevice::buildDeviceCreationRequest(), point a VkDeviceCreateInfo at
     /// extensions.begin() / pNext() / features, create the device (yourself or via a

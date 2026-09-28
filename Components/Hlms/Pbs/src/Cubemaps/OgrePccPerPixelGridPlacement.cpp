@@ -205,7 +205,7 @@ namespace Ogre
         for( size_t i = 0u; i < 6u; ++i )
             colourVal[i] = box.getColourAt( 0u, 0u, sliceIdx + i, pixelFormat );
 
-        // Jahshaka patch 0047: keep what was measured. alpha is 0.5 * fDist /
+        // Jahshaka fork 618d95cca (was 0047): keep what was measured. alpha is 0.5 * fDist /
         // fApproxDist saturated at 1 (PccDepthCompressor_ps), averaged over the
         // face by the 1x1 mip, so 2 * alpha is that face's distance in units of
         // the distance to the region's own face -- and 2.0 means "nothing within
@@ -271,7 +271,7 @@ namespace Ogre
 
         const uint32 maxNumProbes = getMaxNumProbes();
 
-        // Jahshaka patch 0047: the depth readings this build is about to take.
+        // Jahshaka fork 618d95cca (was 0047): the depth readings this build is about to take.
         mProbeDepthRatios.clear();
         mProbeDepthRatios.resize( maxNumProbes * 6u, 0.0f );
 

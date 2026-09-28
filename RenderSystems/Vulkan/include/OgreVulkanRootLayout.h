@@ -139,7 +139,7 @@ namespace Ogre
         using RootLayout::findParamsBuffer;
         using RootLayout::getDescBindingRanges;
         using RootLayout::validateArrayBindings;
-        /// Jahshaka ogre-patch 0063: the shader cache stores what SPIR-V
+        /// Jahshaka fork 5bfe24cd9 (was 0063): the shader cache stores what SPIR-V
         /// reflection discovered, so it has to be able to read it back out.
         using RootLayout::getArrayRanges;
 

@@ -374,7 +374,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VctMaterial::removeDatablock( const HlmsDatablock *datablock )
     {
-        // JAHSHAKA PATCH 0081 -- see the header. The map is keyed by a non-const
+        // JAHSHAKA fork ad452604a+0338ca7f2+c4c80b5f7 (was 0081) -- see the header. The map is keyed by a non-const
         // pointer; the lookup does not write through it.
         DatablockConversionResultMap::iterator it =
             mDatablockConversionResults.find( const_cast<HlmsDatablock *>( datablock ) );
