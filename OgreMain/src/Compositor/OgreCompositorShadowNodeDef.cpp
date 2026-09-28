@@ -202,9 +202,18 @@ namespace Ogre
                     mMinRq = std::min<size_t>( mMinRq, passScene->mFirstRQ );
                     mMaxRq = std::max<size_t>( mMaxRq, passScene->mLastRQ );
 
-                    // Regular nodes calculate the LOD values, we just use them.
-                    if( passScene->mLodCameraName == IdString() )
-                        passScene->mUpdateLodLists = false;
+                    // JAHSHAKA (SHADOW-LOD-1): a caster pass computes LOD for ITS OWN
+                    // camera (the shadow map's, with the map's texels as the pixels),
+                    // not the level the regular node chose for the view. Upstream set
+                    // mUpdateLodLists = false here ("Regular nodes calculate the LOD
+                    // values, we just use them"), so a light drew its casters at the
+                    // level the EYE chose - too fine near the eye, too coarse far from
+                    // it, and wrong for a light looking the other way. The pass's walk
+                    // (CompositorPassScene::execute) takes the shadow camera when no
+                    // mLodCameraName is set, and CompositorShadowNode::_update puts the
+                    // view's levels back after its passes (the node updates between the
+                    // view's LOD update and its draw). An explicit mLodCameraName, or
+                    // mUpdateLodLists = false on the definition, keeps its meaning.
 
                     // Set to only render casters
                     passScene->mVisibilityMask |= VisibilityFlags::LAYER_SHADOW_CASTER;

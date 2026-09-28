@@ -2112,6 +2112,11 @@ namespace Ogre
 
             for( size_t i = firstRq; i < lastRq; ++i )
             {
+                // JAHSHAKA (SHADOW-LOD-1): a queue the pass skips is not its to
+                // walk (CompositorPassSceneDef::mSkipRQ, the cull's own test).
+                if( request.skipRq && ( request.skipRq[i >> 6u] & ( uint64( 1u ) << ( i & 63u ) ) ) )
+                    continue;
+
                 ObjectData objData;
                 const size_t totalObjs = memoryManager->getFirstObjectData( objData, i );
 
@@ -2137,11 +2142,12 @@ namespace Ogre
     }
     //-----------------------------------------------------------------------
     void SceneManager::updateAllLods( const Camera *lodCamera, Real lodBias, uint8 firstRq,
-                                      uint8 lastRq, Real lodHysteresis )
+                                      uint8 lastRq, Real lodHysteresis, const uint64 *skipRq )
     {
         mRequestType = UPDATE_ALL_LODS;
         mUpdateLodRequest = UpdateLodRequest( firstRq, lastRq, &mEntitiesMemoryManagerCulledList,
                                               lodCamera, lodCamera, lodBias, lodHysteresis );
+        mUpdateLodRequest.skipRq = skipRq;
 
         mUpdateLodRequest.camera->getFrustumPlanes();
         mUpdateLodRequest.lodCamera->getFrustumPlanes();

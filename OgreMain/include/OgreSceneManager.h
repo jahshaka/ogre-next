@@ -1942,9 +1942,16 @@ namespace Ogre
             fraction of the threshold being crossed. 0 — the default, and what
             every caller but Jahshaka's watched views passes — is upstream's
             behaviour to the bit. @see LodStrategy::lodSet.
+        @param skipRq
+            JAHSHAKA (SHADOW-LOD-1): the calling pass's skipped render queues
+            (CompositorPassSceneDef::mSkipRQ, 256 bits), or null. A queue the
+            pass skips is neither culled nor drawn by it, so its objects' levels
+            are not this pass's to compute: the walk leaves them alone, exactly
+            as the frustum cull does (the pass that DOES draw that queue computes
+            its own).
          */
         void updateAllLods( const Camera *lodCamera, Real lodBias, uint8 firstRq, uint8 lastRq,
-                            Real lodHysteresis = 0 );
+                            Real lodHysteresis = 0, const uint64 *skipRq = 0 );
 
         /** Updates the scene: Perform high level culling, Node transforms and entity animations.
          */

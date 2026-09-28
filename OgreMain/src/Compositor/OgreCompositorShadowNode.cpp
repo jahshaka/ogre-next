@@ -47,6 +47,7 @@ THE SOFTWARE.
 #include "OgreShadowCameraSetupFocused.h"
 #include "OgreShadowCameraSetupPSSM.h"
 #include "OgreViewport.h"
+#include "Math/Array/OgreObjectMemoryManager.h"
 
 #if OGRE_COMPILER == OGRE_COMPILER_MSVC
 #    include <intrin.h>
@@ -84,8 +85,13 @@ namespace Ogre
         mDefinition( definition ),
         mLastCamera( 0 ),
         mLastFrame( std::numeric_limits<size_t>::max() ),
-        mNumActiveShadowMapCastingLights( 0 )
+        mNumActiveShadowMapCastingLights( 0 ),
+        mWalksLod( false )
     {
+        mLodWalkRq[0] = mLodWalkRq[1] = mLodWalkRq[2] = mLodWalkRq[3] = 0u;
+        for( size_t t = 0; t < NUM_SCENE_MEMORY_MANAGER_TYPES; ++t )
+            mSavedNumRqs[t] = 0u;
+
         mShadowMapCameras.reserve( definition->mShadowMapTexDefinitions.size() );
         mLocalTextures.reserve( mLocalTextures.size() + definition->mShadowMapTexDefinitions.size() );
 
@@ -222,7 +228,89 @@ namespace Ogre
         // as a Node discovers it needs us for the first time, we get created)
         createPasses();
 
+        // JAHSHAKA (SHADOW-LOD-1): the queues our scene passes' LOD walks visit.
+        for( const CompositorPass *pass : mPasses )
+        {
+            if( pass->getType() != PASS_SCENE )
+                continue;
+            const CompositorPassSceneDef *def =
+                static_cast<const CompositorPassSceneDef *>( pass->getDefinition() );
+            if( !def->mUpdateLodLists )
+                continue;
+            const uint64 *skip = def->getSkipRenderQueues();
+            for( size_t rq = def->mFirstRQ; rq < def->mLastRQ; ++rq )
+            {
+                if( skip && ( skip[rq >> 6u] & ( uint64( 1u ) << ( rq & 63u ) ) ) )
+                    continue;
+                mLodWalkRq[rq >> 6u] |= uint64( 1u ) << ( rq & 63u );
+                mWalksLod = true;
+            }
+        }
+
         mShadowMapCastingLights.resize( mDefinition->mNumLights );
+    }
+    //-----------------------------------------------------------------------------------
+    void CompositorShadowNode::saveMeshLods( SceneManager *sceneManager )
+    {
+        // THE SAME MANAGERS SceneManager::updateAllLods WALKS (its culled list: the
+        // dynamic and the static entity managers), queue by queue, object by object.
+        mSavedMeshLods.clear();
+        mSavedMeshLodCounts.clear();
+        for( size_t t = 0; t < NUM_SCENE_MEMORY_MANAGER_TYPES; ++t )
+        {
+            ObjectMemoryManager &memoryManager =
+                sceneManager->_getEntityMemoryManager( static_cast<SceneMemoryMgrTypes>( t ) );
+            const size_t numRqs = std::min<size_t>( memoryManager.getNumRenderQueues(), 256u );
+            mSavedNumRqs[t] = numRqs;
+            for( size_t rq = 0; rq < numRqs; ++rq )
+            {
+                if( !( mLodWalkRq[rq >> 6u] & ( uint64( 1u ) << ( rq & 63u ) ) ) )
+                    continue;
+                ObjectData objData;
+                const size_t numObjs = memoryManager.getFirstObjectData( objData, rq );
+                mSavedMeshLodCounts.push_back( static_cast<uint32>( numObjs ) );
+                // Unused slots hold the manager's dummy owner; a slot being filled
+                // may be null for a moment (ObjectDataArrayMemoryManager::createNewSlot).
+                for( size_t i = 0; i < numObjs; ++i )
+                {
+                    const MovableObject *owner = objData.mOwner[i];
+                    mSavedMeshLods.push_back( owner ? owner->getCurrentMeshLod() : uint8( 0u ) );
+                }
+            }
+        }
+    }
+    //-----------------------------------------------------------------------------------
+    void CompositorShadowNode::restoreMeshLods( SceneManager *sceneManager )
+    {
+        size_t lodIdx = 0u;
+        size_t countIdx = 0u;
+        for( size_t t = 0; t < NUM_SCENE_MEMORY_MANAGER_TYPES; ++t )
+        {
+            ObjectMemoryManager &memoryManager =
+                sceneManager->_getEntityMemoryManager( static_cast<SceneMemoryMgrTypes>( t ) );
+            // A queue created inside our passes had nothing saved: stop at the count
+            // the save saw.
+            const size_t numRqs = mSavedNumRqs[t];
+            for( size_t rq = 0; rq < numRqs; ++rq )
+            {
+                if( !( mLodWalkRq[rq >> 6u] & ( uint64( 1u ) << ( rq & 63u ) ) ) )
+                    continue;
+                const size_t savedObjs = mSavedMeshLodCounts[countIdx++];
+                ObjectData objData;
+                const size_t numObjs = memoryManager.getFirstObjectData( objData, rq );
+                // An object created or destroyed by a listener inside our passes: the
+                // queue's slots no longer line up with what was saved; leave it.
+                if( numObjs == savedObjs )
+                {
+                    for( size_t i = 0; i < numObjs; ++i )
+                    {
+                        if( objData.mOwner[i] )
+                            objData.mOwner[i]->_setCurrentMeshLod( mSavedMeshLods[lodIdx + i] );
+                    }
+                }
+                lodIdx += savedObjs;
+            }
+        }
     }
     //-----------------------------------------------------------------------------------
     CompositorShadowNode::~CompositorShadowNode()
@@ -648,8 +736,17 @@ namespace Ogre
         SceneManager::IlluminationRenderStage previous = sceneManager->_getCurrentRenderStage();
         sceneManager->_setCurrentRenderStage( SceneManager::IRS_RENDER_TO_TEXTURE );
 
+        // JAHSHAKA (SHADOW-LOD-1): our caster passes compute LOD for their own
+        // cameras; the view that updates us chose its levels already and draws
+        // after us, so its levels are saved here and put back below.
+        if( mWalksLod )
+            saveMeshLods( sceneManager );
+
         // Now render all passes
         CompositorNode::_update( lodCamera, sceneManager );
+
+        if( mWalksLod )
+            restoreMeshLods( sceneManager );
 
         sceneManager->_setCurrentRenderStage( previous );
 

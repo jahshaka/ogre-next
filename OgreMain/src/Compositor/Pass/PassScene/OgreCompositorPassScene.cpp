@@ -207,7 +207,30 @@ namespace Ogre
         Viewport *viewport = sceneManager->getCurrentViewport0();
         viewport->_setVisibilityMask( mDefinition->mVisibilityMask, mDefinition->mLightVisibilityMask );
 
-        if( mDefinition->mUpdateLodLists )
+        if( mDefinition->mUpdateLodLists &&
+            mDefinition->mShadowNodeRecalculation == SHADOW_NODE_CASTER_PASS &&
+            mDefinition->mLodCameraName == IdString() )
+        {
+            // JAHSHAKA (SHADOW-LOD-1): A SHADOW MAP'S CASTERS AT THE LIGHT'S LEVEL.
+            // mCamera is the map's own camera here (CompositorShadowNode::
+            // postInitializePass), and this pass's viewport is the map's rectangle, so
+            // the walk measures every caster in the map's texels. The parent's LOD
+            // camera (the eye) is still what the cull and the render phases below are
+            // given - only the level changes. CompositorShadowNode::_update restores the
+            // levels the view chose once its passes are done.
+            Viewport localVp = *viewport;
+            setViewportSizeToViewport( 0u, &localVp );
+            Viewport *prevVp = mCamera->getLastViewport();
+            mCamera->_notifyViewport( &localVp );
+
+            sceneManager->updateAllLods( mCamera, mDefinition->mLodBias,  //
+                                         mDefinition->mFirstRQ, mDefinition->mLastRQ,
+                                         mDefinition->mLodHysteresis,
+                                         mDefinition->getSkipRenderQueues() );
+
+            mCamera->_notifyViewport( prevVp );
+        }
+        else if( mDefinition->mUpdateLodLists )
         {
             // LODs may require up to date viewports. But we can't write to the viewport's dimensions
             // without messing up beginRenderPassDescriptor internal state, so we use a local copy.
@@ -220,9 +243,11 @@ namespace Ogre
 
             // JAHSHAKA (ogre-patch 0075): ...and THIS pass's switch band, which
             // is 0 for every pass that has not asked for one.
+            // JAHSHAKA (SHADOW-LOD-1): ...and not over the queues it skips.
             sceneManager->updateAllLods( usedLodCamera, mDefinition->mLodBias,  //
                                          mDefinition->mFirstRQ, mDefinition->mLastRQ,
-                                         mDefinition->mLodHysteresis );
+                                         mDefinition->mLodHysteresis,
+                                         mDefinition->getSkipRenderQueues() );
 
             // Restore viewport
             mLodCamera->_notifyViewport( viewport );

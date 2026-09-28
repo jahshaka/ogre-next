@@ -143,6 +143,27 @@ namespace Ogre
         /// Changes with each call to setShadowMapsToPass
         LightList mCurrentLightList;
 
+        /** JAHSHAKA (SHADOW-LOD-1): THE VIEW'S LEVELS, KEPT ACROSS OUR PASSES.
+            A caster pass computes LOD for its own shadow camera
+            (CompositorShadowNodeDef::_validateAndFinish), which writes the one
+            per-object level MovableObject keeps. The node is updated BETWEEN the
+            regular pass's LOD update and its draw, so _update saves the levels of
+            every object our passes walk before they run and writes them back after.
+            mLodWalkRq = the queues at least one of our scene passes walks (its
+            [first, last) minus the queues it skips); mSavedMeshLodCounts = the
+            object count of each (memory manager, walked queue) at the save, so a
+            restore never writes a queue whose population changed under it
+            (mSavedNumRqs: each manager's queue count at the save).
+        */
+        uint64               mLodWalkRq[4];
+        bool                 mWalksLod;
+        FastArray<uint8>     mSavedMeshLods;
+        FastArray<uint32>    mSavedMeshLodCounts;
+        size_t               mSavedNumRqs[NUM_SCENE_MEMORY_MANAGER_TYPES];
+
+        void saveMeshLods( SceneManager *sceneManager );
+        void restoreMeshLods( SceneManager *sceneManager );
+
         /** Called by update to find out which lights are the ones closest to the given
             camera. Early outs if we've already calculated our stuff for that camera in
             a previous call.
