@@ -3688,6 +3688,25 @@ namespace Ogre
                         srcStage |= ogreToVkStageFlags( itor->oldStageMask );
                 }
 
+                // Jahshaka: AN ATTACHMENT LAYOUT WAS WRITTEN BY ITS RENDER PASS, WHATEVER THE
+                // PASS'S OWN ACCESS SAID. A render pass writes its attachments at its end - the
+                // store op and the final layout - even when the pass only READ them (a depth
+                // tested but not written is tracked as ResourceAccess::Read) and even when the
+                // solver has no record of the previous frame's use (oldAccess Undefined). A
+                // layout transition is itself a write, so it must make that store available:
+                // with srcAccessMask 0 it is a WRITE_AFTER_WRITE hazard (synchronization
+                // validation: 174 hits on a depth re-shown in a second view, VIEWS-DEPTH-2;
+                // the shadow maps of the Atom world, ATOM-BLACK-FRAMES-1). The stage is already
+                // in srcStage (toVkPipelineStageFlags of the old layout, above).
+                if( itor->oldLayout == ResourceLayout::RenderTarget ||
+                    itor->oldLayout == ResourceLayout::RenderTargetReadOnly ||
+                    itor->oldLayout == ResourceLayout::Clear )
+                {
+                    imageBarrier.srcAccessMask |= bIsDepth
+                                                      ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                                                      : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                }
+
                 imageBarrier.dstAccessMask =
                     VulkanMappings::getAccessFlags( itor->newLayout, itor->newAccess, texture, true );
 
