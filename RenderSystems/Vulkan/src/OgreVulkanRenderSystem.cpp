@@ -2843,24 +2843,25 @@ namespace Ogre
         if( familyIdx >= numFamilies || families[familyIdx].timestampValidBits == 0u )
             return;
 
+        // The first pool is created here (a device that refuses one refuses
+        // the feature); the rest on demand in jahGpuFrameBegin.
         VkQueryPoolCreateInfo poolCi;
         makeVkStruct( poolCi, VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO );
         poolCi.queryType = VK_QUERY_TYPE_TIMESTAMP;
         poolCi.queryCount = kJahMaxGpuQueries;
-        for( size_t i = 0u; i < 2u; ++i )
-        {
-            mJahQueryPool[i] = 0;
-            mJahPoolWritten[i] = false;
-            mJahSamples[i].clear();
-            if( vkCreateQueryPool( mDevice->mDevice, &poolCi, 0, &mJahQueryPool[i] ) != VK_SUCCESS )
-            {
-                for( size_t j = 0u; j < i; ++j )
-                    vkDestroyQueryPool( mDevice->mDevice, mJahQueryPool[j], 0 );
-                return;
-            }
-        }
+        JahGpuPool first;
+        first.pool = 0;
+        if( vkCreateQueryPool( mDevice->mDevice, &poolCi, 0, &first.pool ) != VK_SUCCESS )
+            return;
+        mJahPools.clear();
+        mJahPending.clear();
+        mJahFree.clear();
+        mJahPools.push_back( first );
         mJahTimestampPeriodNs = props.limits.timestampPeriod;
-        mJahPoolIdx = 0u;
+        // The first pool is unreset: it is written only after the first
+        // jahGpuFrameBegin, which resets it from the free list.
+        mJahFree.push_back( 0u );
+        mJahPoolIdx = 0xFFFFFFFFu;
         mJahNextQuery = 0u;
         mJahOverflowed = 0u;
         mJahOverflowedLastFrame = 0u;
@@ -2878,14 +2879,15 @@ namespace Ogre
         mJahGpuProfiling = false;
         // The pools may still be referenced by command buffers in flight.
         mDevice->stall();
-        for( size_t i = 0u; i < 2u; ++i )
+        for( size_t i = 0u; i < mJahPools.size(); ++i )
         {
-            if( mJahQueryPool[i] )
-                vkDestroyQueryPool( mDevice->mDevice, mJahQueryPool[i], 0 );
-            mJahQueryPool[i] = 0;
-            mJahPoolWritten[i] = false;
-            mJahSamples[i].clear();
+            if( mJahPools[i].pool )
+                vkDestroyQueryPool( mDevice->mDevice, mJahPools[i].pool, 0 );
         }
+        mJahPools.clear();
+        mJahPending.clear();
+        mJahFree.clear();
+        mJahPoolIdx = 0xFFFFFFFFu;
         mJahSampleStack.clear();
         mJahResults.clear();
 #endif
@@ -2896,19 +2898,19 @@ namespace Ogre
 #ifdef JAH_GPU_TIMESTAMPS
         if( !mJahGpuProfiling )
             return;
-        // Two queries per sample (begin, end). OUT OF ROOM: push a SENTINEL and
-        // return. Returning without pushing was a real mis-attribution bug: the
-        // stack is how `end` finds its own sample, so a bare return made the
+        // Two queries per sample (begin, end). OUT OF ROOM (or no pool open —
+        // a sample before the host's first frame): push a SENTINEL and return.
+        // Returning without pushing was a real mis-attribution bug: the stack
+        // is how `end` finds its own sample, so a bare return made the
         // matching `end` pop the ENCLOSING sample, write that sample's end
-        // timestamp at the wrong point in the frame and file it as complete —
-        // from the first overflow to the end of the frame, WRONG durations were
-        // reported as real numbers. A sentinel keeps the nesting honest and the
-        // sample is simply absent, which the caller reports as "no GPU time".
+        // timestamp at the wrong point in the frame and file it as complete.
+        // A sentinel keeps the nesting honest; the sample is reported LOST
+        // (a negative time) when its pool resolves.
         // Reachable: three shadowed point lamps inside one probe capture is
         // 6 faces x 22 passes before the view and the planar arms are counted.
         JahGpuSample sample;
         sample.hash = hashCache ? *hashCache : 0u;
-        if( mJahNextQuery + 2u > kJahMaxGpuQueries )
+        if( mJahPoolIdx >= mJahPools.size() || mJahNextQuery + 2u > kJahMaxGpuQueries )
         {
             sample.query = kJahOverflowQuery;
             ++mJahOverflowed;
@@ -2920,9 +2922,8 @@ namespace Ogre
         // A timestamp write is legal inside a render pass, which is where most
         // of these land.
         vkCmdWriteTimestamp( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
-                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, mJahQueryPool[mJahPoolIdx],
+                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, mJahPools[mJahPoolIdx].pool,
                              sample.query );
-        mJahPoolWritten[mJahPoolIdx] = true;
         mJahSampleStack.push_back( sample );
 #else
         (void)name;
@@ -2938,16 +2939,74 @@ namespace Ogre
         const JahGpuSample sample = mJahSampleStack.back();
         mJahSampleStack.pop_back();
         if( sample.query == kJahOverflowQuery )
-            return;   // the sentinel: no query was ever written for it
+        {
+            // The sentinel: no query was ever written for it. It is reported
+            // lost with the pool it would have been in (or at once, if none).
+            if( mJahPoolIdx < mJahPools.size() )
+                mJahPools[mJahPoolIdx].lost.push_back( sample.hash );
+            else
+                mJahResults.push_back( std::pair<uint32, float>( sample.hash, -1.0f ) );
+            return;
+        }
         vkCmdWriteTimestamp( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
-                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mJahQueryPool[mJahPoolIdx],
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mJahPools[mJahPoolIdx].pool,
                              sample.query + 1u );
-        mJahSamples[mJahPoolIdx].push_back( sample );
+        mJahPools[mJahPoolIdx].samples.push_back( sample );
 #else
         (void)name;
 #endif
     }
 #ifdef JAH_GPU_TIMESTAMPS
+    //-------------------------------------------------------------------------
+    bool VulkanRenderSystem::jahGpuResolvePool( JahGpuPool &p, bool force )
+    {
+        if( !p.samples.empty() && !force )
+        {
+            uint32 highest = 0u;
+            for( size_t i = 0u; i < p.samples.size(); ++i )
+                highest = std::max( highest, p.samples[i].query + 2u );
+            // Sized to what was actually written, not to the pool.
+            mJahRawResults.resize( (size_t)highest * 2u );
+            uint64 *raw = mJahRawResults.begin();
+            // NON-BLOCKING: WITH_AVAILABILITY gives a third word per query that
+            // is zero while the GPU has not written it.
+            const VkResult res = vkGetQueryPoolResults(
+                mDevice->mDevice, p.pool, 0u, highest, (size_t)highest * 2u * sizeof( uint64 ),
+                raw, 2u * sizeof( uint64 ),
+                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT );
+            if( res != VK_SUCCESS && res != VK_NOT_READY )
+                return false;
+            for( size_t i = 0u; i < p.samples.size(); ++i )
+            {
+                const uint64 *b = raw + (size_t)p.samples[i].query * 2u;
+                const uint64 *e = raw + (size_t)( p.samples[i].query + 1u ) * 2u;
+                if( b[1] == 0u || e[1] == 0u )
+                    return false;   // still in flight: the whole pool waits
+            }
+            for( size_t i = 0u; i < p.samples.size(); ++i )
+            {
+                const uint64 *b = raw + (size_t)p.samples[i].query * 2u;
+                const uint64 *e = raw + (size_t)( p.samples[i].query + 1u ) * 2u;
+                // A wrapped counter has no time; it is reported, not dropped.
+                const float ms = e[0] < b[0] ? -1.0f
+                                             : float( double( e[0] - b[0] ) *
+                                                      double( mJahTimestampPeriodNs ) * 1e-6 );
+                mJahResults.push_back( std::pair<uint32, float>( p.samples[i].hash, ms ) );
+            }
+        }
+        else
+        {
+            // FORCED (a pool unanswered for kJahMaxPendingPools frames): every
+            // sample in it is reported lost rather than kept waiting forever.
+            for( size_t i = 0u; i < p.samples.size(); ++i )
+                mJahResults.push_back( std::pair<uint32, float>( p.samples[i].hash, -1.0f ) );
+        }
+        for( size_t i = 0u; i < p.lost.size(); ++i )
+            mJahResults.push_back( std::pair<uint32, float>( p.lost[i], -1.0f ) );
+        p.samples.clear();
+        p.lost.clear();
+        return true;
+    }
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::jahGpuFrameBegin()
     {
@@ -2956,52 +3015,56 @@ namespace Ogre
         // Any sample left open by a frame that threw would corrupt the next
         // one's nesting.
         mJahSampleStack.clear();
-        mJahPoolIdx = ( mJahPoolIdx + 1u ) & 1u;
         mJahResults.clear();
 
-        const uint32 written = (uint32)mJahSamples[mJahPoolIdx].size();
-        if( mJahPoolWritten[mJahPoolIdx] && written > 0u )
+        // The pool the frame that just ended wrote joins the waiting list.
+        if( mJahPoolIdx < mJahPools.size() )
+            mJahPending.push_back( mJahPoolIdx );
+        mJahPoolIdx = 0xFFFFFFFFu;
+
+        // OLDEST FIRST, and stop at the first pool still in flight (the GPU
+        // finishes in submission order). A pool left waiting for
+        // kJahMaxPendingPools newer frames is resolved as lost.
+        size_t resolved = 0u;
+        while( resolved < mJahPending.size() )
         {
-            // NON-BLOCKING. WITH_AVAILABILITY gives a third word per query that
-            // is zero while the GPU has not written it; a sample whose pair is
-            // not both available is skipped, never waited for and never
-            // reported as zero.
-            uint32 highest = 0u;
-            for( size_t i = 0u; i < mJahSamples[mJahPoolIdx].size(); ++i )
-                highest = std::max( highest, mJahSamples[mJahPoolIdx][i].query + 2u );
-            // Sized to what was actually written, not to the pool: a 20-pass
-            // frame read back 64 KB every frame before this.
-            mJahRawResults.resize( (size_t)highest * 2u );
-            uint64 *raw = mJahRawResults.begin();
-            const VkResult res = vkGetQueryPoolResults(
-                mDevice->mDevice, mJahQueryPool[mJahPoolIdx], 0u, highest,
-                (size_t)highest * 2u * sizeof( uint64 ), raw, 2u * sizeof( uint64 ),
-                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT );
-            if( res == VK_SUCCESS || res == VK_NOT_READY )
+            JahGpuPool &p = mJahPools[mJahPending[resolved]];
+            const bool force = mJahPending.size() - resolved > kJahMaxPendingPools;
+            if( !jahGpuResolvePool( p, force ) )
+                break;
+            mJahFree.push_back( mJahPending[resolved] );
+            ++resolved;
+        }
+        mJahPending.erase( mJahPending.begin(), mJahPending.begin() + (ptrdiff_t)resolved );
+
+        // The new frame's pool: a free one, or a new one.
+        if( mJahFree.empty() )
+        {
+            VkQueryPoolCreateInfo poolCi;
+            makeVkStruct( poolCi, VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO );
+            poolCi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            poolCi.queryCount = kJahMaxGpuQueries;
+            JahGpuPool fresh;
+            fresh.pool = 0;
+            if( vkCreateQueryPool( mDevice->mDevice, &poolCi, 0, &fresh.pool ) == VK_SUCCESS )
             {
-                for( size_t i = 0u; i < mJahSamples[mJahPoolIdx].size(); ++i )
-                {
-                    const JahGpuSample &sample = mJahSamples[mJahPoolIdx][i];
-                    const uint64 *b = raw + (size_t)sample.query * 2u;
-                    const uint64 *e = raw + (size_t)( sample.query + 1u ) * 2u;
-                    if( b[1] == 0u || e[1] == 0u || e[0] < b[0] )
-                        continue;   // not back yet, or a wrapped counter
-                    const float ms = float( double( e[0] - b[0] ) *
-                                            double( mJahTimestampPeriodNs ) * 1e-6 );
-                    mJahResults.push_back( std::pair<uint32, float>( sample.hash, ms ) );
-                }
+                mJahPools.push_back( fresh );
+                mJahFree.push_back( uint32( mJahPools.size() - 1u ) );
             }
         }
-        mJahSamples[mJahPoolIdx].clear();
-
-        // THE RESET MUST BE OUTSIDE EVERY ENCODER (a render pass cannot contain
-        // vkCmdResetQueryPool). This is the one call the host makes at the top
-        // of the frame, before any workspace updates, so ending the encoders
-        // here costs nothing: there is nothing open yet in a normal frame.
-        mDevice->mGraphicsQueue.endAllEncoders();
-        vkCmdResetQueryPool( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
-                             mJahQueryPool[mJahPoolIdx], 0u, kJahMaxGpuQueries );
-        mJahPoolWritten[mJahPoolIdx] = false;
+        if( !mJahFree.empty() )
+        {
+            mJahPoolIdx = mJahFree.back();
+            mJahFree.pop_back();
+            // THE RESET MUST BE OUTSIDE EVERY ENCODER (a render pass cannot
+            // contain vkCmdResetQueryPool). This is the one call the host makes
+            // at the top of the frame, before any workspace updates, so ending
+            // the encoders here costs nothing: there is nothing open yet in a
+            // normal frame.
+            mDevice->mGraphicsQueue.endAllEncoders();
+            vkCmdResetQueryPool( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
+                                 mJahPools[mJahPoolIdx].pool, 0u, kJahMaxGpuQueries );
+        }
         mJahNextQuery = 0u;
         mJahOverflowedLastFrame = mJahOverflowed;
         mJahOverflowed = 0u;
@@ -3061,6 +3124,13 @@ namespace Ogre
             *(bool *)pData = mJahGpuProfiling;
             return;
         }
+        else if( name == "JahGpuQueryPools" )
+        {
+            // How many query pools exist now (created on demand, one per frame
+            // the GPU still holds; 0 outside a capture).
+            *(uint32 *)pData = (uint32)mJahPools.size();
+            return;
+        }
         else if( name == "JahGpuFrameBegin" )
         {
             jahGpuFrameBegin();
@@ -3077,8 +3147,11 @@ namespace Ogre
         }
         else if( name == "JahGpuSampleResults" )
         {
-            // (sample id, milliseconds) for the frame recorded two frames ago.
-            // Appended, never cleared, so one caller can drain several.
+            // (sample id, milliseconds) for every pool that resolved at the
+            // last JahGpuFrameBegin — each sample exactly once; a NEGATIVE time
+            // is a sample that will never have one (no room, a wrapped counter,
+            // a pool lost). Appended, never cleared, so one caller can drain
+            // several.
             std::vector<std::pair<uint32, float> > *out =
                 (std::vector<std::pair<uint32, float> > *)pData;
             out->insert( out->end(), mJahResults.begin(), mJahResults.end() );
