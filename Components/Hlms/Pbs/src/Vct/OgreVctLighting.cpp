@@ -1528,19 +1528,6 @@ namespace Ogre
             const float cascadeFinalMultiplier =
                 cascade->mInvBakingMultiplier * cascade->mMultiplier / finalMultiplier;
 
-            float cascadeNumMipmaps = 0u;
-
-            if( cascade->mAnisotropic )
-            {
-                // Anisotropic has the number of mipmaps calculated
-                cascadeNumMipmaps = static_cast<float>( cascade->mLightVoxel[1]->getNumMipmaps() );
-            }
-            else
-            {
-                const TextureGpu *cascadeLightVoxel = cascade->mLightVoxel[0];
-                cascadeNumMipmaps = static_cast<float>( cascadeLightVoxel->getNumMipmaps() );
-            }
-
             *outFromPrev++ = static_cast<float>( vScale.x );
             *outFromPrev++ = static_cast<float>( vScale.y );
             *outFromPrev++ = static_cast<float>( vScale.z );
@@ -1549,12 +1536,12 @@ namespace Ogre
             *outFromPrev++ = static_cast<float>( vPos.x );
             *outFromPrev++ = static_cast<float>( vPos.y );
             *outFromPrev++ = static_cast<float>( vPos.z );
-            // HACK: This is so hacky it hurts: cascadeNumMipmaps^3 empirically looks reasonably
-            // good for brightness. We need a better way to equalize specular. Specular
-            // brightness equalization depends on:
-            //      - Roughness (as it affects lighting)
-            //      - Cell Size Volume
-            *outFromPrev++ = 1.0f / ( cascadeNumMipmaps * cascadeNumMipmaps * cascadeNumMipmaps );
+            // Jahshaka (PHOTON-PHYSICS-1, CONE-EMITTER-1): UNUSED. It held upstream's specular
+            // "brightness equalisation" slope (1 / mips^3) for a hop weight of
+            // mix( 0.5, cascadeFinalMultiplier, lod x slope ) - a near-mirror cone read every
+            // cascade past the first at half its radiance. The walk converts a hop's units by
+            // cascadeFinalMultiplier alone now (jah_voxel_march.glsl, jahConeMarch).
+            *outFromPrev++ = 0.0f;
         }
     }
     //-------------------------------------------------------------------------

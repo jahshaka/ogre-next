@@ -340,11 +340,22 @@
 			// the lobe's share below the surface is stopped by it (jahConeBelow)
 			float4 jahSpecOrigin = jahOrigin;
 			jahSpecOrigin.w = jahConeBelow( normalize( pixelData.reflDir ), normalize( pixelData.normal ), min( specConeAngleTan, 1.0f ) );
-			JahConeResult irrLight = jahConeMarch( posLS, reflVecLS, min( specConeAngleTan, 1.0f ), jahSpecOrigin,
+			// ...and it starts ON the reflection, one cell above the surface, aged by the stretch
+			// it skipped (jahSpecularConeStart: the parallel line one cell along the normal slid
+			// the mirror image by that cell)
+			float4 jahSpecStart = jahSpecularConeStart( posLS - biasDirLS * JAH_VOX_INVRES( 0 ),
+														reflVecLS, biasDirLS );
+			// A LOBE WIDER THAN tan 1 has no image to slide: its march is the occlusion query of
+			// a lobe spread over most of the hemisphere, and it keeps the diffuse set's start (on
+			// the reflection, the sealed room's rough walls let 3 more codes of sky through the
+			// reader's lattice residual: gi.sealed_room_chain_target, eye at the centre 3 -> 6).
+			if( jahRoughLobe )
+				jahSpecStart = float4( posLS, 0.0f );
+			JahConeResult irrLight = jahConeMarchAged( jahSpecStart.xyz, reflVecLS, min( specConeAngleTan, 1.0f ), jahSpecOrigin,
 			@property( vct_enable_specular_sdf_quality && vct_num_probes <= 1 )
-												   JAH_MARCH_SPECULAR | JAH_MARCH_SDF );
+												   JAH_MARCH_SPECULAR | JAH_MARCH_SDF, jahSpecStart.w );
 			@else
-												   JAH_MARCH_SPECULAR );
+												   JAH_MARCH_SPECULAR, jahSpecStart.w );
 			@end
 
 			float specAlpha = ( 1.0f - min( 1.0f, irrLight.alpha / 0.95f ) );
