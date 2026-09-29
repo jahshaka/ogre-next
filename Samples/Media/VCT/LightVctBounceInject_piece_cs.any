@@ -49,7 +49,9 @@
 	// into the piece JahEnvironment): what an escaping bounce cone sees. The sky is
 	// NEVER injected into the voxels as a source (it would be counted again by every
 	// pixel whose own cone escapes); it enters ONCE, here, as the light an escaping
-	// bounce cone brings to the voxel it leaves. The gain and the SH arrive already
+	// bounce cone brings to the voxel it leaves - the SKY PASS first (jah_env_only,
+	// run by VctLighting::update at every bounce count, CONTACT-OCCLUSION-1), then every
+	// bounce pass, whose base is the lamps' direct volume. The gain and the SH arrive already
 	// divided by this volume's decode multiplier, so the result is in the volume's
 	// stored units like the cone's own colour.
 	@property( jah_env )
@@ -92,6 +94,9 @@
 	#define JAH_CONES_TO_LS( d ) normalize( ( d ) * ( p_invVoxelResolution / p_voxelCellSize ) )
 	#define JAH_CONES_TO_WORLD( d ) ( d )
 	@insertpiece( JahVoxelCones )
+	// Jahshaka (CONTACT-OCCLUSION-1): the sky's share a voxel re-emits is gathered on
+	// the finer sky quadrature (jahSkyShareFine, JahVoxelCones - the card relight's
+	// too); the voxels' share (the bounce proper) keeps the pixel's own cone set.
 
 	/// The bounce gathered at a voxel: posLS = the voxel's centre in the volume's
 	/// normalised space, nWorld = its (unit) world normal. The result is in the
@@ -113,7 +118,15 @@
 		float3 light;
 		float3 envD;
 		jahDiffuseCones( posLS, jahConeOrigin( posLS, normalLS ), jahConeBasisWorld( nWorld ), light, envD );
-		outDiffuse.xyz = light + envD;
+		envD = jahSkyShareFine( posLS, jahConeOrigin( posLS, normalLS ), jahConeBasisWorld( nWorld ) );
+		// Jahshaka (CONTACT-OCCLUSION-1): the SKY PASS (VctLighting::update runs it first,
+		// jah_env_only) gathers the environment's share alone - the sky's direct term,
+		// through the cones' escape. Every other pass gathers both.
+		@property( jah_env_only )
+			outDiffuse.xyz = envD;
+		@else
+			outDiffuse.xyz = light + envD;
+		@end
 	}
 
 	@insertpiece( DeclSRgbFuncs )

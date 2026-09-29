@@ -885,10 +885,19 @@ namespace Ogre
         renderSystem->debugAnnotationPop();
     }
     //-------------------------------------------------------------------------
-    void VctLighting::runBounce()
+    void VctLighting::runBounce( bool envOnly )
     {
         RenderSystem *renderSystem = mVoxelizer->getRenderSystem();
-        renderSystem->debugAnnotationPush( "VctLighting Bounce" );
+        renderSystem->debugAnnotationPush( envOnly ? "VctLighting Sky" : "VctLighting Bounce" );
+
+        // Jahshaka (CONTACT-OCCLUSION-1): the sky's direct term is this pass with the
+        // voxels' share of the gather compiled out (the job's `jah_env_only`). The job is
+        // shared by name, so the property is re-asserted per dispatch like its bindings.
+        {
+            const int32 envOnlyI32 = envOnly ? 1 : 0;
+            if( mLightVctBounceInject->getProperty( "jah_env_only" ) != envOnlyI32 )
+                mLightVctBounceInject->setProperty( "jah_env_only", envOnlyI32 );
+        }
 
         mBounceVoxelCellSize->setManualValue( mVoxelizer->getVoxelCellSize() );
         mBounceInvVoxelResolution->setManualValue( 1.0f / mVoxelizer->getVoxelResolution() );
@@ -1394,6 +1403,26 @@ namespace Ogre
             renderSystem->debugAnnotationPop();
         }
 
+        // Jahshaka (CONTACT-OCCLUSION-1, SKY-BOUNCE-1): THE SKY IS A LIGHT. Its direct term
+        // enters the store first - total = direct + rho * E_sky, E_sky the environment
+        // through the escape of each voxel's own cones (its sky visibility: a floor under
+        // a roof gets none) - and every bounce pass after it is the Jacobi step it always
+        // was: new = direct + rho * ( G_voxels( total ) + E_sky ), whose base is the lamps'
+        // direct volume, so the sky's term is counted ONCE whatever the pass count, and a
+        // sky-lit surface gets as many bounces as a lamp-lit one.
+        //
+        // Before this, the sky reached the store ONLY through a bounce pass's escaping
+        // cones, and a document asking for one bounce runs none: a white wall under the
+        // sky reflected NOTHING onto the floor beside it at High, Medium and Low
+        // (gi.contact_occlusion's arm B: white minus black exactly 0), and one pass behind
+        // at Epic. It is not a double count with a reader's own escape: a MISS reads the
+        // sky, a HIT reads the surface - and the surface's radiance includes the sky that
+        // lights it. It needs the bounce volumes (setAllowMultipleBounces) and an
+        // environment that carries light; a store without either is unchanged.
+        const bool skyPass = getAllowMultipleBounces() && hasEnvironmentLight();
+        if( skyPass )
+            runBounce( true );
+
         if( numBounces > 0u )
         {
             if( !getAllowMultipleBounces() )
@@ -1686,6 +1715,18 @@ namespace Ogre
             memcpy( mEnvSh, sh, sizeof( mEnvSh ) );
         else
             memset( mEnvSh, 0, sizeof( mEnvSh ) );
+    }
+    //-------------------------------------------------------------------------
+    bool VctLighting::hasEnvironmentLight() const
+    {
+        if( mEnvCube )
+            return mEnvGain[0] > 0.0f || mEnvGain[1] > 0.0f || mEnvGain[2] > 0.0f;
+        for( size_t i = 0u; i < 27u; ++i )
+        {
+            if( mEnvSh[i] != 0.0f )
+                return true;
+        }
+        return false;
     }
     //-------------------------------------------------------------------------
     TextureGpu **VctLighting::getLightVoxelTextures( const size_t cascadeIdx )

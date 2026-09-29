@@ -249,7 +249,17 @@ namespace Ogre
         /// dampening it fed (upstream's commented-out 1 / ( pi * ( n/2 + 1 ) )).
         /// Every pass of a Jacobi iteration is the same operator; nothing about it
         /// depends on which pass it is.
-        void runBounce();
+        ///
+        /// Jahshaka (CONTACT-OCCLUSION-1, SKY-BOUNCE-1): `envOnly` runs the same pass with
+        /// the voxels' share of the gather left out - new = direct + rho * E_sky, the
+        /// ENVIRONMENT'S DIRECT TERM at every voxel (the sky through the escape of the
+        /// voxel's own cones: its visibility). update() runs it first, whenever an
+        /// environment carries light, so the sky is a light like any lamp: a surface it
+        /// lights re-emits albedo x its sky irradiance at EVERY bounce count, where it
+        /// used to exist only from the second bounce on (and not at all at one).
+        void runBounce( bool envOnly = false );
+        /// True when the environment setEnvironment was handed carries any light.
+        bool hasEnvironmentLight() const;
 
     public:
         VctLighting( IdType id, VctVoxelizerSourceBase *voxelizer, bool bAnisotropic );
