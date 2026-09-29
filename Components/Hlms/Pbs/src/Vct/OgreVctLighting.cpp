@@ -1100,6 +1100,14 @@ namespace Ogre
             texture->scheduleTransitionTo( GpuResidency::Resident );
             mLightBounce = texture;
 
+            // Jahshaka (CONTACT-OCCLUSION-1): THE DIRECT STORES ARE FLOAT, like the total. They
+            // were 8-bit sRGB on the claim that D is normalised to the ceiling by construction
+            // (the auto multiplier's brightest LAMP) - which an EMISSIVE surface is not: its
+            // radiance x the multiplier exceeds 1 wherever it outshines the brightest lamp, and
+            // every bounce pass rebuilt the total from the clipped D. The sky pass runs at every
+            // bounce count, so the clip reached every tier (gi.hit_planar: an emissive panel of
+            // 2.0 read 0.99 in the mirror). A float D holds what the float total holds: 8 bytes
+            // a voxel instead of 4 on the five direct volumes.
             // JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): the direct term's own volume, born and buried with
             // the bounce texture -- it is the bounce iteration that needs it, and
             // nothing else reads it. ONE mip: the bounce job reads it with a Load3D at
@@ -1114,7 +1122,7 @@ namespace Ogre
             directTex->setResolution( mLightVoxel[0]->getWidth(), mLightVoxel[0]->getHeight(),
                                       mLightVoxel[0]->getDepth() );
             directTex->setNumMipmaps( 1u );
-            directTex->setPixelFormat( PFG_RGBA8_UNORM_SRGB );
+            directTex->setPixelFormat( jahLightVoxelFormat() );  // Jahshaka (CONTACT-OCCLUSION-1): float, see below
             directTex->scheduleTransitionTo( GpuResidency::Resident );
             mLightDirect = directTex;
 
@@ -1132,7 +1140,7 @@ namespace Ogre
                 mLightDirectBack->setResolution( mLightVoxel[0]->getWidth(), mLightVoxel[0]->getHeight(),
                                                  mLightVoxel[0]->getDepth() );
                 mLightDirectBack->setNumMipmaps( 1u );
-                mLightDirectBack->setPixelFormat( PFG_RGBA8_UNORM_SRGB );
+                mLightDirectBack->setPixelFormat( jahLightVoxelFormat() );
                 mLightDirectBack->scheduleTransitionTo( GpuResidency::Resident );
                 for( uint8 i = 0u; i < 3u; ++i )
                 {
@@ -1144,7 +1152,7 @@ namespace Ogre
                     t->setResolution( mLightVoxel[1]->getWidth(), mLightVoxel[1]->getHeight(),
                                       mLightVoxel[1]->getDepth() );
                     t->setNumMipmaps( 1u );
-                    t->setPixelFormat( PFG_RGBA8_UNORM_SRGB );
+                    t->setPixelFormat( jahLightVoxelFormat() );
                     t->scheduleTransitionTo( GpuResidency::Resident );
                     mLightDirectDir[i] = t;
                 }
@@ -1282,7 +1290,7 @@ namespace Ogre
         if( mLightDirect )
         {
             uavSlot.texture = mLightDirect;
-            uavSlot.pixelFormat = PFG_RGBA8_UNORM;
+            uavSlot.pixelFormat = jahLightVoxelUavFormat();
             mLightInjectionJob->_setUavTexture( uavIdx++, uavSlot );
         }
         if( mAnisotropic )
@@ -1293,13 +1301,13 @@ namespace Ogre
             if( mLightDirect )
             {
                 uavSlot.texture = mLightDirectBack;
-                uavSlot.pixelFormat = PFG_RGBA8_UNORM;
+                uavSlot.pixelFormat = jahLightVoxelUavFormat();
                 mLightInjectionJob->_setUavTexture( uavIdx++, uavSlot );
             }
             for( uint8 i = 0u; i < 3u; ++i )
             {
                 uavSlot.texture = mLightDirect ? mLightDirectDir[i] : mLightVoxel[i + 1u];
-                uavSlot.pixelFormat = mLightDirect ? PFG_RGBA8_UNORM : jahLightVoxelUavFormat();
+                uavSlot.pixelFormat = jahLightVoxelUavFormat();
                 mLightInjectionJob->_setUavTexture( uavIdx++, uavSlot );
             }
             mInjectHigherMipHalfWidth->setManualValue( static_cast<int32>( mLightVoxel[1]->getWidth() >> 1u ) );

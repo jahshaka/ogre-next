@@ -41,16 +41,16 @@ uniform restrict writeonly image3D lightVoxel;
 	uniform restrict writeonly image3D backVoxel;
 	@add( jahInjUav, 1 )
 	@property( vct_keep_direct )
-		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba8 )
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba16f )
 		uniform restrict writeonly image3D directBackVoxel;
 		@add( jahInjUav, 1 )
-		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba8 )
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba16f )
 		uniform restrict writeonly image3D dirOut0;
 		@add( jahInjUav, 1 )
-		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba8 )
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba16f )
 		uniform restrict writeonly image3D dirOut1;
 		@add( jahInjUav, 1 )
-		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba8 )
+		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba16f )
 		uniform restrict writeonly image3D dirOut2;
 	@else
 		layout( vulkan( ogre_u@value(jahInjUav) ) vk_comma rgba16f )

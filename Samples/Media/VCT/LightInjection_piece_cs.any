@@ -174,9 +174,10 @@
 	@else
 		#define jahStoreLight( x ) ( x )
 	@end
-	// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0080): the DIRECT volume keeps its 8-bit sRGB store and so
-	// keeps its encode -- D is normalised to at most the ceiling by construction
-	// (VctLighting::update's auto multiplier), so nothing about it needs range.
+	// Jahshaka (CONTACT-OCCLUSION-1): the DIRECT volumes are float like the total (an
+	// emissive surface brighter than the brightest lamp exceeds the multiplier's ceiling,
+	// and every bounce pass rebuilds the total from D), so they are written LINEAR; the
+	// property still follows whatever format is bound.
 	@property( uav1_orig_pf_srgb )
 		#define jahStoreDirect( x ) toSRGB( x )
 	@else
@@ -434,7 +435,7 @@
 		const float4 backVoxelVal = float4( ( back + emissive ) * ( bm * c ), c );
 		OGRE_imageWrite3D4( backVoxel, voxelCelUvw, backVoxelVal );
 		@property( vct_keep_direct )
-			OGRE_imageWrite3D4( directBackVoxel, voxelCelUvw, toSRGB( backVoxelVal ) );
+			OGRE_imageWrite3D4( directBackVoxel, voxelCelUvw, backVoxelVal );
 		@end
 
 		// THE FUSED STEP 0: the directional level 0 from the block's children per half-axis.
@@ -476,9 +477,6 @@
 			wshort3 outIUvw = wshort3( gl_WorkGroupID.xyz * 2u + bl );
 			if( ( dir & 1u ) != 0u )
 				outIUvw.x += p_higherMipHalfWidth;
-			@property( vct_keep_direct )
-				accumVal = toSRGB( accumVal );
-			@end
 			if( axis == 0u )
 				OGRE_imageWrite3D4( dirOut0, outIUvw, accumVal );
 			else if( axis == 1u )

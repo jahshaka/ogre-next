@@ -133,8 +133,8 @@ namespace Ogre
         /// volume that cannot bounce has no use for it.
         TextureGpu *mLightDirect;
         /// Jahshaka (PHOTON-VOXEL-5), the anisotropic tiers with a bounce: the BACK side's direct
-        /// term (8-bit sRGB like mLightDirect) and the directional level 0's direct part per axis
-        /// (8-bit sRGB, level 0 only; both signs packed along x like mLightVoxel[1..3]) - what
+        /// term and the directional level 0's direct part per axis (float like mLightDirect and
+        /// the total since CONTACT-OCCLUSION-1 - an emitter exceeds the lamps' ceiling; level 0 only; both signs packed along x like mLightVoxel[1..3]) - what
         /// the bounce's fixed point and step 0 need per side and per half.
         TextureGpu *mLightDirectBack;
         TextureGpu *mLightDirectDir[3];
