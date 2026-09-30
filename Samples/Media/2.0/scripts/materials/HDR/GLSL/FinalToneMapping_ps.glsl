@@ -57,6 +57,12 @@ vulkan( layout( ogre_s2 ) uniform sampler samplerBilinear );
 // nowhere else. Why, how big and why it is keyed on the pixel alone: the
 // header, which is Jahshaka media and is found through the resource group.
 #include "JahDither.glsl"
+// JAHSHAKA (SRGB-ENCODE-1): the display encode. The film curve and its grade
+// tail below produce LINEAR values; the targets are plain UNORM (the header
+// says why and where else the encode runs), so the exact sRGB OETF is applied
+// here, once, BEFORE the dither -- the dither then rounds display codes, which
+// is the quantiser it was designed for.
+#include "JahSrgb.glsl"
 vulkan( layout( ogre_P0 ) uniform Params { )
 	// THE SAFE DEFAULT IS ZERO, i.e. DITHERED: a zero-filled constant buffer
 	// (a frame drawn before the host has pushed anything, and any target
@@ -97,6 +103,10 @@ void main()
 	vSample.xyz  = FilmicTonemap( vSample.xyz ) / FilmicTonemap( W );
 	//vSample.xyz  = vSample.xyz / (1 + vSample.xyz); //Reinhard Simple
 	vSample.xyz  = ( vSample.xyz - 0.5 ) * 1.25 + 0.5 + 0.11;
+
+	// THE DISPLAY ENCODE (SRGB-ENCODE-1): linear film output to display codes.
+	// An 18 percent card leaves the grade tail at 0.18 and reaches code 118.
+	vSample.xyz = jahSrgbEncode( vSample.xyz );
 
 	// The INTEGER pixel, which is the dither's only key. gl_FragCoord.xy
 	// carries the half-pixel centre offset, so the truncation is what
