@@ -1123,8 +1123,10 @@ namespace Ogre
             // regenerated after every injection (update()). The bounce job still reads mip 0.
             TextureGpu *directTex = textureManager->createTexture(
                 texName.c_str(), GpuPageOutStrategy::Discard,
-                TextureFlags::Uav | TextureFlags::Reinterpretable | TextureFlags::RenderToTexture |
-                    TextureFlags::AllowAutomipmaps,
+                // NOT Reinterpretable (the total's rule, fork 0080): the store is float and its
+                // UAV view IS its format, and a mutable-format image fails the linear-filter
+                // blit its mip chain is built with (VUID-vkCmdBlitImage-filter-02001).
+                TextureFlags::Uav | TextureFlags::RenderToTexture | TextureFlags::AllowAutomipmaps,
                 TextureTypes::Type3D );
             directTex->setResolution( mLightVoxel[0]->getWidth(), mLightVoxel[0]->getHeight(),
                                       mLightVoxel[0]->getDepth() );
