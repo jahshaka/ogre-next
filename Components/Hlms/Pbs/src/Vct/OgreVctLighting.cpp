@@ -1116,12 +1116,21 @@ namespace Ogre
             // for the cone gather would be dead weight (+14 % of the volume).
             texName.clear();
             texName.a( "VctLightingDirect/Id", getId() );
+            // Jahshaka (CONTACT-OCCLUSION-1, MOVER-OCCLUSION-1): A MIP CHAIN. A ray tier's hit
+            // reads D beside the total at the ray's own footprint (jah_rq_hit.glsl: the
+            // store's non-direct share, total - D, is what a MOVER above the hit occludes
+            // and the store cannot know), so D is filtered like the total: its own chain,
+            // regenerated after every injection (update()). The bounce job still reads mip 0.
             TextureGpu *directTex = textureManager->createTexture(
                 texName.c_str(), GpuPageOutStrategy::Discard,
-                TextureFlags::Uav | TextureFlags::Reinterpretable, TextureTypes::Type3D );
+                TextureFlags::Uav | TextureFlags::Reinterpretable | TextureFlags::RenderToTexture |
+                    TextureFlags::AllowAutomipmaps,
+                TextureTypes::Type3D );
             directTex->setResolution( mLightVoxel[0]->getWidth(), mLightVoxel[0]->getHeight(),
                                       mLightVoxel[0]->getDepth() );
-            directTex->setNumMipmaps( 1u );
+            directTex->setNumMipmaps( PixelFormatGpuUtils::getMaxMipmapCount(
+                std::min( mLightVoxel[0]->getWidth(),
+                          std::min( mLightVoxel[0]->getHeight(), mLightVoxel[0]->getDepth() ) ) ) );
             directTex->setPixelFormat( jahLightVoxelFormat() );  // Jahshaka (CONTACT-OCCLUSION-1): float, see below
             directTex->scheduleTransitionTo( GpuResidency::Resident );
             mLightDirect = directTex;
@@ -1402,6 +1411,15 @@ namespace Ogre
 
         if( mAnisotropic )
             generateAnisotropicMips();
+
+        // Jahshaka (MOVER-OCCLUSION-1): D's own chain, read by the ray tier's hits.
+        if( mLightDirect && mLightDirect->getNumMipmaps() > 1u )
+        {
+            renderSystem->debugAnnotationPush( "VctLighting::update direct mipmaps" );
+            mLightDirect->_autogenerateMipmaps();
+            renderSystem->endCopyEncoder();
+            renderSystem->debugAnnotationPop();
+        }
 
         if( mLightVoxel[0]->getNumMipmaps() > 1u )
         {
