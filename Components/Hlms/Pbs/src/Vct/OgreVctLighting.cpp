@@ -332,7 +332,8 @@ namespace Ogre
         // and the mip chain's linear blit (_autogenerateMipmaps) is then invalid on
         // an integer image (VUID-vkCmdBlitImage-filter-02001: the format has no
         // linear-filter feature), so the coarse mips the cone gather reads would be
-        // undefined. The direct volume below keeps the flag with its 8-bit store.
+        // undefined. The direct volumes are float too since CONTACT-OCCLUSION-1 and carry
+        // no Reinterpretable either (their UAV views are their formats).
         uint32 texFlags = TextureFlags::Uav;
 
         const bool bSdfQuality = shouldEnableSpecularSdfQuality();
@@ -1147,7 +1148,7 @@ namespace Ogre
                 texName.a( "VctLightingDirectBack/Id", getId() );
                 mLightDirectBack = textureManager->createTexture(
                     texName.c_str(), GpuPageOutStrategy::Discard,
-                    TextureFlags::Uav | TextureFlags::Reinterpretable, TextureTypes::Type3D );
+                    TextureFlags::Uav, TextureTypes::Type3D );
                 mLightDirectBack->setResolution( mLightVoxel[0]->getWidth(), mLightVoxel[0]->getHeight(),
                                                  mLightVoxel[0]->getDepth() );
                 mLightDirectBack->setNumMipmaps( 1u );
@@ -1159,7 +1160,7 @@ namespace Ogre
                     texName.a( "VctLightingDirectDir", i, "/Id", getId() );
                     TextureGpu *t = textureManager->createTexture(
                         texName.c_str(), GpuPageOutStrategy::Discard,
-                        TextureFlags::Uav | TextureFlags::Reinterpretable, TextureTypes::Type3D );
+                        TextureFlags::Uav, TextureTypes::Type3D );
                     t->setResolution( mLightVoxel[1]->getWidth(), mLightVoxel[1]->getHeight(),
                                       mLightVoxel[1]->getDepth() );
                     t->setNumMipmaps( 1u );

@@ -46,12 +46,12 @@
 	@insertpiece( JahVoxelMarch )
 
 	// THE ONE ENVIRONMENT (Jahshaka, PHOTON-ENV-1; jah_environment.glsl, wrapped
-	// into the piece JahEnvironment): what an escaping bounce cone sees. The sky is
-	// NEVER injected into the voxels as a source (it would be counted again by every
-	// pixel whose own cone escapes); it enters ONCE, here, as the light an escaping
-	// bounce cone brings to the voxel it leaves - the SKY PASS first (jah_env_only,
-	// run by VctLighting::update at every bounce count, CONTACT-OCCLUSION-1), then every
-	// bounce pass, whose base is the lamps' direct volume. The gain and the SH arrive already
+	// into the piece JahEnvironment): what an escaping cone sees. The sky enters the
+	// store HERE and only here, as the light the escaping cones bring to the voxel they
+	// leave: the SKY PASS first (jah_env_only, run by VctLighting::update at every bounce
+	// count, CONTACT-OCCLUSION-1) writes the sky's direct term, and every bounce pass after
+	// it builds on the lamps' direct volume, so a pixel's own escape (the sky it sees) and
+	// a hit on the store (the surface's sky-lit radiance) never count it twice. The gain and the SH arrive already
 	// divided by this volume's decode multiplier, so the result is in the volume's
 	// stored units like the cone's own colour.
 	@property( jah_env )
@@ -115,16 +115,19 @@
 			return;
 		}
 
-		float3 light;
-		float3 envD;
-		jahDiffuseCones( posLS, jahConeOrigin( posLS, normalLS ), jahConeBasisWorld( nWorld ), light, envD );
-		envD = jahSkyShareFine( posLS, jahConeOrigin( posLS, normalLS ), jahConeBasisWorld( nWorld ) );
-		// Jahshaka (CONTACT-OCCLUSION-1): the SKY PASS (VctLighting::update runs it first,
-		// jah_env_only) gathers the environment's share alone - the sky's direct term,
-		// through the cones' escape. Every other pass gathers both.
+		// Jahshaka (CONTACT-OCCLUSION-1): the sky's share on the finer sky set
+		// (jahSkyShareFine). The SKY PASS (VctLighting::update runs it first, jah_env_only)
+		// gathers that alone - the sky's direct term; every other pass adds the voxels'
+		// share on the pixel's own cone set, which the sky pass does not march at all.
+		const float3 envD =
+			jahSkyShareFine( posLS, jahConeOrigin( posLS, normalLS ), jahConeBasisWorld( nWorld ) );
 		@property( jah_env_only )
 			outDiffuse.xyz = envD;
 		@else
+			float3 light;
+			float3 envCoarse;
+			jahDiffuseCones( posLS, jahConeOrigin( posLS, normalLS ), jahConeBasisWorld( nWorld ), light,
+							 envCoarse );
 			outDiffuse.xyz = light + envD;
 		@end
 	}

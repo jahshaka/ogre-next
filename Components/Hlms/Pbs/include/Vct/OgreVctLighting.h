@@ -439,8 +439,10 @@ namespace Ogre
             upstream's setAmbient hemisphere pair, which the pixel shader used to add
             wherever a cone escaped: the pixel shader now reads the environment itself
             (the host binds the cube per pass), and this class keeps only what its own
-            BOUNCE job needs - the sky enters the voxels once, as what an escaping bounce
-            cone sees at injection (the sky is never injected as a source).
+            BOUNCE job needs - the sky enters the voxels once per injection, as what the
+            escaping cones of the sky pass and of every bounce pass see (update(): the
+            sky pass writes the sky's direct term, the bounce passes build on the lamps'
+            direct volume, so the sky is counted once and bounced like a lamp).
         @param cube
             The disc-free, GGX-prefiltered environment cube, or null (no sky: the SH
             below is the whole environment). Not owned; the host keeps it alive and
