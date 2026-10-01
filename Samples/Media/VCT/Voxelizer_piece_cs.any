@@ -10,12 +10,18 @@
 // Matias N. Goldberg Copyright (c) 2019
 
 @piece( PreBindingsHeaderCS )
-	// Jahshaka (ATOM P4): the `Vertex` struct is GONE. There is no private vertex
-	// buffer to describe - the shader reads the raster's own through the device
-	// addresses in a geometry row - Jahshaka's JahGeomRows piece (the one decode,
-	// irisgl/engine/src/rayquery/include/jah_geom_rows.glsl, which the ray jobs'
-	// hit normal reads too).
-	@insertpiece( JahGeomRows )
+	@property( !compressed_vertex_format )
+		struct Vertex
+		{
+			float4 pos_normX;
+			float4 normYZ_uv;
+		};
+	@else
+		struct Vertex
+		{
+			uint4 pos_normal_uv;
+		};
+	@end
 
 	struct InstanceBuffer
 	{
@@ -38,9 +44,7 @@
 		float4 emissive;
 		uint diffuseTexIdx;
 		uint emissiveTexIdx;
-		// Jahshaka (PHOTON-WRITER-1): the datablock's perceptual roughness
-		// (VctMaterial's row), merged per voxel into the emissive volume's alpha.
-		float roughness;
+		uint padding0;
 		uint padding1;
 	};
 
@@ -70,14 +74,10 @@
 		float2 uv[3];
 	};
 
-	// Jahshaka (ATOM P4): WHICH GEOMETRY, AND WHICH SLICE OF IT. `vertexBufferStart`
-	// is gone - the row's vertex address already points at this submesh's own buffer.
-	// `geomRow` names a (mesh, LOD LEVEL, submesh), so two instances of one mesh can
-	// be voxelized at two different levels in the same dispatch (AT-A10).
 	struct Mesh
 	{
-		uint geomRow;
-		uint firstIndex;
+		uint vertexBufferStart;
+		uint indexBufferStart;
 		uint numIndices;
 	};
 
@@ -105,10 +105,21 @@
 		//retVal.meshIdx		= floatBitsToUint( instanceBuffer[instanceIdx].aabb0.w );
 		retVal.materialIdx	= floatBitsToUint( instanceBuffer[instanceIdx].aabb1.w );
 
-		retVal.mesh.geomRow				= instanceBuffer[instanceIdx].meshData.x;
-		retVal.mesh.firstIndex			= instanceBuffer[instanceIdx].meshData.y;
+		retVal.mesh.vertexBufferStart	= instanceBuffer[instanceIdx].meshData.x;
+		retVal.mesh.indexBufferStart	= instanceBuffer[instanceIdx].meshData.y;
 		retVal.mesh.numIndices			= instanceBuffer[instanceIdx].meshData.z;
 
+		return retVal;
+	}
+
+	INLINE uint getIndexBufferIndex( uint index PARAMS_ARG_DECL )
+	{
+	@property( !index_32bit )
+		uint retVal = indexBuffer[index >> 1u];
+		retVal = ((index & 0x01u) != 0u) ? (retVal >> 16u) : (retVal & 0xFFFFu);
+	@else
+		uint retVal = indexBuffer[index];
+	@end
 		return retVal;
 	}
 
@@ -116,14 +127,26 @@
 	{
 		Triangle retVal;
 
-		GeometryRow row = geometryTable[mesh.geomRow];
-
 		for( uint i=0u; i<3u; ++i )
 		{
-			uint idx = geomIndex( row, mesh.firstIndex + triIdx * 3u + i );
-			retVal.v[i]		= geomPosition( row, idx );
-			retVal.n[i]		= geomNormal( row, idx );
-			retVal.uv[i]	= geomUv( row, idx );
+			uint idx = getIndexBufferIndex( mesh.indexBufferStart + triIdx * 3u + i PARAMS_ARG );
+			@property( !compressed_vertex_format )
+				retVal.v[i] = vertexBuffer[idx + mesh.vertexBufferStart].pos_normX.xyz;
+				retVal.n[i] = float3( vertexBuffer[idx + mesh.vertexBufferStart].pos_normX.w,
+									  vertexBuffer[idx + mesh.vertexBufferStart].normYZ_uv.xy );
+				retVal.uv[i] = vertexBuffer[idx + mesh.vertexBufferStart].normYZ_uv.zw;
+			@else
+				uint4 pos_normal_uv = vertexBuffer[idx + mesh.vertexBufferStart].pos_normal_uv;
+				retVal.v[i].xy = unpackSnorm2x16( pos_normal_uv.x );
+
+				float2 tmp = unpackSnorm2x16( pos_normal_uv.y );
+				retVal.v[i].z	= tmp.x;
+
+				retVal.n[i].x	= tmp.y;
+				retVal.n[i].xy	= unpackSnorm2x16( pos_normal_uv.z );
+
+				retVal.uv[i].xy = unpackHalf2x16( pos_normal_uv.w );
+			@end
 		}
 
 		return retVal;
@@ -131,18 +154,32 @@
 
 	INLINE Aabb getTriangleAabb( uint triIdx, Mesh mesh, ogre_float4x3 worldTransform PARAMS_ARG_DECL )
 	{
-		GeometryRow row = geometryTable[mesh.geomRow];
-
-		uint idx = geomIndex( row, mesh.firstIndex + triIdx * 3u + 0u );
-		float3 vertexPos = mul( float4( geomPosition( row, idx ), 1.0f ), worldTransform );
+		uint idx = getIndexBufferIndex( mesh.indexBufferStart + triIdx * 3u + 0 PARAMS_ARG );
+	@property( !compressed_vertex_format )
+		float3 vertexPos = vertexBuffer[idx + mesh.vertexBufferStart].pos_normX.xyz;
+	@else
+		uint4 pos_normal_uv = vertexBuffer[idx + mesh.vertexBufferStart].pos_normal_uv;
+		float3 vertexPos;
+		vertexPos.xy	= unpackSnorm2x16( pos_normal_uv.x );
+		vertexPos.z		= unpackSnorm2x16( pos_normal_uv.y ).x;
+	@end
+		vertexPos = mul( float4( vertexPos, 1.0f ), worldTransform );
 		float3 minValue = vertexPos;
 		float3 maxValue = vertexPos;
 		for( uint i=1u; i<3u; ++i )
 		{
-			idx = geomIndex( row, mesh.firstIndex + triIdx * 3u + i );
-			vertexPos = mul( float4( geomPosition( row, idx ), 1.0f ), worldTransform );
-			minValue = min( minValue, vertexPos );
-			maxValue = max( maxValue, vertexPos );
+			idx = getIndexBufferIndex( mesh.indexBufferStart + triIdx * 3u + i PARAMS_ARG );
+
+			@property( !compressed_vertex_format )
+				vertexPos = vertexBuffer[idx + mesh.vertexBufferStart].pos_normX.xyz;
+			@else
+				pos_normal_uv = vertexBuffer[idx + mesh.vertexBufferStart].pos_normal_uv;
+				vertexPos.xy	= unpackSnorm2x16( pos_normal_uv.x );
+				vertexPos.z		= unpackSnorm2x16( pos_normal_uv.y ).x;
+			@end
+				vertexPos = mul( float4( vertexPos, 1.0f ), worldTransform );
+				minValue = min( minValue, vertexPos );
+				maxValue = max( maxValue, vertexPos );
 		}
 
 		Aabb retVal;
@@ -290,84 +327,17 @@
 		return tri.uv[0] * uvw.x + tri.uv[1] * uvw.y + tri.uv[2] * uvw.z;
 	}
 
-	// Jahshaka (PHOTON-VOXEL-3): THE SIGNED DISTANCE OF p TO ONE OF THE VOXEL'S SIX
-	// FACES, positive inside. Faces 0/2/4 are the LOW x/y/z faces, 1/3/5 the high ones.
-	INLINE float voxelFaceSide( float3 p, uint face, float3 lo, float3 hi )
+	INLINE float3 mixAverage3( float3 newAccumValues, float numTris,
+							   float3 oldAveragedValue, float oldNumTris )
 	{
-		uint axis = face >> 1u;
-		return ( face & 1u ) == 0u ? ( p[axis] - lo[axis] ) : ( hi[axis] - p[axis] );
+		return newAccumValues / (numTris + oldNumTris) +
+			   oldAveragedValue * (oldNumTris / (numTris + oldNumTris));
 	}
-
-	// Jahshaka (PHOTON-VOXEL-3): THE AREA OF THE TRIANGLE INSIDE THE VOXEL, and the
-	// centroid of that piece. The triangle is clipped against the voxel's six faces
-	// (Sutherland-Hodgman; a triangle clipped by six planes has at most nine corners)
-	// and the convex piece left is summed as a fan.
-	//
-	// THE VOXEL IS HALF-OPEN, [lo, hi): a point ON a low face belongs to this voxel and
-	// a point ON a high face to the next one. So the voxels PARTITION a surface - a wall
-	// lying exactly on a voxel boundary is counted in ONE layer, not in both (the
-	// conservative box test the caller runs first takes both; this is what decides).
-	// The side tests are world-space differences against lo and hi, and the caller
-	// builds both from the same expression of the voxel index (origin + cell x i), so
-	// the two neighbours of a boundary test it against the same float and agree about
-	// which of them owns a point on it - exactly within an octant; across two octants'
-	// dispatches the origins are the host's, and they agree whenever the cell and the
-	// region are dyadic (every cascade this engine builds).
-	INLINE float voxelClippedArea( Triangle tri, float3 lo, float3 hi, float3 voxelCentre,
-								   OGRE_OUT_REF( float3, pieceCentre ) )
+	INLINE float4 mixAverage4( float4 newAccumValues, float numTris,
+							   float4 oldAveragedValue, float oldNumTris )
 	{
-		float3 polyA[9];
-		float3 polyB[9];
-		polyA[0] = tri.v[0];
-		polyA[1] = tri.v[1];
-		polyA[2] = tri.v[2];
-		uint numA = 3u;
-
-		for( uint face=0u; face<6u && numA >= 3u; ++face )
-		{
-			bool strict = ( face & 1u ) != 0u;
-			uint numB = 0u;
-			for( uint i=0u; i<numA; ++i )
-			{
-				float3 pa = polyA[i];
-				float3 pb = polyA[( i + 1u ) == numA ? 0u : ( i + 1u )];
-				float sa = voxelFaceSide( pa, face, lo, hi );
-				float sb = voxelFaceSide( pb, face, lo, hi );
-				bool ina = strict ? ( sa > 0.0f ) : ( sa >= 0.0f );
-				bool inb = strict ? ( sb > 0.0f ) : ( sb >= 0.0f );
-				if( ina && numB < 9u )
-				{
-					polyB[numB] = pa;
-					++numB;
-				}
-				if( ina != inb && numB < 9u )
-				{
-					polyB[numB] = pa + ( pb - pa ) * ( sa / ( sa - sb ) );
-					++numB;
-				}
-			}
-			for( uint i=0u; i<numB; ++i )
-				polyA[i] = polyB[i];
-			numA = numB;
-		}
-
-		float area = 0.0f;
-		float3 weighted = float3( 0.0f, 0.0f, 0.0f );
-		if( numA >= 3u )
-		{
-			// Relative to the voxel's centre: the fan's cross products stay small.
-			float3 p0 = polyA[0] - voxelCentre;
-			for( uint i=1u; i + 1u<numA; ++i )
-			{
-				float3 p1 = polyA[i] - voxelCentre;
-				float3 p2 = polyA[i + 1u] - voxelCentre;
-				float a = length( cross( p1 - p0, p2 - p0 ) );
-				area += a;
-				weighted += a * ( p0 + p1 + p2 );
-			}
-		}
-		pieceCentre = area > 0.0f ? voxelCentre + weighted / ( 3.0f * area ) : voxelCentre;
-		return 0.5f * area;
+		return newAccumValues / (numTris + oldNumTris) +
+			   oldAveragedValue * (oldNumTris / (numTris + oldNumTris));
 	}
 @end
 
@@ -387,53 +357,13 @@
 							  4.0f * p_voxelCellSize * (float3( gl_WorkGroupID.xyz ) + 0.5f);
 	groupVoxelAabb.halfSize	= 4.0f * p_voxelCellSize * 0.5f;
 
-	// Jahshaka (PHOTON-VOXEL-3): THE VOXEL'S AREA WEIGHT. What a triangle contributes
-	// to the voxel's material MEANS is weighted by its area inside the voxel (over the
-	// voxel's mean face area, only so the weight sits on VoxelMerge's grid - the means
-	// divide it out). The sum of the weights replaces upstream's triangle count as the
-	// divisor (VoxelMerge_piece_cs.any, THE DIVISOR IS THE AREA).
-	float3 voxelLo = p_voxelOrigin + p_voxelCellSize * float3( gl_GlobalInvocationID.xyz );
-	float3 voxelHi = p_voxelOrigin + p_voxelCellSize * float3( gl_GlobalInvocationID.xyz + 1u );
-	float invFaceArea = 1.0f / pow( p_voxelCellSize.x * p_voxelCellSize.y * p_voxelCellSize.z,
-									2.0f / 3.0f );
-	// ...and each AXIS's coverage is over THAT axis's face: y z for x, z x for y, x y
-	// for z. A scene-fitted volume's cells are not cubes (a 10 m room 5 m tall:
-	// cells half as tall as wide), and one mean face area there left a floor-to-
-	// ceiling wall 0.77 opaque along its own normal.
-	float3 invAxisFaceArea = 1.0f / ( p_voxelCellSize.yzx * p_voxelCellSize.zxy );
-	uint accumWeight = 0u;
-	// Jahshaka (PHOTON-VOXEL-3): THE VOXEL'S COVERAGE PER AXIS - the surface's
-	// area inside the voxel PROJECTED onto each axis, over the voxel's face area,
-	// times the material's opacity: sum of w * alpha * |n . axis| on
-	// VoxelMerge's per-axis grid (voxelMergeAxisQuantize). This is what a ray
-	// along that axis sees of the voxel: a thin wall on the xy plane covers its
-	// voxels fully along z and not at all along x and y, which no single
-	// per-voxel opacity can say (VoxelMerge_piece_cs.any, THE DIRECTIONAL
-	// COVERAGE).
-	// (PHOTON-VOXEL-4) SPLIT BY THE SIDE THE PIECE LOOKS TO: +a and -a (VoxelMerge_piece_cs.any).
-	uint3 accAxisP = uint3( 0u, 0u, 0u );
-	uint3 accAxisN = uint3( 0u, 0u, 0u );
-	// Jahshaka (PHOTON-VOXEL-4): THE SURFACE POSITION - the same contributions, each times
-	// the piece's centroid along its axis in the cell's own coordinate [0, 1]
-	// (VoxelMerge_piece_cs.any, THE SURFACE POSITION).
-	uint3 accPosP = uint3( 0u, 0u, 0u );
-	uint3 accPosN = uint3( 0u, 0u, 0u );
-	// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): the SUMS this dispatch adds to the voxel's running
-	// integer total, on VoxelMerge's fixed-point grid. They are exact and they
-	// are ALL of the state, so neither the split of the instances between
-	// dispatches nor their order inside one decides anything
-	// (VoxelMerge_piece_cs.any has the whole argument).
-	uint4 accAlbedo			= uint4( 0u, 0u, 0u, 0u );
-	int3  accNormalRaw		= int3( 0, 0, 0 );
-	int3  accNormalFolded	= int3( 0, 0, 0 );
-	uint3 accEmissive		= uint3( 0u, 0u, 0u );
-	uint  accRoughness		= 0u;	// PHOTON-WRITER-1: the fourteenth sum
+	bool doubleSided = false;
+	float accumTris = 0;
+	float4 voxelAlbedo		= float4( 0, 0, 0, 0 );
+	float4 voxelNormal		= float4( 0, 0, 0, 0 );
+	float4 voxelEmissive	= float4( 0, 0, 0, 0 );
 
-	// THE RECORDS OF THIS (octant, bucket), as the host's gather wrote them on the
-	// device: (start, count) into the instance buffer. Dynamically uniform - every
-	// lane reads the same range - which the emulated group vote below relies on.
-	uint2 instanceRange = ranges[p_rangeIdx];
-	for( uint i=instanceRange.x; i<instanceRange.x + instanceRange.y; ++i )
+	for( uint i=p_instanceStart; i<p_instanceEnd; ++i )
 	{
 		Instance instance = getInstance( i PARAMS_ARG );
 
@@ -459,17 +389,9 @@
 
 				if( anyInvocationARB( groupTriInters ) )
 				{
-					// Jahshaka (PHOTON-VOXEL-3): the batch's tail ENDS the batch. The pin
-					// clamped the index instead (min( triIdxBase + subTri, numTris - 1 )),
-					// so a mesh's LAST triangle was visited once per missing lane - 63
-					// times over for a two-triangle quad. A mean never noticed (the
-					// copies carry the same values); a coverage sum counts each of them.
-					// `triIdxBase + subTri` is the same in every lane, so the break is
-					// uniform and the group vote above is untouched.
-					uint numInBatch = min( 64u, numTris - triIdxBase );
-					for( uint subTri=0u; subTri<numInBatch; ++subTri )
+					for( uint subTri=0u; subTri<64u; ++subTri )
 					{
-						uint triIdx = triIdxBase + subTri;
+						uint triIdx = min( triIdxBase + subTri, numTris - 1u );
 						Triangle tri = getTriangle( triIdx, instance.mesh PARAMS_ARG );
 
 						for( uint i=0; i<3u; ++i )
@@ -478,21 +400,10 @@
 							tri.n[i] = mul( tri.n[i], toFloat3x3( instance.worldTransform ) );
 						}
 
-						float3 pieceCentroid = voxelAabb.center;
-						uint weight = 0u;
-						float pieceArea = 0.0f;
 						if( intersects_tri_aabb( tri, voxelAabb ) )
 						{
-							pieceArea = voxelClippedArea( tri, voxelLo, voxelHi,
-														  voxelAabb.center, pieceCentroid );
-							weight = voxelMergeWeight( pieceArea * invFaceArea );
-						}
-						if( weight > 0u )
-						{
-							// The piece's own centroid, not the voxel's centre: a
-							// triangle that only clips a corner is read where it IS.
 							@property( has_diffuse_tex || has_emissive_tex )
-								float2 uv = tri_barycentric_uv( pieceCentroid, tri );
+								float2 uv = tri_barycentric_uv( voxelAabb.center, tri );
 							@end
 
 							float4 finalDiffuse		= material.diffuse.xyzw;
@@ -509,56 +420,28 @@
 																	  material.emissiveTexIdx, 0 ).xyz;
 						@end
 
-							accAlbedo		+= voxelMergeWeigh4( voxelMergeQuantize4( finalDiffuse ),
-																 weight );
-							accEmissive		+= voxelMergeWeigh3( voxelMergeQuantize3( finalEmissive ),
-																 weight );
-							accRoughness	+= voxelMergeWeigh3( voxelMergeQuantize3(
-												   float3( material.roughness, 0.0f, 0.0f ) ),
-												   weight ).x;
+							voxelAlbedo			+= finalDiffuse;
+							voxelEmissive.xyz	+= finalEmissive;
 
-							float3 triNormal = tri_barycentric_normal( pieceCentroid, tri );
+							float3 triNormal = tri_barycentric_normal( voxelAabb.center, tri );
 							triNormal = normalize( triNormal );
 
-							// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): every normal goes into BOTH sums,
-							// raw and folded, and nothing is dropped. The "these two
-							// surfaces face opposite ways" decision upstream made
-							// here, against the sum SO FAR, is made once at the end
-							// of this shader from the two sums — see
-							// `voxelMergeNormal` in VoxelMerge_piece_cs.any. (The old
-							// code is worth remembering: `cosAngle <= -0.5` dropped
-							// the triangle from the sum and set a double-sided flag,
-							// so the FIRST triangle a thread happened to see decided
-							// which way the voxel faced.)
-							accNormalRaw	+= voxelMergeWeighSigned3(
-													voxelMergeQuantizeSigned3( triNormal ), weight );
-							accNormalFolded	+= voxelMergeWeighSigned3(
-													voxelMergeQuantizeSigned3(
-														voxelMergeCanonical( triNormal ) ), weight );
+							bool bIsZeroLength = dot( voxelNormal, voxelNormal ) <= 1e-6f;
 
-							accumWeight += weight;
+							//voxelNormal is not normalized for properly blend-averaging in multiple
+							//passes. But we need it normalized for this check to work
+							float cosAngle =
+								bIsZeroLength ? 1.0f : dot( normalize( voxelNormal.xyz ), triNormal );
+							float cos120 = -0.5f;
+							/*Rewrote as ternary operator because it was glitching in iOS Metal
+							if( cosAngle <= cos120 )
+								doubleSided = true;
+							else
+								voxelNormal.xyz += triNormal;*/
+							doubleSided		= cosAngle <= cos120 ? true : doubleSided;
+							voxelNormal.xyz	+= cosAngle <= cos120 ? float3( 0, 0, 0 ) : triNormal;
 
-							// The triangle's GEOMETRIC normal: the projected area
-							// of a flat piece is its area times |n . axis| exactly,
-							// whatever the shading normals say.
-							float3 geoN = cross( tri.v[1] - tri.v[0], tri.v[2] - tri.v[0] );
-							float geoLen = length( geoN );
-							geoN = geoLen > 0.0f ? geoN / geoLen : float3( 0.0f, 0.0f, 0.0f );
-							// THE SIDE IT FACES IS THE AUTHORED ONE (PHOTON-VOXEL-4): the coverage
-							// is split by the side a face looks to, and the winding's cross product
-							// is only the facing up to the mesh's convention (a mirrored instance
-							// flips it) - the interpolated shading normal says which way it looks.
-							if( dot( geoN, triNormal ) < 0.0f )
-								geoN = -geoN;
-							const float3 axisScale = invAxisFaceArea * ( pieceArea * saturate( finalDiffuse.w ) );
-							const float3 contribP = max( geoN, float3( 0.0f, 0.0f, 0.0f ) ) * axisScale;
-							const float3 contribN = max( -geoN, float3( 0.0f, 0.0f, 0.0f ) ) * axisScale;
-							accAxisP += voxelMergeAxisQuantize( contribP );
-							accAxisN += voxelMergeAxisQuantize( contribN );
-							const float3 cellLocal =
-								saturate( ( pieceCentroid - voxelLo ) / p_voxelCellSize );
-							accPosP += voxelMergeAxisQuantize( contribP * cellLocal );
-							accPosN += voxelMergeAxisQuantize( contribN * cellLocal );
+							++accumTris;
 						}
 					}
 				}
@@ -566,135 +449,42 @@
 		}
 	}
 
-	// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065) — ACCUMULATE, THEN RESOLVE, IN ONE DISPATCH.
-	//
-	// This dispatch adds ITS triangles to the voxel's exact integer sums and then
-	// writes the mean of the TOTAL the accumulator now holds. Whichever dispatch
-	// happens to be last at a voxel therefore leaves the complete answer, and an
-	// earlier one's partial answer is always overwritten by it — so the picture
-	// depends on the sums and not on who wrote them, which is the whole point.
-	// It also stops visiting voxels it contributed nothing to (the merge this
-	// replaces had `accumTris + origAccumTris > 0`, so a dispatch re-rounded
-	// every voxel an earlier one had filled), which is most of them.
-	//
-	// `voxelAccumVal` was the pin's triangle counter and the divisor; it now holds
-	// the voxel's COVERAGE on the merge's fixed-point grid (PHOTON-VOXEL-3), read and
-	// written exactly where upstream read and wrote the count.
 	wshort3 voxelCelUvw = wshort3( gl_GlobalInvocationID.xyz + ushort3( p_voxelPixelOrigin ) );
 
 	@property( syntax != hlsl || typed_uav_load )
-		uint origAccumWeight = OGRE_imageLoad3D( voxelAccumVal, voxelCelUvw ).x;
+		float4 origAlbedo	= OGRE_imageLoad3D( voxelAlbedoTex, voxelCelUvw );
+		float4 origNormal	= OGRE_imageLoad3D( voxelNormalTex, voxelCelUvw );
+		float4 origEmissive = OGRE_imageLoad3D( voxelEmissiveTex, voxelCelUvw );
+		float origAccumTris = OGRE_imageLoad3D( voxelAccumVal, voxelCelUvw ).x;
 	@else
-		uint origAccumWeightVal = OGRE_imageLoad3D( voxelAccumVal,
-													wshort3( voxelCelUvw.x >> 1u, voxelCelUvw.yz ) ).x;
-		uint origAccumWeight = (gl_LocalInvocationIndex & 0x1u) ? (origAccumWeightVal >> 16u) :
-																  (origAccumWeightVal & 0xFFFFu);
+		float4 origAlbedo	= unpackUnorm4x8( OGRE_imageLoad3D( voxelAlbedoTex, voxelCelUvw ) );
+		float4 origNormal	= unpackUnormRGB10A2( OGRE_imageLoad3D( voxelNormalTex, voxelCelUvw ) );
+		float4 origEmissive = unpackUnorm4x8( OGRE_imageLoad3D( voxelEmissiveTex, voxelCelUvw ) );
+		uint origAccumTrisVal = OGRE_imageLoad3D( voxelAccumVal,
+												  wshort3( voxelCelUvw.x >> 1u, voxelCelUvw.yz ) ).x;
+		float origAccumTris = (gl_LocalInvocationIndex & 0x1u) ? (origAccumTrisVal >> 16u) :
+																 (origAccumTrisVal & 0xFFFFu);
 	@end
 
-	if( accumWeight > 0u )
+	origNormal.xyz = origNormal.xyz * 2.0f - 1.0f;
+
+	if( accumTris + origAccumTris > 0 )
 	{
-		uint3 voxelCel = uint3( gl_GlobalInvocationID.xyz ) + uint3( p_voxelPixelOrigin );
+		voxelAlbedo			= mixAverage4( voxelAlbedo, accumTris, origAlbedo, origAccumTris );
+		voxelNormal.xyz		= mixAverage3( voxelNormal.xyz, accumTris, origNormal.xyz, origAccumTris );
+		voxelEmissive.xyz	= mixAverage3( voxelEmissive.xyz, accumTris, origEmissive.xyz, origAccumTris );
 
-		// Fourteen scalar texels per voxel: albedo rgba, the raw normal xyz, the
-		// emissive rgb, the folded normal xyz, the roughness (PHOTON-WRITER-1).
-		// Only what carries something.
-		uint4 sumAlbedo		= uint4( 0u, 0u, 0u, 0u );
-		uint4 sumNormal		= uint4( 0u, 0u, 0u, 0u );
-		uint4 sumEmissive	= uint4( 0u, 0u, 0u, 0u );
-		uint4 sumFolded		= uint4( 0u, 0u, 0u, 0u );
-		uint  sumRoughness	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 13u ) ).x;
-		// PHOTON-VOXEL-3/-4: the per-half-axis coverage sums (+14 the faces looking +a,
-		// +15 looking -a) and their position-weighted twins (+16, +17), packed.
-		uint  sumAxisP	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 14u ) ).x;
-		uint  sumAxisN	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 15u ) ).x;
-		uint  sumPosP	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 16u ) ).x;
-		uint  sumPosN	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 17u ) ).x;
-		@foreach( 4, c )
-			sumAlbedo[@c]	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, @c ) ).x;
-		@end
-		@foreach( 3, c )
-			sumNormal[@c]	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 4u + @c ) ).x;
-			sumEmissive[@c]	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 7u + @c ) ).x;
-			sumFolded[@c]	= OGRE_imageLoad3D( voxelMergeAccum, voxelMergeUvw( voxelCel, 10u + @c ) ).x;
-		@end
-
-		// SATURATING on the two unsigned sums — a contribution is at most
-		// 16 * 4096, sixty-five thousand of them fill a uint32, and nothing caps
-		// the triangle count at sixty-five thousand on this backend. Saturating
-		// addition is commutative and associative, so the merge stays exactly as
-		// order-independent as it was (VoxelMerge_piece_cs.any, THE GRID).
-		@foreach( 4, c )
-			sumAlbedo[@c]	= voxelMergeAddSat( sumAlbedo[@c], accAlbedo[@c] );
-		@end
-		@foreach( 3, c )
-			sumEmissive[@c]	= voxelMergeAddSat( sumEmissive[@c], accEmissive[@c] );
-		@end
-		sumRoughness	= voxelMergeAddSat( sumRoughness, accRoughness );
-		voxelMergeAxisPosAddSat( sumAxisP, sumPosP, accAxisP, accPosP );
-		voxelMergeAxisPosAddSat( sumAxisN, sumPosN, accAxisN, accPosN );
-		// Two's complement: a signed sum kept in a uint wraps the same way in
-		// every order, which is the whole point of doing this in integers — and a
-		// unit vector's quantised component is 4,096, so half a million triangles
-		// in one voxel would be needed to reach the wrap at all.
-		sumNormal.xyz	= uint3( int3( sumNormal.xyz ) + accNormalRaw );
-		sumFolded.xyz	= uint3( int3( sumFolded.xyz ) + accNormalFolded );
-
-		@foreach( 4, c )
-			OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, @c ),
-								uint4( sumAlbedo[@c], 0u, 0u, 0u ) );
-		@end
-		OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 13u ),
-							uint4( sumRoughness, 0u, 0u, 0u ) );
-		OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 14u ), uint4( sumAxisP, 0u, 0u, 0u ) );
-		OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 15u ), uint4( sumAxisN, 0u, 0u, 0u ) );
-		OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 16u ), uint4( sumPosP, 0u, 0u, 0u ) );
-		OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 17u ), uint4( sumPosN, 0u, 0u, 0u ) );
-		@foreach( 3, c )
-			OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 4u + @c ),
-								uint4( sumNormal[@c], 0u, 0u, 0u ) );
-			OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 7u + @c ),
-								uint4( sumEmissive[@c], 0u, 0u, 0u ) );
-			OGRE_imageWrite3D1( voxelMergeAccum, voxelMergeUvw( voxelCel, 10u + @c ),
-								uint4( sumFolded[@c], 0u, 0u, 0u ) );
-		@end
-
-		// The divisor of the MEANS, stored back into an R16_UINT: capped at its range
-		// (16 full voxels of area on the 1/4096 grid - a divisor, so the cap only
-		// rounds a mean that is already exact to the grid).
-		uint totalWeight = min( accumWeight + origAccumWeight, 0xFFFFu );
-		float3 voxelCoverageP	= voxelMergeAxisResolve( sumAxisP );
-		float3 voxelCoverageN	= voxelMergeAxisResolve( sumAxisN );
-		float3 voxelCoverage	= max( voxelCoverageP, voxelCoverageN );
-		float4 voxelAlbedo		= voxelMergeAlbedo( sumAlbedo, totalWeight, voxelCoverage );
-		float4 voxelNormal		= voxelMergeNormal( sumNormal, sumFolded, totalWeight );
-		float4 voxelEmissive	= voxelMergeEmissive( sumEmissive, sumRoughness, totalWeight );
+		voxelNormal.a	= doubleSided ? 1.0f : 0.0f;
+		voxelNormal.a	= max( voxelNormal.a, voxelNormal.a );
+		voxelNormal.xyz	= voxelNormal.xyz * 0.5 + 0.5f;
 
 		@property( syntax != hlsl || typed_uav_load )
 			OGRE_imageWrite3D4( voxelAlbedoTex, voxelCelUvw, voxelAlbedo );
 			OGRE_imageWrite3D4( voxelNormalTex, voxelCelUvw, voxelNormal );
 			OGRE_imageWrite3D4( voxelEmissiveTex, voxelCelUvw, voxelEmissive );
-			OGRE_imageWrite3D1( voxelAccumVal, voxelCelUvw, uint4( totalWeight, 0u, 0u, 0u ) );
-			OGRE_imageWrite3D4( voxelCoveragePTex, voxelCelUvw, float4( voxelCoverageP, 0.0f ) );
-			OGRE_imageWrite3D4( voxelCoverageNTex, voxelCelUvw, float4( voxelCoverageN, 0.0f ) );
-			// PHOTON-VOXEL-4: the surface position per half-axis, O-premultiplied, absolute.
-			const float3 invRes = float3( 1.0f, 1.0f, 1.0f ) / float3( imageSize( voxelPositionPTex ) );
-			OGRE_imageWrite3D4( voxelPositionPTex, voxelCelUvw,
-								float4( voxelMergePositionResolve( sumPosP, sumAxisP, voxelCel, invRes ), 0.0f ) );
-			OGRE_imageWrite3D4( voxelPositionNTex, voxelCelUvw,
-								float4( voxelMergePositionResolve( sumPosN, sumAxisN, voxelCel, invRes ), 0.0f ) );
+			OGRE_imageWrite3D1( voxelAccumVal, voxelCelUvw,
+								uint4( accumTris + origAccumTris, 0, 0, 0 ) );
 		@else
-			// JAHSHAKA fork ad452604a+155a56bf8 (was 0087): THE BRANCH THAT CANNOT FOLLOW THE FLOAT STORE.
-			// This is D3D11 without typed UAV loads, where each texel is packed
-			// into ONE 32-bit uint, and the emissive volume is now RGBA16_FLOAT
-			// (64 bits per texel, OgreVctVoxelizer.cpp createVoxelTextures): a
-			// half pair per channel needs two uints, so this path would need the
-			// volume declared as a two-component uint image to carry it. It is
-			// left packing UNORM8 deliberately -- this tree ships Vulkan only,
-			// the GLSL and Metal paths take the branch above, and a silent
-			// half-written texel would be worse than a documented ceiling. A
-			// D3D11 port fixes this line together with the image declaration in
-			// Voxelizer_cs.hlsl; the emissive clip at 1.0 is what it inherits
-			// until then.
 			OGRE_imageWrite3D4( voxelAlbedoTex, voxelCelUvw, packUnorm4x8( voxelAlbedo ) );
 			OGRE_imageWrite3D4( voxelNormalTex, voxelCelUvw, packUnormRGB10A2( voxelNormal ) );
 			OGRE_imageWrite3D4( voxelEmissiveTex, voxelCelUvw, packUnorm4x8( voxelEmissive ) );
@@ -706,10 +496,10 @@
 			g_voxelAccumValue[gl_LocalInvocationIndex >> 1u] = 0;
 		GroupMemoryBarrier();
 
-		origAccumWeightVal = min( accumWeight + origAccumWeight, 0xFFFFu );
-		origAccumWeightVal = (gl_LocalInvocationIndex & 0x1u) ? (origAccumWeightVal << 16u) :
-																origAccumWeightVal;
-		InterlockedOr( g_voxelAccumValue[gl_LocalInvocationIndex >> 1u], origAccumWeightVal );
+		origAccumTrisVal = uint( accumTris + origAccumTris );
+		origAccumTrisVal = (gl_LocalInvocationIndex & 0x1u) ? (origAccumTrisVal << 16u) :
+															  origAccumTrisVal;
+		InterlockedOr( g_voxelAccumValue[gl_LocalInvocationIndex >> 1u], origAccumTrisVal );
 		if( gl_LocalInvocationIndex & 0x1u )
 		{
 			OGRE_imageWrite3D1( voxelAccumVal, wshort3( voxelCelUvw.x >> 1u, voxelCelUvw.yz ),

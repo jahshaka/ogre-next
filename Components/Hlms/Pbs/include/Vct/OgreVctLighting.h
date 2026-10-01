@@ -71,22 +71,7 @@ namespace Ogre
         /// we wouldn't be able to support anisotropic mips for high resolution voxels.
         /// But more importantly, we would waste 1/4th of memory (actually 1/2 of memory
         /// because GPUs like GCN round memory consumption to the next power of 2).
-        ///
-        /// Jahshaka (PHOTON-VOXEL-3/-4): THE LAST FOUR ENTRIES - from mLightVoxel[4]
-        /// anisotropic, mLightVoxel[1] isotropic - are the voxelizer's COVERAGE PER HALF-AXIS
-        /// (coverageIndex(0 / 1): the faces looking +a / -a) and its SURFACE POSITION per
-        /// half (positionIndex(0 / 1)), NOT owned here: every reader of the light volumes
-        /// reads the opacity along its ray from the coverage and the origin plane from the
-        /// position, so they ride the same list and every reader that binds
-        /// getNumVoxelTextures() volumes per cascade binds them too.
-        ///
-        /// Jahshaka (PHOTON-VOXEL-5): on the anisotropic tiers two more follow - mLightVoxel[8],
-        /// level 0's BACK side (owned; backIndex()), and mLightVoxel[9], the voxelizer's NORMAL
-        /// (not owned; normalIndex()): level 0 holds the MEAN of a voxel's two sides
-        /// (mLightVoxel[0]) and its back, and the normal says which side a half-axis's faces look
-        /// to. The directional volumes' level 0 is composited by the light injection itself from
-        /// each voxel's light PER HALF-AXIS (the fused step 0).
-        TextureGpu             *mLightVoxel[10];
+        TextureGpu             *mLightVoxel[4];
         HlmsSamplerblock const *mSamplerblockTrilinear;
 
         VctVoxelizerSourceBase *mVoxelizer;
@@ -103,57 +88,17 @@ namespace Ogre
         ///
         /// Step 2 takes mLightVoxel[i].mip[n] and computes mLightVoxel[i].mip[n+1]
         /// where i is in range [1; 3] and n is the number of mipmaps in those textures.
-        /// Jahshaka (PHOTON-VOXEL-5): step 0 is the BOUNCE'S part of the directional level 0 -
-        /// the injection composites the direct part itself (into mLightDirectDir when a bounce
-        /// follows); after every bounce this job adds the bounce's part per half-axis to it.
-        /// Created with the bounce textures, on the anisotropic tiers.
         HlmsComputeJob             *mAnisoGeneratorStep0;
         FastArray<HlmsComputeJob *> mAnisoGeneratorStep1;
 
         HlmsComputeJob *mLightVctBounceInject;
         TextureGpu     *mLightBounce;
 
-        /// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): THE DIRECT TERM, KEPT.
-        ///
-        /// The bounce is a fixed-point iteration over the radiance in the volume,
-        /// L = D + rho * G( L ), and it needs D -- the light INJECTED from the
-        /// scene's lamps, before any bounce -- at every pass. Upstream's bounce job
-        /// re-read the running TOTAL and added to it (L_n = L_n-1 + rho * G( L_n-1 )),
-        /// which is a binomial series in (1 + rho*G) and never contracts: the first
-        /// bounce's energy is counted again at every later pass. The two textures
-        /// mLightVoxel[0]/mLightBounce ping-pong, so by the second pass the direct
-        /// term is the one being overwritten and cannot be recovered from them.
-        ///
-        /// This is that third volume: mip 0 only (the bounce reads it with a
-        /// Load3D at its own voxel, never filtered), same resolution and format as
-        /// mLightVoxel[0], written by the light-injection job's second UAV in the
-        /// same dispatch that writes the total -- so keeping it costs one image
-        /// store per voxel and no copy, no readback and no CPU path. It lives
-        /// exactly as long as mLightBounce does (see setAllowMultipleBounces): a
-        /// volume that cannot bounce has no use for it.
-        TextureGpu *mLightDirect;
-        /// Jahshaka (PHOTON-VOXEL-5), the anisotropic tiers with a bounce: the BACK side's direct
-        /// term and the directional level 0's direct part per axis (float like mLightDirect and
-        /// the total since CONTACT-OCCLUSION-1 - an emitter exceeds the lamps' ceiling; level 0 only; both signs packed along x like mLightVoxel[1..3]) - what
-        /// the bounce's fixed point and step 0 need per side and per half.
-        TextureGpu *mLightDirectBack;
-        TextureGpu *mLightDirectDir[3];
-        ShaderParams::Param *mInjectHigherMipHalfWidth;
-
         float mBakingMultiplier;
         float mInvBakingMultiplier;
 
-        /// THE ONE ENVIRONMENT, FOR THE BOUNCE (Jahshaka, PHOTON-ENV-1): what a bounce
-        /// cone that escapes the voxels sees - the host's disc-free sky cube (or null:
-        /// no sky) read at the cone's aperture, times the environment light's gain, or
-        /// with no cube the environment's nine-band SH in the cone's direction. It
-        /// REPLACES the two-colour hemisphere pair this class used to hand the pixel
-        /// shader (upstream's setAmbient): every escape in the renderer now reads one
-        /// environment (jah_environment.glsl), and the pixel shader binds its own copy
-        /// of it per pass. Set by the host before update(); read only by the bounce job.
-        TextureGpu *mEnvCube;
-        float       mEnvGain[3];
-        float       mEnvSh[27];  ///< world basis {1,y,z,x,xy,yz,3z^2-1,zx,x^2-y^2}, radiance units
+        float mUpperHemisphere[3];
+        float mLowerHemisphere[3];
 
         float mDefaultLightDistThreshold;
         bool  mAnisotropic;
@@ -162,8 +107,9 @@ namespace Ogre
         FastArray<VctLighting *> mExtraCascades;
 
         ShaderParams::Param *mNumLights;
-        ShaderParams::Param *mBakingMultiplierParam;
+        ShaderParams::Param *mRayMarchStepSize;
         ShaderParams::Param *mVoxelCellSize;
+        ShaderParams::Param *mDirCorrectionRatioThinWallCounter;
         ShaderParams::Param *mInvVoxelResolution;
         ShaderParams        *mShaderParams;
 
@@ -172,10 +118,8 @@ namespace Ogre
         ShaderParams::Param                      *mBounceVoxelCellSize;
         ShaderParams::Param                      *mBounceInvVoxelResolution;
         ShaderParams::Param                      *mBounceIterationDampening;
-        ShaderParams::Param                      *mBounceInvResMaxLod;
+        ShaderParams::Param                      *mBounceStartBiasInvBiasCascadeMaxLod;
         ShaderParams::Param *mBounceFromPreviousProbeToNext;  ///< Used when cascades > 1
-        ShaderParams::Param *mBounceEnvGainMips;  ///< Jahshaka (PHOTON-ENV-1): rgb gain / multiplier, w mips
-        ShaderParams::Param *mBounceEnvSh;        ///< Jahshaka (PHOTON-ENV-1): nine float4, / multiplier
         ShaderParams        *mBounceShaderParams;
 
         ResourceTransitionArray mResourceTransitions;
@@ -236,45 +180,25 @@ namespace Ogre
         void createTextures();
         void destroyTextures();
         void checkTextures();
-        /// Re-derives the bounce injection job's texture UNIT COUNT and writes every
-        /// slot it reads from the CURRENT textures. `bSetSamplerRefs` false skips the
-        /// OpenGL-only samplerblock reference-counting, which makes the call safe to
-        /// repeat per dispatch (the textures move under it; the samplers do not).
-        void setupBounceTextures( bool bSetSamplerRefs = true );
+        void setupBounceTextures();
         void setupGlslTextureUnits();
 
         void generateAnisotropicMips();
 
-        /// JAHSHAKA fork ae2ed529f+155a56bf8 (was 0076): the pass index is gone with the per-iteration
-        /// dampening it fed (upstream's commented-out 1 / ( pi * ( n/2 + 1 ) )).
-        /// Every pass of a Jacobi iteration is the same operator; nothing about it
-        /// depends on which pass it is.
-        ///
-        /// Jahshaka (CONTACT-OCCLUSION-1, SKY-BOUNCE-1): `envOnly` runs the same pass with
-        /// the voxels' share of the gather left out - new = direct + rho * E_sky, the
-        /// ENVIRONMENT'S DIRECT TERM at every voxel (the sky through the escape of the
-        /// voxel's own cones: its visibility). update() runs it first, whenever an
-        /// environment carries light, so the sky is a light like any lamp: a surface it
-        /// lights re-emits albedo x its sky irradiance at EVERY bounce count, where it
-        /// used to exist only from the second bounce on (and not at all at one).
-        void runBounce( bool envOnly = false );
-        /// True when the environment setEnvironment was handed carries any light.
-        bool hasEnvironmentLight() const;
+        void runBounce( uint32 bounceIteration );
 
     public:
         VctLighting( IdType id, VctVoxelizerSourceBase *voxelizer, bool bAnisotropic );
         ~VctLighting() override;
 
-        /// Used by a host's cascade chain (upstream's VctCascadedVoxelizer is not in
-        /// this fork). By having extra cascade info, we can calculate multiple bounces
-        /// with extra info
+        /// Used by VctCascadedVoxelizer. By having extra cascade info, we can
+        /// calculate multiple bounces with extra info
         ///
         /// This function calls mExtraCascades.reserve
         void reserveExtraCascades( size_t numExtraCascades );
 
-        /// Used by a host's cascade chain (upstream's VctCascadedVoxelizer is not in
-        /// this fork). By having extra cascade info, we can calculate multiple bounces
-        /// with extra info
+        /// Used by VctCascadedVoxelizer. By having extra cascade info, we can
+        /// calculate multiple bounces with extra info
         void addCascade( VctLighting *cascade );
 
         /** This function allows VctLighting::update to pass numBounces > 0 as argument.
@@ -337,72 +261,45 @@ namespace Ogre
         @param sceneManager
         @param numBounces
             Number of GI bounces. This value must be 0 if getAllowMultipleBounces() == false
+        @param thinWallCounter
+            Shadows are calculated by raymarching towards the light source. However sometimes
+            the ray 'may go through' a wall due to how bilinear interpolation works.
+
+            Bilinear interpolation can produce nicer soft shaddows, but it can also cause
+            this light leaking from behind a wall.
+
+            Increase this value (e.g. to 2.0f) to fight light leaking.
+            This should generally (over-)darken the scene
+
+            Lower values will lighten the scene and allow more light leaking
+
+            Note that thinWallCounter can *not* fight all sources of light leaking,
+            thus increasing it to ridiculous high values may not yield any benefit.
         @param autoMultiplier
             Whether we should calculate the ideal multiplier based on lights on scene.
             See VctLighting::setMultiplier
+        @param rayMarchStepScale
+            Scale for the ray march step size. A value < 1.0f makes little sense
+            and will trigger an assert.
+
+            Bigger values means the shadow raymarching during light injection
+            pass is faster, but may cause glitches if too high (areas that
+            are supposed to be shadowed won't be shadowed)
         @param lightMask
-        @remarks
-            Jahshaka (PHOTON-VOXEL-5): the injection's shadow march is exact - a 3D-DDA over
-            the level-0 voxels from each half's face - so upstream's thinWallCounter and
-            rayMarchStepScale (a stepped march's wall counter and step length) are gone.
         */
-        void update( SceneManager *sceneManager, uint32 numBounces, bool autoMultiplier = true,
+        void update( SceneManager *sceneManager, uint32 numBounces, float thinWallCounter = 1.0f,
+                     bool autoMultiplier = true, float rayMarchStepScale = 1.0f,
                      uint32 lightMask = 0xffffffff );
 
-        /** Points this VctLighting at a DIFFERENT voxelizer, in place.
-
-            A VctLighting is normally bound to the voxelizer it was constructed with for
-            its whole life. That is a problem for any caller that must re-voxelize with a
-            FRESH VctVoxelizer rather than rebuild an existing one -- VctMaterial caches
-            each datablock's conversion by raw pointer for the voxelizer's lifetime, so a
-            material whose parameters changed (or whose datablock died and whose address
-            was recycled) can only be answered by a new voxelizer. Destroying the
-            VctLighting as well is not an option when it is part of a cascade chain:
-            addCascade() hands the cascades inside this one raw pointers to it and
-            fillConstBufferData() walks them on every pass, so replacing one cascade's
-            lighting forces every cascade inside it to be rebuilt in the same frame.
-
-            Everything this object holds that depends on the voxelizer is re-derived here:
-            the TextureGpuListener registrations move to the new albedo/normal textures
-            and the light voxel textures are re-created from the new resolution -- the
-            same recovery the LostResidency path performs.
-        @remarks
-            The new voxelizer must already have been built (its albedo texture is what the
-            light voxels are sized from), and the caller keeps ownership of both: the old
-            one is only safe to destroy AFTER this returns.
-        @param voxelizer
-            The voxelizer to sample from now. Null or the current one is a no-op.
-        */
-        void setVoxelizer( VctVoxelizerSourceBase *voxelizer );
-
-        /// Upstream's VctImageVoxelizer::buildRelative called this (its voxeliser's
-        /// textures - albedo, normal, emissive - could be swapped for a copy). That class
-        /// is not in this fork (6be1ae1d7) and nothing here calls this any more.
+        /// When VctImageVoxelizer::buildRelative is called; voxelizer's textures
+        /// (albedo, normal, emissive) may be swapped for a copy.
         ///
         /// This function notifies us that buildRelative to update some of our references
         void resetTexturesFromBuildRelative();
 
-        size_t getNumCascades() const { return mExtraCascades.size() + 1u; }
+        bool needsAmbientHemisphere() const;
 
-        /** THE CASCADE CHAIN'S PARAMETERS, the one definition every reader of the chain
-            takes them from (Jahshaka, PHOTON-READER-1): the pixel shader's pass buffer
-            (fillConstBufferData) and the irradiance field's generation job both march the
-            same chain with the same march, so they must hand it the same numbers - and
-            the field has no other way to reach the extra cascades' placement.
-        @param outInvResMaxLod
-            4 * getNumCascades() floats: per cascade, xyz = 1 / the light volume's
-            resolution per axis, w = the mip at which a cone hands over to the next
-            cascade (the next cell over this one as a mip, capped at the mip count;
-            256 for the last cascade).
-        @param outFromPrev
-            8 * ( getNumCascades() - 1 ) floats: per cascade i >= 1, two float4s -
-            ( cascade i-1's normalised space to cascade i's: the scale xyz, and cascade
-            i's radiance over cascade 0's stored units ), then ( the offset xyz, and the
-            specular walk's weight slope 1 / numMips^3 ).
-            May be null when there is one cascade.
-        */
-        void getCascadeChainParams( float *RESTRICT_ALIAS outInvResMaxLod,
-                                    float *RESTRICT_ALIAS outFromPrev ) const;
+        size_t getNumCascades() const { return mExtraCascades.size() + 1u; }
 
         size_t getConstBufferSize() const;
 
@@ -412,10 +309,6 @@ namespace Ogre
 
         void setDebugVisualization( bool bShow, SceneManager *sceneManager );
         bool getDebugVisualizationMode() const;
-        /// Jahshaka (PHOTON-VIEW-1): the visualizer setDebugVisualization created (null
-        /// while it is off) - a host puts it on its own visibility channel or render queue
-        /// without searching the scene graph for it.
-        VoxelVisualizer *getDebugVisualizer() const { return mDebugVoxelVisualizer; }
 
         /** Toggles anisotropic mips.
 
@@ -435,57 +328,24 @@ namespace Ogre
         void setAnisotropic( bool bAnisotropic );
         bool isAnisotropic() const { return mAnisotropic; }
 
-        /** THE ENVIRONMENT A BOUNCE CONE ESCAPES TO (Jahshaka, PHOTON-ENV-1). Replaces
-            upstream's setAmbient hemisphere pair, which the pixel shader used to add
-            wherever a cone escaped: the pixel shader now reads the environment itself
-            (the host binds the cube per pass), and this class keeps only what its own
-            BOUNCE job needs - the sky enters the voxels once per injection, as what the
-            escaping cones of the sky pass and of every bounce pass see (update(): the
-            sky pass writes the sky's direct term, the bounce passes build on the lamps'
-            direct volume, so the sky is counted once and bounced like a lamp).
-        @param cube
-            The disc-free, GGX-prefiltered environment cube, or null (no sky: the SH
-            below is the whole environment). Not owned; the host keeps it alive and
-            calls this again before it dies.
-        @param gain
-            The environment light's gain per channel (applied to the cube only).
-        @param sh
-            27 floats: the environment's nine-band SH in WORLD axes and radiance units,
-            the gain already applied (the host's own ambient coefficients).
+        /** Extremely similar version of SceneManager::setAmbientLight
+            In fact the hemisphereDir parameter is shared and set in SceneManager::setAmbientLight
+
+            Setting upperHemisphere = lowerHemisphere can cause shader recompilations.
+
+            These values are used when cone tracing reaches the end of the probe without hitting
+            anything, which usually means the sky must be visible.
+        @param upperHemisphere
+            upperHemisphere should be set to the sky colour, which is usually set to a value *much*
+            brighter than the ambient light (i.e. use the clear colour instead of the ambient colour)
+        @param lowerHemisphere
+            lowerHemisphere should be set to the ground colour
         */
-        void setEnvironment( TextureGpu *cube, const ColourValue &gain, const float sh[27] );
-        /// The environment setEnvironment was handed (Jahshaka, PHOTON-ENV-1): the
-        /// irradiance field's generation job reads the same one for its escaping rays.
-        TextureGpu  *getEnvironmentCube() const { return mEnvCube; }
-        const float *getEnvironmentGain() const { return mEnvGain; }
-        const float *getEnvironmentSh() const { return mEnvSh; }
-        /// The decode multiplier the pixel shader applies to this volume's stored
-        /// radiance (fillConstBufferData's `multiplier`): D_max / pi.
-        float getFinalMultiplier() const { return mInvBakingMultiplier * mMultiplier; }
+        void setAmbient( const ColourValue &upperHemisphere, const ColourValue &lowerHemisphere );
 
         TextureGpu **getLightVoxelTextures() { return mLightVoxel; }
-        /// JAHSHAKA PATCH: THE DIRECT TERM'S VOLUME (fork ae2ed529f+155a56bf8 (was 0076)'s D term), or null
-        /// on a VctLighting that cannot bounce. Read-only, and it exists so a host
-        /// can MEASURE the store -- the normalisation's own self-check is "the
-        /// direct term is <= the ceiling by construction", and nothing outside this
-        /// class could see the volume to check it.
-        TextureGpu  *getLightDirectTexture() const { return mLightDirect; }
         TextureGpu **getLightVoxelTextures( const size_t cascadeIdx );
-        /// The light volumes a reader binds per cascade: the total (and its three
-        /// anisotropic axes), then the coverage per half-axis (+a, -a; PHOTON-VOXEL-3/-4),
-        /// then the surface position per half (PHOTON-VOXEL-4).
-        /// ...and on the anisotropic tiers (PHOTON-VOXEL-5) level 0's back side and the
-        /// voxelizer's normal, the last two (backIndex / normalIndex).
-        uint32       getNumVoxelTextures() const { return mAnisotropic ? 10u : 5u; }
-        /// Jahshaka (PHOTON-VOXEL-5): level 0's BACK side (the front = 2 x mLightVoxel[0] - it)
-        /// and the voxelizer's normal (the side a half-axis looks to), anisotropic tiers only.
-        uint32       backIndex() const { return 8u; }
-        uint32       normalIndex() const { return 9u; }
-        /// Where the coverage of half `h` (0: the faces looking +a, 1: -a) sits in
-        /// getLightVoxelTextures().
-        uint32       coverageIndex( uint32 h ) const { return ( mAnisotropic ? 4u : 1u ) + h; }
-        /// Where the surface position of half `h` sits: the last two entries.
-        uint32       positionIndex( uint32 h ) const { return ( mAnisotropic ? 6u : 3u ) + h; }
+        uint32       getNumVoxelTextures() const { return mAnisotropic ? 4u : 1u; }
 
         const HlmsSamplerblock *getBindTrilinearSamplerblock() { return mSamplerblockTrilinear; }
 

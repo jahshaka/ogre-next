@@ -1,11 +1,5 @@
 @insertpiece( SetCrossPlatformSettings )
 
-@piece( CustomGlslExtensions )
-	// Jahshaka (ATOM P4): see the JahGeomRows piece (jah_geom_rows.glsl).
-	#extension GL_EXT_buffer_reference: require
-	#extension GL_EXT_buffer_reference_uvec2: require
-@end
-
 #define __sharedOnlyBarrier memoryBarrierShared();barrier();
 
 @insertpiece( PreBindingsHeaderCS )
@@ -13,15 +7,18 @@
 @property( syntax == glsl )
 	#define ogre_U0 binding = 0
 	#define ogre_U1 binding = 1
+	#define ogre_U2 binding = 2
 @end
 
-// Jahshaka (ATOM P4): the geometry table where the private vertex and index copies
-// used to be; the output AABBs move down one slot with them.
-layout(std430, ogre_U0) readonly restrict buffer geometryTableLayout
+layout(std430, ogre_U0) readonly restrict buffer vertexBufferLayout
 {
-	GeometryRow geometryTable[];
+	Vertex vertexBuffer[];
 };
-layout(std430, ogre_U1) writeonly restrict buffer outMeshAabbLayout
+layout(std430, ogre_U1) readonly restrict buffer indexBufferLayout
+{
+	uint indexBuffer[];
+};
+layout(std430, ogre_U2) writeonly restrict buffer outMeshAabbLayout
 {
 	MeshAabb outMeshAabb[];
 };

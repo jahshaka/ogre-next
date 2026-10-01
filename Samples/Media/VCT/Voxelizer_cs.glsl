@@ -15,11 +15,6 @@
 
 @piece( CustomGlslExtensions )
 	#extension GL_ARB_shader_group_vote: require
-	// Jahshaka (ATOM P4): the geometry is read where the raster keeps it, through
-	// buffer device addresses - see the JahGeomRows piece. The uvec2 form is
-	// deliberate: shaderInt64 is not an enabled device feature.
-	#extension GL_EXT_buffer_reference: require
-	#extension GL_EXT_buffer_reference_uvec2: require
 @end
 
 @property( !vendor_shader_extension )
@@ -64,24 +59,13 @@
 	#define ogre_U1 binding = 1
 @end
 
-// Jahshaka (ATOM P4): U0 IS THE GEOMETRY TABLE. It replaces the two slots that used
-// to bind a private vertex copy and a private index copy - and with them the
-// `compressed_vertex_format` and `index_32bit` shader properties, since a dispatch no
-// longer binds a format. Every image below therefore moved down a slot (two, with U1).
-layout( std430, ogre_U0 ) readonly restrict buffer geometryTableLayout
+layout( std430, ogre_U0 ) readonly restrict buffer vertexBufferLayout
 {
-	GeometryRow geometryTable[];
+	Vertex vertexBuffer[];
 };
-
-// Jahshaka (ATOM P4b): THE RANGES - one (start, count) per (octant, bucket), written
-// on the device by the host's gather. This dispatch loops over ranges[rangeIdx]; the
-// count is only a LOOP BOUND, because the dispatch's thread count is the octant's and
-// never the instance count's, so no indirect dispatch is needed to take it from the GPU.
-// U1 and not after the images: the root layout packs UAV buffers and UAV images as
-// two contiguous ranges.
-layout( std430, ogre_U1 ) readonly restrict buffer rangesLayout
+layout( std430, ogre_U1 ) readonly restrict buffer indexBufferLayout
 {
-	uvec2 ranges[];
+	uint indexBuffer[];
 };
 
 layout( vulkan( ogre_u2 ) vk_comma @insertpiece(uav2_pf_type) )
@@ -92,24 +76,6 @@ layout( vulkan( ogre_u4 ) vk_comma @insertpiece(uav4_pf_type) )
 uniform restrict image3D voxelEmissiveTex;
 layout( vulkan( ogre_u5 ) vk_comma @insertpiece(uav5_pf_type) )
 uniform restrict uimage3D voxelAccumVal;
-// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): the per-voxel INTEGER ACCUMULATOR the merge sums into.
-layout( vulkan( ogre_u6 ) vk_comma @insertpiece(uav6_pf_type) )
-uniform restrict uimage3D voxelMergeAccum;
-// Jahshaka (PHOTON-VOXEL-3/-4): THE PER-HALF-AXIS COVERAGE - O_a+ (the faces looking +a)
-// and O_a- (looking -a), written by the resolve (VoxelMerge_piece_cs.any, THE DIRECTIONAL
-// COVERAGE); the light injection, the anisotropic mip step 0 and every read sample it.
-layout( vulkan( ogre_u7 ) vk_comma @insertpiece(uav7_pf_type) )
-uniform restrict writeonly image3D voxelCoveragePTex;
-layout( vulkan( ogre_u8 ) vk_comma @insertpiece(uav8_pf_type) )
-uniform restrict writeonly image3D voxelCoverageNTex;
-// Jahshaka (PHOTON-VOXEL-4): THE SURFACE POSITION per half-axis, O-premultiplied, absolute
-// in the volume's normalised coordinate (VoxelMerge_piece_cs.any, THE SURFACE POSITION).
-layout( vulkan( ogre_u9 ) vk_comma @insertpiece(uav9_pf_type) )
-uniform restrict writeonly image3D voxelPositionPTex;
-layout( vulkan( ogre_u10 ) vk_comma @insertpiece(uav10_pf_type) )
-uniform restrict writeonly image3D voxelPositionNTex;
-
-
 
 layout( local_size_x = @value( threads_per_group_x ),
 		local_size_y = @value( threads_per_group_y ),
@@ -124,7 +90,7 @@ layout( local_size_x = @value( threads_per_group_x ),
 //		local_size_z = 4 ) in;
 
 @property( syntax == glsl )
-	ReadOnlyBufferF( 7, InstanceBuffer, instanceBuffer );
+	ReadOnlyBufferF( 6, InstanceBuffer, instanceBuffer );
 @else
 	ReadOnlyBufferF( 0, InstanceBuffer, instanceBuffer );
 @end
@@ -135,19 +101,18 @@ layout( local_size_x = @value( threads_per_group_x ),
 @end
 
 
-@insertpiece( DeclVoxelMerge )
-
 @insertpiece( HeaderCS )
 
 
 vulkan( layout( ogre_P0 ) uniform Params { )
-	uniform uint2 rangeIdx_pad;
+	uniform uint2 instanceStart_instanceEnd;
 	uniform float3 voxelOrigin;
 	uniform float3 voxelCellSize;
 	uniform uint3 voxelPixelOrigin;
 vulkan( }; )
 
-#define p_rangeIdx rangeIdx_pad.x
+#define p_instanceStart instanceStart_instanceEnd.x
+#define p_instanceEnd instanceStart_instanceEnd.y
 #define p_voxelOrigin voxelOrigin
 #define p_voxelCellSize voxelCellSize
 #define p_voxelPixelOrigin voxelPixelOrigin

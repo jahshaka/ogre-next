@@ -31,7 +31,6 @@ vulkan( layout( ogre_P0 ) uniform Params { )
 
     uniform uint3 numProbes;
     uniform float3 aspectRatioFixer;
-    uniform uint3 windowOffset;
 vulkan( }; )
 
 #define p_worldViewProjMatrix worldViewProjMatrix
@@ -45,7 +44,6 @@ vulkan( }; )
 
 #define p_numProbes			numProbes
 #define p_aspectRatioFixer	aspectRatioFixer
-#define p_windowOffset		windowOffset
 
 out gl_PerVertex
 {

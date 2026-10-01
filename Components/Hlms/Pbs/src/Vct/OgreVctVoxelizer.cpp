@@ -52,9 +52,7 @@ THE SOFTWARE.
 #include "OgreTextureGpuManager.h"
 #include "Vao/OgreIndexBufferPacked.h"
 #include "Vao/OgreReadOnlyBufferPacked.h"
-#include "Vao/OgreVertexBufferPacked.h"
 #include "Vao/OgreStagingBuffer.h"
-#include "Vao/OgreTexBufferPacked.h"
 #include "Vao/OgreUavBufferPacked.h"
 #include "Vao/OgreVaoManager.h"
 #include "Vao/OgreVertexArrayObject.h"
@@ -63,90 +61,94 @@ THE SOFTWARE.
 
 namespace Ogre
 {
-    static const uint32 c_numVctProperties = 2u;
+    static const uint32 c_numVctProperties = 4u;
+    static const uint32 c_numAabCalcProperties = 2u;
 
     struct VctVoxelizerProp
     {
         static const IdString HasDiffuseTex;
         static const IdString HasEmissiveTex;
+        static const IdString Index32bit;
+        static const IdString CompressedVertexFormat;
 
         static const IdString *AllProps[c_numVctProperties];
     };
 
     const IdString VctVoxelizerProp::HasDiffuseTex = IdString( "has_diffuse_tex" );
     const IdString VctVoxelizerProp::HasEmissiveTex = IdString( "has_emissive_tex" );
+    const IdString VctVoxelizerProp::Index32bit = IdString( "index_32bit" );
+    const IdString VctVoxelizerProp::CompressedVertexFormat = IdString( "compressed_vertex_format" );
 
     const IdString *VctVoxelizerProp::AllProps[c_numVctProperties] = {
+        &VctVoxelizerProp::Index32bit,
+        &VctVoxelizerProp::CompressedVertexFormat,
         &VctVoxelizerProp::HasDiffuseTex,
         &VctVoxelizerProp::HasEmissiveTex,
     };
     //-------------------------------------------------------------------------
     VctVoxelizer::VctVoxelizer( IdType id, RenderSystem *renderSystem, HlmsManager *hlmsManager,
-                                bool correctAreaLightShadows, VctMaterial *materialStore ) :
+                                bool correctAreaLightShadows ) :
         VctVoxelizerSourceBase( id, renderSystem, hlmsManager ),
-        mMergeAccumTex( 0 ),
-        mGeometryBuffer( 0 ),
-        mRecords( 0 ),
-        mRecordsAsTex( 0 ),
-        mRanges( 0 ),
-        mLastDispatchCount( 0u ),
+        mAabbWorldSpaceJob( 0 ),
+        mTotalNumInstances( 0 ),
+        mCpuInstanceBuffer( 0 ),
+        mInstanceBuffer( 0 ),
+        mInstanceBufferAsTex( 0 ),
+        mVertexBufferCompressed( 0 ),
+        mVertexBufferUncompressed( 0 ),
+        mIndexBuffer16( 0 ),
+        mIndexBuffer32( 0 ),
+        mNumUncompressedPartSubMeshes16( 0 ),
+        mNumUncompressedPartSubMeshes32( 0 ),
+        mNumCompressedPartSubMeshes16( 0 ),
+        mNumCompressedPartSubMeshes32( 0 ),
+        mGpuPartitionedSubMeshes( 0 ),
+        mMeshAabb( 0 ),
         mNeedsAlbedoMipmaps( correctAreaLightShadows ),
         mNeedsAllMipmaps( false ),
+        mNumVerticesCompressed( 0 ),
+        mNumVerticesUncompressed( 0 ),
+        mNumIndices16( 0 ),
+        mNumIndices32( 0 ),
+        mDefaultIndexCountSplit( 2001u
+                                 /*std::numeric_limits<uint32>::max()*/ ),
         mComputeTools( new ComputeTools( hlmsManager->getComputeHlms() ) ),
-        mVctMaterial( materialStore ),
-        mNumOctantsX( 0u ),
-        mNumOctantsY( 0u ),
-        mNumOctantsZ( 0u )
+        mVctMaterial( new VctMaterial( id, renderSystem->getVaoManager(),
+                                       Root::getSingleton().getCompositorManager2(),
+                                       renderSystem->getTextureGpuManager() ) ),
+        mAutoRegion( true ),
+        mMaxRegion( Aabb::BOX_INFINITE )
     {
         memset( mComputeJobs, 0, sizeof( mComputeJobs ) );
+        memset( mAabbCalculator, 0, sizeof( mAabbCalculator ) );
         createComputeJobs();
-
-        // A device with no buffer device addresses cannot voxelize at all any more:
-        // the shader dereferences the raster's vertex and index pools. Say so ONCE,
-        // loudly, instead of producing empty volumes - the cure is a driver with
-        // VK_KHR_buffer_device_address, which every target this engine ships on has.
-        if( !mVaoManager->supportsBufferDeviceAddress() )
-        {
-            LogManager::getSingleton().logMessage(
-                "WARNING: VctVoxelizer needs buffer device addresses (the compute shader "
-                "reads the raster's own vertex and index buffers) and this device has none. "
-                "Voxel-cone GI will be empty.",
-                LML_CRITICAL );
-        }
     }
     //-------------------------------------------------------------------------
     VctVoxelizer::~VctVoxelizer()
     {
         setDebugVisualization( DebugVisualizationNone, 0 );
         destroyVoxelTextures();
-        clearComputeJobResources();
+        freeBuffers( true );
+        destroyInstanceBuffers();
 
-        // NOTHING HERE IS OURS BUT THE VOLUMES: the store, the geometry rows, the
-        // records and the ranges all belong to the owner and outlive us.
+        delete mVctMaterial;
         mVctMaterial = 0;
-        mGeometryBuffer = 0;
-        mRecords = 0;
-        mRecordsAsTex = 0;
-        mRanges = 0;
 
         delete mComputeTools;
         mComputeTools = 0;
     }
     //-------------------------------------------------------------------------
-    /// THE VAO OF ONE LOD LEVEL, and the ONE place this file resolves which one a
-    /// (SubMesh, level) request means. The level arrives PER ITEM (ATOM P4 / AT-A10).
-    ///
-    /// `mVao[VpNormal]` is the mesh's LOD chain, finest first, and it always has
-    /// at least one entry: a mesh with no chain has exactly one and every level
-    /// clamps back onto it, which is why this is a drop-in for the
-    /// `.front()` this class used everywhere.
-    static VertexArrayObject *getLodVao( const SubMesh *subMesh, uint32 lodLevel )
+    bool VctVoxelizer::adjustIndexOffsets16( uint32 &indexStart, uint32 &numIndices )
     {
-        const VertexArrayObjectArray &vaos = subMesh->mVao[VpNormal];
-        if( vaos.empty() )
-            return 0;
-        const size_t idx = std::min<size_t>( lodLevel, vaos.size() - 1u );
-        return vaos[idx];
+        bool adjustedIndexStart = false;
+        if( indexStart & 0x01 )
+        {
+            adjustedIndexStart = true;
+            indexStart -= 1u;
+            ++numIndices;
+        }
+        numIndices = alignToNextMultiple( numIndices, 2u );
+        return adjustedIndexStart;
     }
     //-------------------------------------------------------------------------
     void VctVoxelizer::createComputeJobs()
@@ -212,177 +214,599 @@ namespace Ogre
             }
         }
 
-    }
-    //-------------------------------------------------------------------------
-    void VctVoxelizer::clearComputeJobResources()
-    {
-        // Do not leave dangling pointers in the shared jobs: they live in HlmsCompute,
-        // every voxelizer dispatches them, and every buffer bound here is the HOST'S -
-        // it may be grown (destroyed and re-created) before the next build.
-        for( size_t i = 0; i < sizeof( mComputeJobs ) / sizeof( mComputeJobs[0] ); ++i )
+        HlmsComputeJob *aabbCalc = hlmsCompute->findComputeJob( "VCT/AabbCalculator" );
+
+        const RenderSystemCapabilities *caps = mRenderSystem->getCapabilities();
+        aabbCalc->setThreadsPerGroup( caps->getMaxThreadsPerThreadgroupAxis()[0], 1u, 1u );
+
+        numVariants = 1u << c_numAabCalcProperties;
+        for( uint32 variant = 0u; variant < numVariants; ++variant )
         {
-            if( !mComputeJobs[i] )
-                continue;
-            mComputeJobs[i]->clearUavBuffers();
-            mComputeJobs[i]->clearTexBuffers();
+            jobName.clear();
+            jobName.a( "VCT/AabbCalculator/", variant );
+
+            mAabbCalculator[variant] = hlmsCompute->findComputeJobNoThrow( jobName.c_str() );
+
+            if( !mAabbCalculator[variant] )
+            {
+                mAabbCalculator[variant] = aabbCalc->clone( jobName.c_str() );
+
+                for( uint32 property = 0; property < c_numAabCalcProperties; ++property )
+                {
+                    const int32 propValue = variant & ( 1u << property ) ? 1 : 0;
+                    mAabbCalculator[variant]->setProperty( *VctVoxelizerProp::AllProps[property],
+                                                           propValue );
+                }
+            }
         }
+
+        mAabbWorldSpaceJob = hlmsCompute->findComputeJob( "VCT/AabbWorldSpace" );
     }
     //-------------------------------------------------------------------------
-    /// The normal / uv formats a geometry row can name, mirrored in
-    /// Voxelizer_piece_cs.any. A FORMAT IS DATA, NOT A SHADER PERMUTATION: the old
-    /// `compressed_vertex_format` property existed only because this class chose the
-    /// format itself when it repacked every mesh.
-    namespace VoxelizerGeomFlag
+    void VctVoxelizer::clearComputeJobResources( bool calculatorDataOnly )
     {
-        enum VoxelizerGeomFlag
+        // Do not leave dangling pointers when destroying buffers, even if we later set them
+        // with a new pointer (if malloc reuses an address and the jobs weren't cleared, we're screwed)
+        if( !calculatorDataOnly )
         {
-            Index32bit = 1u << 0u,
+            for( size_t i = 0; i < sizeof( mComputeJobs ) / sizeof( mComputeJobs[0] ); ++i )
+            {
+                mComputeJobs[i]->clearUavBuffers();
+                mComputeJobs[i]->clearTexBuffers();
+            }
+        }
 
-            NormalShift = 4u,
-            NormalNone = 0u << 4u,
-            NormalFloat3 = 1u << 4u,
-            NormalShort4Snorm = 2u << 4u,
-            NormalHalf4 = 3u << 4u,
+        {
+            const uint32 numVariants = 1u << c_numAabCalcProperties;
 
-            UvShift = 8u,
-            UvNone = 0u << 8u,
-            UvFloat2 = 1u << 8u,
-            UvHalf2 = 2u << 8u,
-        };
+            for( uint32 i = 0; i < numVariants; ++i )
+            {
+                mAabbCalculator[i]->clearUavBuffers();
+                mAabbCalculator[i]->clearTexBuffers();
+            }
+        }
+
+        mAabbWorldSpaceJob->clearTexBuffers();
+        mAabbWorldSpaceJob->clearUavBuffers();
     }
     //-------------------------------------------------------------------------
-    /// THE ONE PLACE A (mesh, level, submesh)'s GEOMETRY IS DESCRIBED - and it is a
-    /// STATIC, because a row is a fact about a MESH and not about a voxelisation.
-    /// See the declaration for why the host owns the table.
-    bool VctVoxelizer::describeGeometryRow( const MeshPtr &mesh, uint32 level, uint32 submesh,
-                                           VaoManager *vaoManager, GeometryRow &out )
+    void VctVoxelizer::countBuffersSize( const MeshPtr &mesh, QueuedMesh &queuedMesh )
     {
-        if( !mesh || !vaoManager || submesh >= mesh->getNumSubMeshes() )
-            return false;
+        const unsigned numSubmeshes = mesh->getNumSubMeshes();
 
-        SubMesh *subMesh = mesh->getSubMesh( (uint16)submesh );
-        VertexArrayObject *vao = getLodVao( subMesh, level );
-        if( !vao )
-            return false;
-        IndexBufferPacked *indexBuffer = vao->getIndexBuffer();
-        if( !indexBuffer )
+        uint32 totalNumVertices = 0u;
+        uint32 totalNumIndices16 = 0u;
+        uint32 totalNumIndices32 = 0u;
+
+        for( unsigned subMeshIdx = 0; subMeshIdx < numSubmeshes; ++subMeshIdx )
         {
+            SubMesh *subMesh = mesh->getSubMesh( subMeshIdx );
+            VertexArrayObject *vao = subMesh->mVao[VpNormal].front();
+
+            // Count the total number of indices and vertices
+            size_t vertexStart = 0u;
+            size_t numVertices = vao->getBaseVertexBuffer()->getNumElements();
+
+            uint32 vbOffset = totalNumVertices + ( queuedMesh.bCompressed ? mNumVerticesCompressed
+                                                                          : mNumVerticesUncompressed );
+            uint32 ibOffset = 0;
+            uint32 numIndices = 0;
+
+            uint32 *partSubMeshIdx = 0;
+
+            // bool uses32bitIndices = false;
+
+            IndexBufferPacked *indexBuffer = vao->getIndexBuffer();
+            if( indexBuffer )
+            {
+                numIndices = vao->getPrimitiveCount();
+                if( indexBuffer->getIndexType() == IndexBufferPacked::IT_16BIT )
+                {
+                    ibOffset = mNumIndices16 + totalNumIndices16;
+                    totalNumIndices16 += alignToNextMultiple( numIndices, 4u );
+
+                    partSubMeshIdx = queuedMesh.bCompressed ? &mNumCompressedPartSubMeshes16
+                                                            : &mNumUncompressedPartSubMeshes16;
+                }
+                else
+                {
+                    partSubMeshIdx = queuedMesh.bCompressed ? &mNumCompressedPartSubMeshes32
+                                                            : &mNumUncompressedPartSubMeshes32;
+                    ibOffset = mNumIndices32 + totalNumIndices32;
+                    totalNumIndices32 += numIndices;
+                }
+
+                totalNumVertices += static_cast<uint32>( vao->getBaseVertexBuffer()->getNumElements() );
+            }
+            else
+            {
+                vertexStart = vao->getPrimitiveStart();
+                numVertices = vao->getPrimitiveCount();
+                numIndices = 0;
+                TODO_deal_no_index_buffer;
+
+                totalNumVertices += vao->getPrimitiveCount();
+            }
+
             TODO_deal_no_index_buffer;
-            return false;
-        }
 
-        size_t posSource = 0u, posOffset = 0u;
-        const VertexElement2 *posElem = vao->findBySemantic( VES_POSITION, posSource, posOffset );
-        if( !posElem || posElem->mType != VET_FLOAT3 ||
-            posSource >= vao->getVertexBuffers().size() )
-        {
-            LogManager::getSingleton().logMessage(
-                "WARNING: Mesh '" + mesh->getName() +
-                    "' has no float3 VES_POSITION the voxelizer can read in place. It "
-                    "will not contribute to GI.",
-                LML_CRITICAL );
-            return false;
-        }
+            // If the mesh has a lot of triangles, the voxelizer will test N triangles for every WxHxD
+            // voxel, which can be very inefficient. By partitioning the submeshes and calculating
+            // their AABBs, we can perform broadphase culling and skip a lot of triangles
+            const uint32 numPartitions =
+                queuedMesh.indexCountSplit == std::numeric_limits<uint32>::max()
+                    ? 1u
+                    : alignToNextMultiple( numIndices, queuedMesh.indexCountSplit ) /
+                          queuedMesh.indexCountSplit;
+            queuedMesh.submeshes[subMeshIdx].partSubMeshes.resize( numPartitions );
 
-        VertexBufferPacked *vertexBuffer = vao->getVertexBuffers()[posSource];
-        const uint64 posAddress = vaoManager->getBufferDeviceAddress( vertexBuffer );
-        const uint64 rawIdxAddress = vaoManager->getBufferDeviceAddress( indexBuffer );
-        if( !posAddress || !rawIdxAddress )
-            return false;  // no addresses on this device
-
-        GeometryRow row;
-        memset( &row, 0, sizeof( row ) );
-        row.vertexStride = vertexBuffer->getBytesPerElement();
-        row.posOffset = uint32( posOffset );
-        row.normalOffset = 0xFFFFFFFFu;
-        row.uvOffset = 0xFFFFFFFFu;
-        row.flags = indexBuffer->getIndexType() == IndexBufferPacked::IT_32BIT
-                        ? VoxelizerGeomFlag::Index32bit
-                        : 0u;
-
-        // A SEMANTIC IN ANOTHER SOURCE BUFFER IS TREATED AS ABSENT, which is exactly
-        // what the deleted download path did when its helper returned no data for one
-        // (normal fell back to UNIT_Y, uv to zero). One row carries one vertex address;
-        // a second source would need a second, and no mesh this engine bakes has one.
-        size_t normSource = 0u, normOffset = 0u;
-        const VertexElement2 *normElem = vao->findBySemantic( VES_NORMAL, normSource, normOffset );
-        if( normElem && normSource == posSource )
-        {
-            uint32 fmt = VoxelizerGeomFlag::NormalNone;
-            if( normElem->mType == VET_FLOAT3 || normElem->mType == VET_FLOAT4 )
-                fmt = VoxelizerGeomFlag::NormalFloat3;
-            else if( normElem->mType == VET_SHORT4_SNORM )
-                fmt = VoxelizerGeomFlag::NormalShort4Snorm;
-            else if( normElem->mType == VET_HALF4 )
-                fmt = VoxelizerGeomFlag::NormalHalf4;
-            if( fmt != VoxelizerGeomFlag::NormalNone )
+            for( uint32 partition = 0u; partition < numPartitions; ++partition )
             {
-                row.flags |= fmt;
-                row.normalOffset = uint32( normOffset );
+                PartitionedSubMesh &partSubMesh =
+                    queuedMesh.submeshes[subMeshIdx].partSubMeshes[partition];
+                partSubMesh.vbOffset = vbOffset;
+                partSubMesh.ibOffset = ibOffset + queuedMesh.indexCountSplit * partition;
+                partSubMesh.numIndices = std::min( numIndices - queuedMesh.indexCountSplit * partition,
+                                                   queuedMesh.indexCountSplit );
+                partSubMesh.aabbSubMeshIdx = *partSubMeshIdx;
+                *partSubMeshIdx += 1u;
             }
+
+#ifdef STREAM_DOWNLOAD
+            // Request to download the vertex buffer(s) to CPU (it will be mapped soon)
+            VertexElementSemanticFullArray semanticsToDownload;
+            semanticsToDownload.push_back( VES_POSITION );
+            semanticsToDownload.push_back( VES_NORMAL );
+            semanticsToDownload.push_back( VES_TEXTURE_COORDINATES );
+            queuedMesh.submeshes[subMeshIdx].downloadHelper.queueDownload( vao, semanticsToDownload,
+                                                                           vertexStart, numVertices );
+#else
+            queuedMesh.submeshes[subMeshIdx].downloadVertexStart = vertexStart;
+            queuedMesh.submeshes[subMeshIdx].downloadNumVertices = numVertices;
+#endif
         }
 
-        size_t uvSource = 0u, uvOffset = 0u;
-        const VertexElement2 *uvElem =
-            vao->findBySemantic( VES_TEXTURE_COORDINATES, uvSource, uvOffset );
-        if( uvElem && uvSource == posSource )
-        {
-            uint32 fmt = VoxelizerGeomFlag::UvNone;
-            if( uvElem->mType == VET_FLOAT2 || uvElem->mType == VET_FLOAT3 ||
-                uvElem->mType == VET_FLOAT4 )
-                fmt = VoxelizerGeomFlag::UvFloat2;
-            else if( uvElem->mType == VET_HALF2 || uvElem->mType == VET_HALF4 )
-                fmt = VoxelizerGeomFlag::UvHalf2;
-            if( fmt != VoxelizerGeomFlag::UvNone )
-            {
-                row.flags |= fmt;
-                row.uvOffset = uint32( uvOffset );
-            }
-        }
+        if( queuedMesh.bCompressed )
+            mNumVerticesCompressed += totalNumVertices;
+        else
+            mNumVerticesUncompressed += totalNumVertices;
 
-        // A buffer_reference of uints must sit on a 4-byte boundary and a 16-bit index
-        // buffer can start on an odd uint16. Floor the address and carry the remainder
-        // as an ELEMENT bias, so the shader's index arithmetic stays whole-element and
-        // nothing is copied to make it align.
-        const uint32 idxBytes = indexBuffer->getBytesPerElement();
-        const uint64 flooredIdx = rawIdxAddress & ~uint64( 3u );
-        row.idxBias = uint32( ( rawIdxAddress - flooredIdx ) / idxBytes );
-        row.posAddress[0] = uint32( posAddress & 0xFFFFFFFFu );
-        row.posAddress[1] = uint32( posAddress >> 32u );
-        row.idxAddress[0] = uint32( flooredIdx & 0xFFFFFFFFu );
-        row.idxAddress[1] = uint32( flooredIdx >> 32u );
-
-        // THE SHADER'S ADDRESS ARITHMETIC IS IN 4-BYTE LANES (`GEOM_LANE` does a
-        // `>> 2`), so an odd stride or element offset would not fail - it would read
-        // the WRONG BYTES, silently, for that one mesh.
-        const bool bAligned = ( row.vertexStride & 3u ) == 0u && ( row.posOffset & 3u ) == 0u &&
-                              ( row.normalOffset == 0xFFFFFFFFu ||
-                                ( row.normalOffset & 3u ) == 0u ) &&
-                              ( row.uvOffset == 0xFFFFFFFFu || ( row.uvOffset & 3u ) == 0u );
-        if( !bAligned )
-        {
-            LogManager::getSingleton().logMessage(
-                "WARNING: Mesh '" + mesh->getName() +
-                    "' has a vertex stride or element offset that is not a multiple of 4 "
-                    "bytes; the voxelizer reads vertices in 4-byte lanes and will not "
-                    "read this mesh. It will not contribute to GI.",
-                LML_CRITICAL );
-            return false;
-        }
-
-        out = row;
-        return true;
+        mNumIndices16 += totalNumIndices16;
+        mNumIndices32 += totalNumIndices32;
     }
     //-------------------------------------------------------------------------
-    /// Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): the merge accumulator dies with the voxel textures.
-    void VctVoxelizer::destroyVoxelTextures()
+    void VctVoxelizer::prepareAabbCalculatorMeshData()
     {
-        if( mMergeAccumTex )
+        OgreProfile( "VctVoxelizer::prepareAabbCalculatorMeshData" );
+
+        destroyAabbCalculatorMeshData();
+        const size_t totalNumMeshes = mNumUncompressedPartSubMeshes16 + mNumUncompressedPartSubMeshes32 +
+                                      mNumCompressedPartSubMeshes16 + mNumCompressedPartSubMeshes32;
+        mMeshAabb = mVaoManager->createUavBuffer( totalNumMeshes, sizeof( float ) * 4u * 2u,
+                                                  BB_FLAG_READONLY, 0, false );
+
+        PartitionedSubMesh *partitionedSubMeshGpu = reinterpret_cast<PartitionedSubMesh *>(
+            OGRE_MALLOC_SIMD( totalNumMeshes * sizeof( PartitionedSubMesh ), MEMCATEGORY_GEOMETRY ) );
+        FreeOnDestructor partitionedSubMeshGpuPtr( partitionedSubMeshGpu );
+
+        const uint32 numVariants = 1u << c_numAabCalcProperties;
+
+        uint32 submeshStarts[numVariants];
+        submeshStarts[0] = 0u;                                                  // 16-bit uncompressed
+        submeshStarts[1] = submeshStarts[0] + mNumUncompressedPartSubMeshes16;  // 32-bit uncompressed
+        submeshStarts[2] = submeshStarts[1] + mNumUncompressedPartSubMeshes32;  // 16-bit compressed
+        submeshStarts[3] = submeshStarts[2] + mNumCompressedPartSubMeshes16;    // 32-bit compressed
+
+        PartitionedSubMesh *partitionedSubMeshGpuPtrs[numVariants] = {
+            partitionedSubMeshGpu + submeshStarts[0], partitionedSubMeshGpu + submeshStarts[1],
+            partitionedSubMeshGpu + submeshStarts[2], partitionedSubMeshGpu + submeshStarts[3]
+        };
+
+        MeshPtrMap::iterator itor = mMeshesV2.begin();
+        MeshPtrMap::iterator end = mMeshesV2.end();
+
+        while( itor != end )
         {
-            mTextureGpuManager->destroyTexture( mMergeAccumTex );
-            mMergeAccumTex = 0;
+            const Mesh *mesh = itor->first.get();
+            QueuedMesh &queuedMesh = itor->second;
+            const size_t numSubMeshes = queuedMesh.submeshes.size();
+            for( size_t i = 0u; i < numSubMeshes; ++i )
+            {
+                VertexArrayObject *vao = mesh->getSubMesh( (uint16)( i ) )->mVao[VpNormal].front();
+                IndexBufferPacked *indexBuffer = vao->getIndexBuffer();
+                const bool is16bit = indexBuffer->getIndexType() == IndexBufferPacked::IT_16BIT;
+
+                FastArray<PartitionedSubMesh>::iterator itPartSub =
+                    queuedMesh.submeshes[i].partSubMeshes.begin();
+                FastArray<PartitionedSubMesh>::iterator enPartSub =
+                    queuedMesh.submeshes[i].partSubMeshes.end();
+
+                while( itPartSub != enPartSub )
+                {
+                    size_t variantIdx = is16bit ? 0u : 1u;
+                    if( queuedMesh.bCompressed )
+                        variantIdx += 2u;
+
+                    itPartSub->aabbSubMeshIdx += submeshStarts[variantIdx];
+
+                    partitionedSubMeshGpuPtrs[variantIdx]->vbOffset = itPartSub->vbOffset;
+                    partitionedSubMeshGpuPtrs[variantIdx]->ibOffset = itPartSub->ibOffset;
+                    partitionedSubMeshGpuPtrs[variantIdx]->numIndices = itPartSub->numIndices;
+                    // VCT/AabbWorldSpace compute shader needs to read aabbSubMeshIdx from
+                    // InstanceBuffer::meshData.w & ~0x80000000u; not from inMeshAabb which is
+                    // what we're filling right now. So set it to 0 to avoid confussion
+                    partitionedSubMeshGpuPtrs[variantIdx]->aabbSubMeshIdx = 0;
+
+                    // const bool needsAabbCalc = numSubMeshes != 1u ||
+                    //                           queuedMesh.submeshes[i].partSubMeshes.size()
+                    //                           != 1u;
+                    // if( needsAabbCalc )
+                    //    partitionedSubMeshGpu->numIndices |= 0x80000000;
+
+                    ++itPartSub;
+                    ++partitionedSubMeshGpuPtrs[variantIdx];
+                }
+            }
+            ++itor;
         }
-        VctVoxelizerSourceBase::destroyVoxelTextures();
+
+        OGRE_ASSERT_LOW( (size_t)( partitionedSubMeshGpuPtrs[0] - partitionedSubMeshGpu ) ==
+                         mNumUncompressedPartSubMeshes16 );
+        OGRE_ASSERT_LOW( (size_t)( partitionedSubMeshGpuPtrs[1] - partitionedSubMeshGpuPtrs[0] ) ==
+                         mNumUncompressedPartSubMeshes32 );
+        OGRE_ASSERT_LOW( (size_t)( partitionedSubMeshGpuPtrs[2] - partitionedSubMeshGpuPtrs[1] ) ==
+                         mNumCompressedPartSubMeshes16 );
+        OGRE_ASSERT_LOW( (size_t)( partitionedSubMeshGpuPtrs[3] - partitionedSubMeshGpuPtrs[2] ) ==
+                         mNumCompressedPartSubMeshes32 );
+
+        mGpuPartitionedSubMeshes =
+            mVaoManager->createTexBuffer( PFG_RGBA32_UINT, totalNumMeshes * sizeof( PartitionedSubMesh ),
+                                          BT_DEFAULT, partitionedSubMeshGpuPtr.ptr, false );
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::destroyAabbCalculatorMeshData()
+    {
+        // if( mGpuMeshDataDirty )
+        if( mGpuPartitionedSubMeshes )
+        {
+            mVaoManager->destroyTexBuffer( mGpuPartitionedSubMeshes );
+            mGpuPartitionedSubMeshes = 0;
+        }
+        if( mMeshAabb )
+        {
+            mVaoManager->destroyUavBuffer( mMeshAabb );
+            mMeshAabb = 0;
+        }
+
+        clearComputeJobResources( true );
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::convertMeshUncompressed( const MeshPtr &mesh, QueuedMesh &queuedMesh,
+                                                MappedBuffers &mappedBuffers )
+    {
+        OgreProfile( "VctVoxelizer::convertMeshUncompressed" );
+
+        const unsigned numSubmeshes = mesh->getNumSubMeshes();
+
+        for( unsigned subMeshIdx = 0; subMeshIdx < numSubmeshes; ++subMeshIdx )
+        {
+            SubMesh *subMesh = mesh->getSubMesh( subMeshIdx );
+            VertexArrayObject *vao = subMesh->mVao[VpNormal].front();
+
+            size_t numVertices = vao->getBaseVertexBuffer()->getNumElements();
+
+            IndexBufferPacked *indexBuffer = vao->getIndexBuffer();
+            if( indexBuffer )
+            {
+                if( indexBuffer->getIndexType() == IndexBufferPacked::IT_16BIT )
+                {
+                    uint32 indexStart = vao->getPrimitiveStart();
+                    uint32 numIndices = vao->getPrimitiveCount();
+                    indexBuffer->copyTo( mIndexBuffer16, mappedBuffers.index16BufferOffset >> 1u,
+                                         indexStart, numIndices );
+                    mappedBuffers.index16BufferOffset += alignToNextMultiple( numIndices, 4u );
+                }
+                else
+                {
+                    indexBuffer->copyTo( mIndexBuffer32, mappedBuffers.index32BufferOffset,
+                                         vao->getPrimitiveStart(), vao->getPrimitiveCount() );
+                    mappedBuffers.index32BufferOffset += vao->getPrimitiveCount();
+                }
+            }
+            else
+            {
+                // vertexStart = vao->getPrimitiveStart();
+                numVertices = vao->getPrimitiveCount();
+            }
+
+            float *RESTRICT_ALIAS uncVertexBuffer = mappedBuffers.uncompressedVertexBuffer;
+
+#ifdef STREAM_DOWNLOAD
+            VertexBufferDownloadHelper &downloadHelper = queuedMesh.submeshes[subMeshIdx].downloadHelper;
+#else
+            VertexBufferDownloadHelper downloadHelper;
+            {
+                VertexElementSemanticFullArray semanticsToDownload;
+                semanticsToDownload.push_back( VES_POSITION );
+                semanticsToDownload.push_back( VES_NORMAL );
+                semanticsToDownload.push_back( VES_TEXTURE_COORDINATES );
+
+                downloadHelper.queueDownload( vao, semanticsToDownload,
+                                              queuedMesh.submeshes[subMeshIdx].downloadVertexStart,
+                                              queuedMesh.submeshes[subMeshIdx].downloadNumVertices );
+            }
+#endif
+            const VertexBufferDownloadHelper::DownloadData *downloadData =
+                downloadHelper.getDownloadData().data();
+
+            VertexElement2 dummy( VET_FLOAT1, VES_TEXTURE_COORDINATES );
+            VertexElement2 origElements[3] = {
+                downloadData[0].origElements ? *downloadData[0].origElements : dummy,
+                downloadData[1].origElements ? *downloadData[1].origElements : dummy,
+                downloadData[2].origElements ? *downloadData[2].origElements : dummy,
+            };
+
+            // Map the buffers we started downloading in countBuffersSize
+            uint8 const *srcData[3];
+            downloadHelper.map( srcData );
+
+            for( size_t vertexIdx = 0; vertexIdx < numVertices; ++vertexIdx )
+            {
+                Vector4 pos =
+                    downloadHelper.getVector4( srcData[0] + downloadData[0].srcOffset, origElements[0] );
+                Vector3 normal( Vector3::UNIT_Y );
+                Vector2 uv( Vector2::ZERO );
+
+                if( srcData[1] )
+                {
+                    normal = downloadHelper.getNormal( srcData[1] + downloadData[1].srcOffset,
+                                                       origElements[1] );
+                }
+                if( srcData[2] )
+                {
+                    uv = downloadHelper
+                             .getVector4( srcData[2] + downloadData[2].srcOffset, origElements[2] )
+                             .xy();
+                }
+
+                *uncVertexBuffer++ = static_cast<float>( pos.x );
+                *uncVertexBuffer++ = static_cast<float>( pos.y );
+                *uncVertexBuffer++ = static_cast<float>( pos.z );
+
+                *uncVertexBuffer++ = static_cast<float>( normal.x );
+                *uncVertexBuffer++ = static_cast<float>( normal.y );
+                *uncVertexBuffer++ = static_cast<float>( normal.z );
+
+                *uncVertexBuffer++ = static_cast<float>( uv.x );
+                *uncVertexBuffer++ = static_cast<float>( uv.y );
+
+                srcData[0] += downloadData[0].srcBytesPerVertex;
+                srcData[1] += downloadData[1].srcBytesPerVertex;
+                srcData[2] += downloadData[2].srcBytesPerVertex;
+            }
+
+            mappedBuffers.uncompressedVertexBuffer = uncVertexBuffer;
+
+            downloadHelper.unmap();
+        }
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::addItem( Item *item, bool bCompressed, uint32 indexCountSplit )
+    {
+        const MeshPtr &mesh = item->getMesh();
+
+        bool bCanAdd = true;
+
+        if( indexCountSplit == 0u )
+            indexCountSplit = mDefaultIndexCountSplit;
+        if( indexCountSplit != std::numeric_limits<uint32>::max() )
+            indexCountSplit = alignToNextMultiple( indexCountSplit, 3u );
+
+        MeshPtrMap::iterator itor = mMeshesV2.find( mesh );
+
+        const bool isNewEntry = itor == mMeshesV2.end();
+
+        if( isNewEntry )
+        {
+            const unsigned numSubMeshes = mesh->getNumSubMeshes();
+            for( unsigned i = 0u; i < numSubMeshes && bCanAdd; ++i )
+            {
+                VertexArrayObject *vao = mesh->getSubMesh( i )->mVao[VpNormal].front();
+                if( !vao->getIndexBuffer() )
+                {
+                    bCanAdd = false;
+                    LogManager::getSingleton().logMessage(
+                        "WARNING: Mesh '" + mesh->getName() +
+                            "' contains geometry without index buffers. This is currently not "
+                            "implemented and cannot be added to VctVoxelizer. GI may not look as "
+                            "expected",
+                        LML_CRITICAL );
+                }
+            }
+        }
+
+        if( bCanAdd )
+        {
+            if( !bCompressed )
+            {
+                // Force no compression, even if the entry was already there
+                QueuedMesh &queuedMesh = mMeshesV2[mesh];
+                // const bool wasCompressed = queuedMesh.bCompressed;
+                queuedMesh.bCompressed = false;
+
+                if( isNewEntry )
+                {
+                    queuedMesh.numItems = 0u;
+                    queuedMesh.indexCountSplit = indexCountSplit;
+                    queuedMesh.submeshes.resize( mesh->getNumSubMeshes() );
+                }
+
+                ++queuedMesh.numItems;
+            }
+            else
+            {
+                // We can only request with compression if the entry wasn't already there
+                if( isNewEntry )
+                {
+                    QueuedMesh queuedMesh;
+                    queuedMesh.numItems = 0u;
+                    queuedMesh.bCompressed = true;
+                    queuedMesh.indexCountSplit = indexCountSplit;
+                    queuedMesh.submeshes.resize( mesh->getNumSubMeshes() );
+
+                    mMeshesV2[mesh] = queuedMesh;
+                }
+                else
+                {
+                    ++itor->second.numItems;
+                }
+            }
+
+            mItems.push_back( item );
+        }
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::removeItem( Item *item )
+    {
+        ItemArray::iterator itor = std::find( mItems.begin(), mItems.end(), item );
+        if( itor == mItems.end() )
+            OGRE_EXCEPT( Exception::ERR_ITEM_NOT_FOUND, "", "VctVoxelizer::removeItem" );
+
+        const MeshPtr &mesh = item->getMesh();
+        MeshPtrMap::iterator itMesh = mMeshesV2.find( mesh );
+        if( itMesh == mMeshesV2.end() )
+        {
+            OGRE_EXCEPT( Exception::ERR_ITEM_NOT_FOUND,
+                         "The item was in our records but its mesh wasn't! This should be "
+                         "impossible. Was the mesh ptr of the item altered manually?",
+                         "VctVoxelizer::removeItem" );
+        }
+        --itMesh->second.numItems;
+        if( !itMesh->second.numItems )
+            mMeshesV2.erase( mesh );
+
+        efficientVectorRemove( mItems, itor );
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::removeAllItems()
+    {
+        mItems.clear();
+        mMeshesV2.clear();
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::freeBuffers( bool bForceFree )
+    {
+        if( mIndexBuffer16 &&
+            ( bForceFree || mIndexBuffer16->getNumElements() != ( mNumIndices16 + 1u ) >> 1u ) )
+        {
+            mVaoManager->destroyUavBuffer( mIndexBuffer16 );
+            mIndexBuffer16 = 0;
+        }
+        if( mIndexBuffer32 && ( bForceFree || mIndexBuffer32->getNumElements() != mNumIndices32 ) )
+        {
+            mVaoManager->destroyUavBuffer( mIndexBuffer32 );
+            mIndexBuffer32 = 0;
+        }
+
+        if( mVertexBufferCompressed &&
+            ( bForceFree || mVertexBufferCompressed->getNumElements() != mNumVerticesCompressed ) )
+        {
+            mVaoManager->destroyUavBuffer( mVertexBufferCompressed );
+            mVertexBufferCompressed = 0;
+        }
+
+        if( mVertexBufferUncompressed &&
+            ( bForceFree || mVertexBufferUncompressed->getNumElements() != mNumVerticesUncompressed ) )
+        {
+            mVaoManager->destroyUavBuffer( mVertexBufferUncompressed );
+            mVertexBufferUncompressed = 0;
+        }
+
+        if( bForceFree )
+            destroyAabbCalculatorMeshData();
+
+        clearComputeJobResources( false );
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::buildMeshBuffers()
+    {
+        OgreProfile( "VctVoxelizer::buildMeshBuffers" );
+
+        mNumVerticesCompressed = 0;
+        mNumVerticesUncompressed = 0;
+        mNumIndices16 = 0;
+        mNumIndices32 = 0;
+
+        mNumUncompressedPartSubMeshes16 = 0;
+        mNumUncompressedPartSubMeshes32 = 0;
+        mNumCompressedPartSubMeshes16 = 0;
+        mNumCompressedPartSubMeshes32 = 0;
+
+        {
+            OgreProfile( "VctVoxelizer::countBuffersSize aggregated" );
+            MeshPtrMap::iterator itor = mMeshesV2.begin();
+            MeshPtrMap::iterator end = mMeshesV2.end();
+
+            while( itor != end )
+            {
+                countBuffersSize( itor->first, itor->second );
+                ++itor;
+            }
+        }
+
+        freeBuffers( false );
+
+        if( mNumIndices16 && !mIndexBuffer16 )
+        {
+            // D3D11 does not support 2-byte strides, so we create 4-byte buffers
+            // and halve the number of indices (rounding up)
+            mIndexBuffer16 = mVaoManager->createUavBuffer( ( mNumIndices16 + 1u ) >> 1u,
+                                                           sizeof( uint32 ), 0, 0, false );
+        }
+        if( mNumIndices32 && !mIndexBuffer32 )
+            mIndexBuffer32 =
+                mVaoManager->createUavBuffer( mNumIndices32, sizeof( uint32 ), 0, 0, false );
+
+        StagingBuffer *vbUncomprStagingBuffer =
+            mVaoManager->getStagingBuffer( mNumVerticesUncompressed * sizeof( float ) * 8u, true );
+
+        MappedBuffers mappedBuffers;
+        mappedBuffers.uncompressedVertexBuffer = reinterpret_cast<float *>(
+            vbUncomprStagingBuffer->map( mNumVerticesUncompressed * sizeof( float ) * 8u ) );
+        mappedBuffers.index16BufferOffset = 0u;
+        mappedBuffers.index32BufferOffset = 0u;
+
+#if OGRE_DEBUG_MODE >= OGRE_DEBUG_LOW
+        const float *uncompressedVertexBufferStart = mappedBuffers.uncompressedVertexBuffer;
+#endif
+
+        {
+            OgreProfile( "VctVoxelizer::convertMeshUncompressed aggregated" );
+            MeshPtrMap::iterator itor = mMeshesV2.begin();
+            MeshPtrMap::iterator end = mMeshesV2.end();
+
+            while( itor != end )
+            {
+                convertMeshUncompressed( itor->first, itor->second, mappedBuffers );
+                ++itor;
+            }
+        }
+
+        OGRE_ASSERT_LOW(
+            (size_t)( mappedBuffers.uncompressedVertexBuffer - uncompressedVertexBufferStart ) <=
+            mNumVerticesUncompressed * sizeof( float ) * 8u );
+
+        if( mNumVerticesUncompressed && !mVertexBufferUncompressed )
+        {
+            mVertexBufferUncompressed = mVaoManager->createUavBuffer(
+                mNumVerticesUncompressed, sizeof( float ) * 8u, 0, 0, false );
+        }
+        vbUncomprStagingBuffer->unmap( StagingBuffer::Destination(
+            mVertexBufferUncompressed, 0u, 0u, mVertexBufferUncompressed->getTotalSizeBytes() ) );
+
+        vbUncomprStagingBuffer->removeReferenceCount();
+
+        prepareAabbCalculatorMeshData();
     }
     //-------------------------------------------------------------------------
     void VctVoxelizer::createVoxelTextures()
@@ -391,9 +815,6 @@ namespace Ogre
             mAlbedoVox->getDepth() == mDepth )
         {
             mAccumValVox->scheduleTransitionTo( GpuResidency::Resident );
-            // Jahshaka fork ad452604a+0338ca7f2+c4c80b5f7 (was 0071): the merge accumulator is NOT transient. It is
-            // created once with the voxel textures and stays Resident until they
-            // are destroyed -- see the note at the end of build().
             return;
         }
 
@@ -427,36 +848,6 @@ namespace Ogre
             mAccumValVox = mTextureGpuManager->createTexture(
                 "VctVoxelizer" + StringConverter::toString( getId() ) + "/AccumVal",
                 GpuPageOutStrategy::Discard, TextureFlags::NotTexture | texFlags, TextureTypes::Type3D );
-
-            // Jahshaka (PHOTON-VOXEL-3): the per-axis coverage. A full mip chain on
-            // every tier, generated after each build like the albedo's: the
-            // isotropic tier's cone march reads the light volume's own mips and the
-            // coverage's beside them at the same lod, and the injection's shadow
-            // march reads it at the lod an area light widens to.
-            // (PHOTON-VOXEL-4) One per half-axis: the faces looking +a, then -a.
-            // Jahshaka (PHOTON-VOXEL-4): the surface position per half, a full mip chain
-            // beside the coverage's (autogenerated: O-premultiplied, the box filter is
-            // the coverage-weighted mean exactly).
-            const char *halfName[2] = { "P", "N" };
-            for( size_t h = 0u; h < 2u; ++h )
-            {
-                mCoverageVox[h] = mTextureGpuManager->createTexture(
-                    "VctVoxelizer" + StringConverter::toString( getId() ) + "/Coverage" + halfName[h],
-                    GpuPageOutStrategy::Discard,
-                    TextureFlags::Uav | TextureFlags::RenderToTexture | TextureFlags::AllowAutomipmaps,
-                    TextureTypes::Type3D );
-                mPositionVox[h] = mTextureGpuManager->createTexture(
-                    "VctVoxelizer" + StringConverter::toString( getId() ) + "/Position" + halfName[h],
-                    GpuPageOutStrategy::Discard,
-                    TextureFlags::Uav | TextureFlags::RenderToTexture | TextureFlags::AllowAutomipmaps,
-                    TextureTypes::Type3D );
-            }
-
-            // Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065) — the order-independent merge's accumulator.
-            mMergeAccumTex = mTextureGpuManager->createTexture(
-                "VctVoxelizer" + StringConverter::toString( getId() ) + "/MergeAccum",
-                GpuPageOutStrategy::Discard,
-                TextureFlags::NotTexture | TextureFlags::Uav, TextureTypes::Type3D );
         }
 
         TextureGpu *textures[4] = { mAlbedoVox, mEmissiveVox, mNormalVox, mAccumValVox };
@@ -464,85 +855,14 @@ namespace Ogre
             textures[i]->scheduleTransitionTo( GpuResidency::OnStorage );
 
         mAlbedoVox->setPixelFormat( PFG_RGBA8_UNORM );
-        // JAHSHAKA fork ad452604a+155a56bf8 (was 0087): THE EMISSIVE VOXEL IS A FLOAT.
-        //
-        // Albedo is a RATIO and lives in [0, 1] by definition, so its UNORM store
-        // above is exact. EMISSIVE is a RADIANCE -- W/(m^2 sr), no upper bound
-        // worth naming -- and this store was the one place it was clipped: the
-        // material store carries it as four honest floats (VctMaterial:
-        // shaderMaterial.emissive[i] = emissiveCol[i]) and the merge accumulates
-        // it on a fixed-point grid clamped at 16.0 per contribution (fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065)),
-        // but the final imageWrite went into a UNORM8 texel, so an emitter
-        // authored at 3.0 was stored as exactly 1.0 and the light injection seeded
-        // the radiance volume from that (LightInjection_piece_cs.any:
-        // blockColour = emissiveVal.xyz) -- a third of the energy, entering the
-        // bounces, the irradiance field, the cones and the ray hits, with nothing
-        // in any log and a picture that merely looks dimmer.
-        //
-        // RGBA16_FLOAT and not 32: half carries 65504 with 11 bits of mantissa,
-        // which is finer than the merge's own 1/4096 grid everywhere in [0, 16] --
-        // the grid's clamp, not the format, is now the documented ceiling.
-        //
-        // NOTHING ELSE MOVES. The GLSL image declaration carries no hard-coded
-        // format: HlmsComputeJob generates the layout qualifier from the bound
-        // texture (uav4_pf_type, OgreHlmsComputeJob.cpp), the typed-UAV write is a
-        // float4 either way, ComputeTools::clearUavFloat clears any non-integer
-        // format, and every reader loads through a sampled texture3D. The one
-        // backend that cannot follow is D3D11 WITHOUT typed UAV loads, whose
-        // branch packs the texel into a single uint -- see the note beside it in
-        // Voxelizer_piece_cs.any.
-        mEmissiveVox->setPixelFormat( PFG_RGBA16_FLOAT );
+        mEmissiveVox->setPixelFormat( PFG_RGBA8_UNORM );
         mNormalVox->setPixelFormat( PFG_R10G10B10A2_UNORM );
         if( hasTypedUavs )
             mAccumValVox->setPixelFormat( PFG_R16_UINT );
         else
             mAccumValVox->setPixelFormat( PFG_R32_UINT );
 
-        // Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): thirteen texels per voxel, interleaved in Z — the
-        // shader derives their coordinates from the voxel's own, so a dispatch
-        // that covers one OCTANT needs to know nothing about the volume's depth.
-        // R32_UINT rather than RGBA32_UINT because ComputeTools' clear of a
-        // 128-bit 3D uav loses the device on this driver (VoxelMerge_piece_cs),
-        // and thirteen rather than sixteen because only thirteen carry anything.
-        mMergeAccumTex->scheduleTransitionTo( GpuResidency::OnStorage );
-        mMergeAccumTex->setPixelFormat( PFG_R32_UINT );
-        // Jahshaka (PHOTON-WRITER-1): FOURTEEN scalar sums per voxel - the thirteen of
-        // fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065) and the material roughness; (PHOTON-VOXEL-3) FIFTEEN - the three
-        // per-axis coverage sums packed into one (VoxelMerge_piece_cs.any, voxelMergeUvw);
-        // (PHOTON-VOXEL-4) EIGHTEEN - the coverage split by the side a face looks to
-        // (two packed sums) and the two position-weighted sums.
-        mMergeAccumTex->setResolution( mWidth, mHeight, mDepth * 18u );
-        mMergeAccumTex->setNumMipmaps( 1u );
-        mMergeAccumTex->scheduleTransitionTo( GpuResidency::Resident );
-
-        // Jahshaka (PHOTON-VOXEL-4): THE CHAIN STOPS WHERE THE SHORTEST AXIS REACHES ONE TEXEL.
-        // A cell is a cube and every level halves every axis, so every texel stays a cube -
-        // one level is one footprint in every direction (the reader's kernels). A volume of
-        // 32 x 16 x 32 cells has five levels, not six: a sixth would be 1 x 1 x 1 over a
-        // 2 x 1 x 2 block of the fifth, a texel twice as wide as tall. A cube's chain is the
-        // same as before.
-        const uint8 numMipmaps =
-            PixelFormatGpuUtils::getMaxMipmapCount( std::min( mWidth, std::min( mHeight, mDepth ) ) );
-
-        // Jahshaka (PHOTON-VOXEL-3/-4): the coverage per half-axis, 10 bits a component
-        // (the merge resolves it on a 1/512 grid) - 2 x 4 bytes a voxel; the surface
-        // position per half, 16 bits a component ABSOLUTE in the volume's normalised
-        // coordinate (1/65535 of the box: 0.002 cells at 128^3) - 2 x 8 bytes. With the
-        // mips (+1/7): 27.4 B a voxel, 57 MB at 128^3, 7.2 MB at 64^3, 0.9 MB at 32^3 per
-        // cascade.
-        for( size_t h = 0u; h < 2u; ++h )
-        {
-            mCoverageVox[h]->scheduleTransitionTo( GpuResidency::OnStorage );
-            mCoverageVox[h]->setPixelFormat( PFG_R10G10B10A2_UNORM );
-            mCoverageVox[h]->setResolution( mWidth, mHeight, mDepth );
-            mCoverageVox[h]->setNumMipmaps( numMipmaps );
-            mCoverageVox[h]->scheduleTransitionTo( GpuResidency::Resident );
-            mPositionVox[h]->scheduleTransitionTo( GpuResidency::OnStorage );
-            mPositionVox[h]->setPixelFormat( PFG_RGBA16_UNORM );
-            mPositionVox[h]->setResolution( mWidth, mHeight, mDepth );
-            mPositionVox[h]->setNumMipmaps( numMipmaps );
-            mPositionVox[h]->scheduleTransitionTo( GpuResidency::Resident );
-        }
+        const uint8 numMipmaps = PixelFormatGpuUtils::getMaxMipmapCount( mWidth, mHeight, mDepth );
 
         for( size_t i = 0; i < sizeof( textures ) / sizeof( textures[0] ); ++i )
         {
@@ -564,33 +884,370 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    void VctVoxelizer::setRegionToVoxelize( const Aabb &regionToVoxelize )
+    void VctVoxelizer::setRegionToVoxelize( bool autoRegion, const Aabb &regionToVoxelize,
+                                            const Aabb &maxRegion )
     {
+        mAutoRegion = autoRegion;
         mRegionToVoxelize = regionToVoxelize;
+        mMaxRegion = maxRegion;
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::autoCalculateRegion()
+    {
+        if( !mAutoRegion )
+            return;
 
-        // THE OCTANTS DESCRIBE THE REGION, so a region that moves takes them with it.
-        // dividideOctants() COPIES mRegionToVoxelize into every octant's own Aabb, and
-        // the octant's box is then used twice: the host's gather culls records against
-        // it (getOctantRegion), and build() passes its minimum as `voxelOrigin` - the
-        // world point the voxelisation shader writes from. Leave them behind and the
-        // next build() voxelises the geometry of the OLD box, at the OLD origin, into a
-        // texture that VctLighting maps onto the NEW one (fillConstBufferData reads
-        // getVoxelOrigin() live): a wrong bounce, permanently, with no log line, no
-        // validation error and no cost difference. Re-deriving (rather than clearing)
-        // keeps every caller working: a clear would leave build() with an empty octant
-        // list, which is an assert in debug and a silently BLACK volume in release.
-        if( mNumOctantsX )
-            dividideOctants( mNumOctantsX, mNumOctantsY, mNumOctantsZ );
+        mRegionToVoxelize = Aabb::BOX_NULL;
+
+        ItemArray::const_iterator itor = mItems.begin();
+        ItemArray::const_iterator end = mItems.end();
+
+        while( itor != end )
+        {
+            Item *item = *itor;
+            mRegionToVoxelize.merge( item->getWorldAabb() );
+            ++itor;
+        }
+
+        Vector3 minAabb = mRegionToVoxelize.getMinimum();
+        Vector3 maxAabb = mRegionToVoxelize.getMaximum();
+
+        minAabb.makeCeil( mMaxRegion.getMinimum() );
+        maxAabb.makeFloor( mMaxRegion.getMaximum() );
+
+        if( minAabb.x > maxAabb.x || minAabb.y > maxAabb.y || minAabb.z > maxAabb.z )
+        {
+            LogManager::getSingleton().logMessage(
+                "WARNING: VctVoxelizer::autoCalculateRegion could not calculate a valid bound! GI won't "
+                "be available or won't look as expected",
+                LML_CRITICAL );
+            mRegionToVoxelize.setExtents( Ogre::Vector3::ZERO, Ogre::Vector3::ZERO );
+        }
+        else
+        {
+            mRegionToVoxelize.setExtents( minAabb, maxAabb );
+        }
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::placeItemsInBuckets()
+    {
+        OgreProfile( "VctVoxelizer::placeItemsInBuckets" );
+
+        mBuckets.clear();
+
+        ItemArray::const_iterator itor = mItems.begin();
+        ItemArray::const_iterator end = mItems.end();
+
+        while( itor != end )
+        {
+            Item *item = *itor;
+            MeshPtrMap::const_iterator itMesh = mMeshesV2.find( item->getMesh() );
+
+            const size_t numSubItems = item->getNumSubItems();
+            for( size_t i = 0; i < numSubItems; ++i )
+            {
+                VoxelizerBucket bucket;
+                uint32 variant = 0;
+                if( itMesh->second.bCompressed )
+                    variant |= VoxelizerJobSetting::CompressedVertexFormat;
+
+                SubItem *subItem = item->getSubItem( i );
+
+                VertexArrayObject *vao = subItem->getSubMesh()->mVao[VpNormal].front();
+                if( vao->getIndexBuffer() )
+                {
+                    if( vao->getIndexBuffer()->getIndexType() == IndexBufferPacked::IT_32BIT )
+                        variant |= VoxelizerJobSetting::Index32bit;
+                }
+                else
+                {
+                    TODO_deal_no_index_buffer;
+                }
+
+                HlmsDatablock *datablock = subItem->getDatablock();
+                VctMaterial::DatablockConversionResult convResult =
+                    mVctMaterial->addDatablock( datablock );
+
+                if( convResult.hasDiffuseTex() )
+                    variant |= VoxelizerJobSetting::HasDiffuseTex;
+                if( convResult.hasEmissiveTex() )
+                    variant |= VoxelizerJobSetting::HasEmissiveTex;
+
+                bucket.job = mComputeJobs[variant];
+                bucket.materialBuffer = convResult.constBuffer;
+                bucket.needsTexPool = convResult.hasDiffuseTex() || convResult.hasEmissiveTex();
+                bucket.vertexBuffer =
+                    itMesh->second.bCompressed ? mVertexBufferCompressed : mVertexBufferUncompressed;
+                bucket.indexBuffer =
+                    ( variant & VoxelizerJobSetting::Index32bit ) ? mIndexBuffer32 : mIndexBuffer16;
+
+                QueuedInstance queuedInstance;
+                queuedInstance.movableObject = item;
+                queuedInstance.materialIdx = convResult.slotIdx;
+
+                const size_t numPartitions = itMesh->second.submeshes[i].partSubMeshes.size();
+                for( size_t j = 0u; j < numPartitions; ++j )
+                {
+                    const PartitionedSubMesh &partSubMesh = itMesh->second.submeshes[i].partSubMeshes[j];
+                    queuedInstance.vertexBufferStart = partSubMesh.vbOffset;
+                    queuedInstance.indexBufferStart = partSubMesh.ibOffset;
+                    queuedInstance.numIndices = partSubMesh.numIndices;
+                    queuedInstance.aabbSubMeshIdx = partSubMesh.aabbSubMeshIdx;
+                    queuedInstance.needsAabbUpdate = numPartitions != 1u || numSubItems != 1u;
+                    mBuckets[bucket].queuedInst.push_back( queuedInstance );
+                }
+            }
+
+            ++itor;
+        }
+    }
+    //-------------------------------------------------------------------------
+    size_t VctVoxelizer::countSubMeshPartitionsIn( Item *item ) const
+    {
+        size_t numSubMeshPartitions = 0;
+        MeshPtrMap::const_iterator itMesh = mMeshesV2.find( item->getMesh() );
+        OGRE_ASSERT_MEDIUM( itMesh != mMeshesV2.end() );
+
+        QueuedSubMeshArray::const_iterator itor = itMesh->second.submeshes.begin();
+        QueuedSubMeshArray::const_iterator end = itMesh->second.submeshes.end();
+
+        while( itor != end )
+        {
+            numSubMeshPartitions += itor->partSubMeshes.size();
+            ++itor;
+        }
+
+        return numSubMeshPartitions;
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::createInstanceBuffers()
+    {
+        size_t instanceCount = 0;
+        ItemArray::const_iterator itor = mItems.begin();
+        ItemArray::const_iterator end = mItems.end();
+
+        while( itor != end )
+        {
+            instanceCount += countSubMeshPartitionsIn( *itor );
+            ++itor;
+        }
+
+        const size_t structStride = sizeof( float ) * 4u * 6u;
+        const size_t elementCount = alignToNextMultiple<size_t>(
+            instanceCount * mOctants.size(), mAabbWorldSpaceJob->getThreadsPerGroupX() );
+
+        if( !mInstanceBuffer || ( elementCount * structStride ) > mInstanceBuffer->getTotalSizeBytes() )
+        {
+            destroyInstanceBuffers();
+            mInstanceBuffer = mVaoManager->createUavBuffer( elementCount, structStride,
+                                                            BB_FLAG_UAV | BB_FLAG_READONLY, 0, false );
+            mCpuInstanceBuffer = reinterpret_cast<float *>(
+                OGRE_MALLOC_SIMD( elementCount * structStride, MEMCATEGORY_GENERAL ) );
+            mInstanceBufferAsTex = mInstanceBuffer->getAsReadOnlyBufferView();
+        }
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::destroyInstanceBuffers()
+    {
+        if( mInstanceBuffer )
+        {
+            mVaoManager->destroyUavBuffer( mInstanceBuffer );
+            mInstanceBuffer = 0;
+            mInstanceBufferAsTex = 0;
+
+            OGRE_FREE_SIMD( mCpuInstanceBuffer, MEMCATEGORY_GENERAL );
+            mCpuInstanceBuffer = 0;
+        }
+
+        clearComputeJobResources( false );
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::fillInstanceBuffers()
+    {
+        OgreProfile( "VctVoxelizer::fillInstanceBuffers" );
+
+        createInstanceBuffers();
+
+        //        float * RESTRICT_ALIAS instanceBuffer =
+        //                reinterpret_cast<float*>( mInstanceBuffer->map( 0,
+        //                mInstanceBuffer->getNumElements() ) );
+        float *RESTRICT_ALIAS instanceBuffer = reinterpret_cast<float *>( mCpuInstanceBuffer );
+        const float *instanceBufferStart = instanceBuffer;
+        const FastArray<Octant>::const_iterator begin = mOctants.begin();
+        FastArray<Octant>::const_iterator itor = begin;
+        FastArray<Octant>::const_iterator end = mOctants.end();
+
+        while( itor != end )
+        {
+            const Aabb octantAabb = itor->region;
+            VoxelizerBucketMap::iterator itBucket = mBuckets.begin();
+            VoxelizerBucketMap::iterator enBucket = mBuckets.end();
+
+            while( itBucket != enBucket )
+            {
+                uint32 numInstancesAfterCulling = 0u;
+                FastArray<QueuedInstance>::const_iterator itQueuedInst =
+                    itBucket->second.queuedInst.begin();
+                FastArray<QueuedInstance>::const_iterator enQueuedInst =
+                    itBucket->second.queuedInst.end();
+
+                while( itQueuedInst != enQueuedInst )
+                {
+                    const QueuedInstance &instance = *itQueuedInst;
+                    Aabb worldAabb = instance.movableObject->getWorldAabb();
+
+                    // Perform culling against this octant.
+                    if( octantAabb.intersects( worldAabb ) )
+                    {
+                        const Matrix4 &fullTransform =
+                            instance.movableObject->_getParentNodeFullTransform();
+                        for( size_t i = 0; i < 12u; ++i )
+                            *instanceBuffer++ = static_cast<float>( fullTransform[0][i] );
+
+                        *instanceBuffer++ = worldAabb.mCenter.x;
+                        *instanceBuffer++ = worldAabb.mCenter.y;
+                        *instanceBuffer++ = worldAabb.mCenter.z;
+                        *instanceBuffer++ = 0.0f;
+
+#define AS_U32PTR( x ) reinterpret_cast<uint32 * RESTRICT_ALIAS>( x )
+
+                        *instanceBuffer++ = worldAabb.mHalfSize.x;
+                        *instanceBuffer++ = worldAabb.mHalfSize.y;
+                        *instanceBuffer++ = worldAabb.mHalfSize.z;
+                        *AS_U32PTR( instanceBuffer ) = instance.materialIdx;
+                        ++instanceBuffer;
+
+                        uint32 aabbSubMeshIdx = instance.aabbSubMeshIdx;
+                        if( instance.needsAabbUpdate )
+                            aabbSubMeshIdx |= 0x80000000;
+
+                        *AS_U32PTR( instanceBuffer ) = instance.vertexBufferStart;
+                        ++instanceBuffer;
+                        *AS_U32PTR( instanceBuffer ) = instance.indexBufferStart;
+                        ++instanceBuffer;
+                        *AS_U32PTR( instanceBuffer ) = instance.numIndices;
+                        ++instanceBuffer;
+                        *AS_U32PTR( instanceBuffer ) = aabbSubMeshIdx;
+                        ++instanceBuffer;
+
+#undef AS_U32PTR
+
+                        ++numInstancesAfterCulling;
+                    }
+
+                    ++itQueuedInst;
+                }
+
+                if( numInstancesAfterCulling > 0u )
+                {
+                    const uint32 octantIdx = static_cast<uint32>( itor - begin );
+                    itBucket->second.numInstancesAfterCulling[octantIdx] = numInstancesAfterCulling;
+                }
+
+                ++itBucket;
+            }
+
+            ++itor;
+        }
+
+        OGRE_ASSERT_LOW( (size_t)( instanceBuffer - instanceBufferStart ) * sizeof( float ) <=
+                         mInstanceBuffer->getTotalSizeBytes() );
+
+        mTotalNumInstances =
+            static_cast<uint32>( ( instanceBuffer - instanceBufferStart ) / ( 4u * ( 3u + 3u ) ) );
+
+        // Fill the remaining bytes with 0 so that mAabbWorldSpaceJob ignores those
+        memset( instanceBuffer, 0,
+                mInstanceBuffer->getTotalSizeBytes() -
+                    ( static_cast<size_t>( instanceBuffer - instanceBufferStart ) * sizeof( float ) ) );
+        //        mInstanceBuffer->unmap( UO_UNMAP_ALL );
+        mInstanceBuffer->upload( mCpuInstanceBuffer, 0u, mInstanceBuffer->getNumElements() );
+    }
+    //-------------------------------------------------------------------------
+    void VctVoxelizer::computeMeshAabbs()
+    {
+        OgreProfile( "VctVoxelizer::computeMeshAabbs" );
+        HlmsCompute *hlmsCompute = mHlmsManager->getComputeHlms();
+
+        const uint32 numVariants = 1u << c_numAabCalcProperties;
+
+        OGRE_STATIC_ASSERT( sizeof( mAabbCalculator ) / sizeof( mAabbCalculator[0] ) == numVariants );
+
+        const uint32 numMeshes[numVariants] = { mNumUncompressedPartSubMeshes16,
+                                                mNumUncompressedPartSubMeshes32,
+                                                mNumCompressedPartSubMeshes16,
+                                                mNumCompressedPartSubMeshes32 };
+
+        ShaderParams::Param paramMeshRange;
+        paramMeshRange.name = "meshStart_meshEnd";
+
+        uint32 meshStart = 0u;
+
+        OgreProfileGpuBegin( "VCT Mesh AABB calculation" );
+
+        for( size_t i = 0; i < numVariants; ++i )
+        {
+            if( numMeshes[i] == 0u )
+                continue;
+
+            const bool compressedVf = ( i & VoxelizerJobSetting::CompressedVertexFormat ) != 0;
+            const bool hasIndices32 = ( i & VoxelizerJobSetting::Index32bit ) != 0;
+
+            DescriptorSetUav::BufferSlot bufferSlot( DescriptorSetUav::BufferSlot::makeEmpty() );
+            bufferSlot.buffer = compressedVf ? mVertexBufferCompressed : mVertexBufferUncompressed;
+            bufferSlot.access = ResourceAccess::Read;
+            mAabbCalculator[i]->_setUavBuffer( 0, bufferSlot );
+            bufferSlot.buffer = hasIndices32 ? mIndexBuffer32 : mIndexBuffer16;
+            bufferSlot.access = ResourceAccess::Read;
+            mAabbCalculator[i]->_setUavBuffer( 1, bufferSlot );
+            bufferSlot.buffer = mMeshAabb;
+            bufferSlot.access = ResourceAccess::Write;
+            mAabbCalculator[i]->_setUavBuffer( 2, bufferSlot );
+
+            DescriptorSetTexture2::BufferSlot texBufSlot(
+                DescriptorSetTexture2::BufferSlot::makeEmpty() );
+            texBufSlot.buffer = mGpuPartitionedSubMeshes;
+            mAabbCalculator[i]->setTexBuffer( 0, texBufSlot );
+
+            uint32 meshRange[2] = { meshStart, meshStart + numMeshes[i] };
+
+            paramMeshRange.setManualValue( meshRange, 2u );
+
+            ShaderParams &shaderParams = mAabbCalculator[i]->getShaderParams( "default" );
+            shaderParams.mParams.clear();
+            shaderParams.mParams.push_back( paramMeshRange );
+            shaderParams.setDirty();
+
+            mAabbCalculator[i]->analyzeBarriers( mResourceTransitions );
+            mRenderSystem->executeResourceTransition( mResourceTransitions );
+            hlmsCompute->dispatch( mAabbCalculator[i], 0, 0 );
+            meshStart += numMeshes[i];
+        }
+
+        OgreProfileGpuEnd( "VCT Mesh AABB calculation" );
+
+        DescriptorSetUav::BufferSlot bufferSlot( DescriptorSetUav::BufferSlot::makeEmpty() );
+        bufferSlot.buffer = mInstanceBuffer;
+        bufferSlot.access = ResourceAccess::ReadWrite;
+        mAabbWorldSpaceJob->_setUavBuffer( 0, bufferSlot );
+
+        DescriptorSetTexture2::BufferSlot texBufSlot( DescriptorSetTexture2::BufferSlot::makeEmpty() );
+        texBufSlot.buffer = mMeshAabb->getAsReadOnlyBufferView();
+        mAabbWorldSpaceJob->setTexBuffer( 0, texBufSlot );
+
+        const uint32 threadsPerGroupX = mAabbWorldSpaceJob->getThreadsPerGroupX();
+        mAabbWorldSpaceJob->setNumThreadGroups(
+            ( mTotalNumInstances + threadsPerGroupX - 1u ) / threadsPerGroupX, 1u, 1u );
+
+        OgreProfileGpuBegin( "VCT AABB local to world space conversion" );
+        mAabbWorldSpaceJob->analyzeBarriers( mResourceTransitions );
+        mRenderSystem->executeResourceTransition( mResourceTransitions );
+        hlmsCompute->dispatch( mAabbWorldSpaceJob, 0, 0 );
+        OgreProfileGpuEnd( "VCT AABB local to world space conversion" );
     }
     //-------------------------------------------------------------------------
     void VctVoxelizer::dividideOctants( uint32 numOctantsX, uint32 numOctantsY, uint32 numOctantsZ )
     {
-        // Remembered so that setRegionToVoxelize can re-derive them when the region
-        // moves (see the note there).
-        mNumOctantsX = numOctantsX;
-        mNumOctantsY = numOctantsY;
-        mNumOctantsZ = numOctantsZ;
-
         mOctants.clear();
         mOctants.reserve( numOctantsX * numOctantsY * numOctantsZ );
 
@@ -644,25 +1301,12 @@ namespace Ogre
         mComputeTools->prepareForUavClear( mResourceTransitions, mEmissiveVox );
         mComputeTools->prepareForUavClear( mResourceTransitions, mNormalVox );
         mComputeTools->prepareForUavClear( mResourceTransitions, mAccumValVox );
-        // Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): the sums start at zero, every build.
-        mComputeTools->prepareForUavClear( mResourceTransitions, mMergeAccumTex );
-        for( size_t h = 0u; h < 2u; ++h )
-        {
-            mComputeTools->prepareForUavClear( mResourceTransitions, mCoverageVox[h] );
-            mComputeTools->prepareForUavClear( mResourceTransitions, mPositionVox[h] );
-        }
         mRenderSystem->executeResourceTransition( mResourceTransitions );
 
         mComputeTools->clearUavFloat( mAlbedoVox, fClearValue );
         mComputeTools->clearUavFloat( mEmissiveVox, fClearValue );
         mComputeTools->clearUavFloat( mNormalVox, fClearNormals );
         mComputeTools->clearUavUint( mAccumValVox, uClearValue );
-        mComputeTools->clearUavUint( mMergeAccumTex, uClearValue );
-        for( size_t h = 0u; h < 2u; ++h )
-        {
-            mComputeTools->clearUavFloat( mCoverageVox[h], fClearValue );
-            mComputeTools->clearUavFloat( mPositionVox[h], fClearValue );
-        }
         OgreProfileGpuEnd( "VCT Voxelization Clear" );
     }
     //-------------------------------------------------------------------------
@@ -674,77 +1318,8 @@ namespace Ogre
         mDepth = depth;
     }
     //-------------------------------------------------------------------------
-    void VctVoxelizer::setInstanceSource( UavBufferPacked *records, UavBufferPacked *ranges )
-    {
-        mRecords = records;
-        mRanges = ranges;
-        // The read-only VIEW is the records buffer's own (cached on it, destroyed with
-        // it), so it is re-taken on every bind rather than kept across a host's grow.
-        mRecordsAsTex = records ? records->getAsReadOnlyBufferView() : 0;
-    }
-    //-------------------------------------------------------------------------
-    void VctVoxelizer::computePartitionAabbs( HlmsManager *hlmsManager, RenderSystem *renderSystem,
-                                              UavBufferPacked *geometryRows,
-                                              TexBufferPacked *partitions,
-                                              UavBufferPacked *outAabbs, uint32 numPartitions )
-    {
-        if( !numPartitions || !geometryRows || !partitions || !outAabbs || !hlmsManager ||
-            !renderSystem )
-        {
-            return;
-        }
-        OgreProfile( "VctVoxelizer::computePartitionAabbs" );
-
-        HlmsCompute *hlmsCompute = hlmsManager->getComputeHlms();
-        HlmsComputeJob *job = hlmsCompute->findComputeJob( "VCT/AabbCalculator" );
-
-        // ONE WORKGROUP WALKS EVERY PARTITION (the job's own shape: its body loops
-        // meshStart..meshEnd and reduces each partition across the whole group), sized
-        // to the device's widest group axis exactly as upstream sized it.
-        const RenderSystemCapabilities *caps = renderSystem->getCapabilities();
-        job->setThreadsPerGroup( caps->getMaxThreadsPerThreadgroupAxis()[0], 1u, 1u );
-
-        renderSystem->endRenderPassDescriptor();
-
-        DescriptorSetUav::BufferSlot bufferSlot( DescriptorSetUav::BufferSlot::makeEmpty() );
-        bufferSlot.buffer = geometryRows;
-        bufferSlot.access = ResourceAccess::Read;
-        job->_setUavBuffer( 0, bufferSlot );
-        bufferSlot.buffer = outAabbs;
-        bufferSlot.access = ResourceAccess::Write;
-        job->_setUavBuffer( 1, bufferSlot );
-
-        DescriptorSetTexture2::BufferSlot texBufSlot( DescriptorSetTexture2::BufferSlot::makeEmpty() );
-        texBufSlot.buffer = partitions;
-        job->setTexBuffer( 0, texBufSlot );
-
-        const uint32 meshRange[2] = { 0u, numPartitions };
-        ShaderParams::Param paramMeshRange;
-        paramMeshRange.name = "meshStart_meshEnd";
-        paramMeshRange.setManualValue( meshRange, 2u );
-        ShaderParams &shaderParams = job->getShaderParams( "default" );
-        shaderParams.mParams.clear();
-        shaderParams.mParams.push_back( paramMeshRange );
-        shaderParams.setDirty();
-
-        OgreProfileGpuBegin( "VCT partition AABBs" );
-        ResourceTransitionArray transitions;
-        job->analyzeBarriers( transitions );
-        renderSystem->executeResourceTransition( transitions );
-        hlmsCompute->dispatch( job, 0, 0 );
-        OgreProfileGpuEnd( "VCT partition AABBs" );
-
-        // The buffers are the caller's and the job is shared: leave nothing bound.
-        job->clearUavBuffers();
-        job->clearTexBuffers();
-    }
-    //-------------------------------------------------------------------------
     void VctVoxelizer::build( SceneManager *sceneManager )
     {
-        // The scene manager is no longer needed here: build() converts no material (the
-        // owner does, in its own bracket, before it gathers), so it touches no temp
-        // resource and walks no item. Kept in the signature because it is upstream's.
-        (void)sceneManager;
         OgreProfile( "VctVoxelizer::build" );
         OgreProfileGpuBegin( "VCT build" );
 
@@ -752,50 +1327,37 @@ namespace Ogre
 
         mRenderSystem->endRenderPassDescriptor();
 
-        createVoxelTextures();
-
-        // NOTHING TO VOXELISE: no geometry rows, no instance source, or a store that
-        // has converted no material. The volumes are cleared and that is the honest
-        // empty picture. (A source with zero records is NOT this case - its dispatches
-        // run, each looping over none; the host cannot know the counts without a
-        // readback, and the thread count is the octant's, so there is nothing to size.)
-        const uint32 numBuckets =
-            mVctMaterial ? static_cast<uint32>( mVctMaterial->getNumBuckets() ) : 0u;
-        if( !mGeometryBuffer || !mRecords || !mRecordsAsTex || !mRanges || !numBuckets )
+        if( mItems.empty() )
         {
-            mLastDispatchCount = 0u;
+            createVoxelTextures();
             clearVoxels();
-            // The coverage's mips are read beside the light volume's (the isotropic
-            // tier): an empty store is empty at every mip.
-            for( size_t h = 0u; h < 2u; ++h )
-            {
-                mCoverageVox[h]->_autogenerateMipmaps();
-                mPositionVox[h]->_autogenerateMipmaps();
-            }
-            OgreProfileGpuEnd( "VCT build" );
             return;
         }
+
+        buildMeshBuffers();
+
+        createVoxelTextures();
+
+        mVctMaterial->initTempResources( sceneManager );
+        placeItemsInBuckets();
+        mVctMaterial->destroyTempResources();
+
+        fillInstanceBuffers();
+
+        computeMeshAabbs();
 
         const bool hasTypedUavs = mRenderSystem->getCapabilities()->hasCapability( RSC_TYPED_UAV_LOADS );
 
         for( size_t i = 0; i < sizeof( mComputeJobs ) / sizeof( mComputeJobs[0] ); ++i )
         {
-            // THE GEOMETRY TABLE, the same for every variant (the format is a field of
-            // a row, not a permutation).
+            const bool compressedVf = ( i & VoxelizerJobSetting::CompressedVertexFormat ) != 0;
+            const bool hasIndices32 = ( i & VoxelizerJobSetting::Index32bit ) != 0;
+
             DescriptorSetUav::BufferSlot bufferSlot( DescriptorSetUav::BufferSlot::makeEmpty() );
-            bufferSlot.buffer = mGeometryBuffer;
+            bufferSlot.buffer = compressedVf ? mVertexBufferCompressed : mVertexBufferUncompressed;
             bufferSlot.access = ResourceAccess::Read;
             mComputeJobs[i]->_setUavBuffer( 0, bufferSlot );
-
-            // THE RANGES (U1): each dispatch's (start, count) into the records, written
-            // by the host's gather on the device. Beside the geometry table and NOT
-            // after the images: Ogre's compute root layout packs a job's UAV buffers
-            // and UAV textures as two contiguous ranges (HlmsComputeJob::
-            // setupRootLayout), so a buffer after the images would leave the images'
-            // bindings undeclared. The shader's instance LOOP BOUND comes
-            // from here - which is all the count needs to be, because the dispatch's
-            // thread count is the octant's and never the instance count's.
-            bufferSlot.buffer = mRanges;
+            bufferSlot.buffer = hasIndices32 ? mIndexBuffer32 : mIndexBuffer16;
             bufferSlot.access = ResourceAccess::Read;
             mComputeJobs[i]->_setUavBuffer( 1, bufferSlot );
 
@@ -826,164 +1388,113 @@ namespace Ogre
             uavSlot.access = ResourceAccess::ReadWrite;
             mComputeJobs[i]->_setUavTexture( 4, uavSlot );
 
-            // Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): THIS SLOT WAS THE TRIANGLE COUNTER and is now the
-            // per-voxel INTEGER ACCUMULATOR the merge sums into (the count rides in
-            // it). Same slot, same uimage3D, so this job's binding shape — and the
-            // Vulkan root layout Ogre derives from it — is exactly the pin's. That
-            // is not cosmetic: a separate VCT/VoxelResolve compute job was tried
-            // first and corrupted the descriptor set of the job dispatched after it
-            // (VUID-VkWriteDescriptorSet-descriptorType-00319 on LightInjection's
-            // `lightVoxel`, then VK_ERROR_DEVICE_LOST on the Showroom samples).
             uavSlot.texture = mAccumValVox;
             uavSlot.pixelFormat = mAccumValVox->getPixelFormat();
             uavSlot.access = ResourceAccess::ReadWrite;
             mComputeJobs[i]->_setUavTexture( 5, uavSlot );
 
-            // Jahshaka fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065): the per-voxel INTEGER ACCUMULATOR the merge
-            // sums into (R32_UINT, thirteen texels per voxel — see
-            // VoxelMerge_piece_cs.any for why it is not RGBA32_UINT).
-            uavSlot.texture = mMergeAccumTex;
-            uavSlot.pixelFormat = mMergeAccumTex->getPixelFormat();
-            uavSlot.access = ResourceAccess::ReadWrite;
-            mComputeJobs[i]->_setUavTexture( 6, uavSlot );
-
-            // Jahshaka (PHOTON-VOXEL-3/-4): the coverage per half-axis (7, 8) and the
-            // surface position per half (9, 10) the resolve writes.
-            for( size_t h = 0u; h < 2u; ++h )
-            {
-                uavSlot.texture = mCoverageVox[h];
-                uavSlot.pixelFormat = mCoverageVox[h]->getPixelFormat();
-                uavSlot.access = ResourceAccess::Write;
-                mComputeJobs[i]->_setUavTexture( uint8( 7u + h ), uavSlot );
-                uavSlot.texture = mPositionVox[h];
-                uavSlot.pixelFormat = mPositionVox[h]->getPixelFormat();
-                uavSlot.access = ResourceAccess::Write;
-                mComputeJobs[i]->_setUavTexture( uint8( 9u + h ), uavSlot );
-            }
-
             DescriptorSetTexture2::BufferSlot texBufSlot(
                 DescriptorSetTexture2::BufferSlot::makeEmpty() );
-            texBufSlot.buffer = mRecordsAsTex;
+            texBufSlot.buffer = mInstanceBufferAsTex;
             mComputeJobs[i]->setTexBuffer( 0, texBufSlot );
         }
 
         HlmsCompute *hlmsCompute = mHlmsManager->getComputeHlms();
         clearVoxels();
-        mLastDispatchCount = 0u;
 
         const uint32 *threadsPerGroup = mComputeJobs[0]->getThreadsPerGroup();
 
-        ShaderParams::Param paramRange;
+        ShaderParams::Param paramInstanceRange;
         ShaderParams::Param paramVoxelOrigin;
         ShaderParams::Param paramVoxelCellSize;
         ShaderParams::Param paramVoxelPixelOrigin;
 
-        paramRange.name = "rangeIdx_pad";
+        paramInstanceRange.name = "instanceStart_instanceEnd";
         paramVoxelOrigin.name = "voxelOrigin";
         paramVoxelCellSize.name = "voxelCellSize";
         paramVoxelPixelOrigin.name = "voxelPixelOrigin";
 
         paramVoxelCellSize.setManualValue( getVoxelCellSize() );
 
+        uint32 instanceStart = 0;
+
         OgreProfileGpuBegin( "VCT Voxelization Jobs" );
 
-        // ONE DISPATCH PER (octant, bucket), where a bucket is one of the STORE's
-        // material pools. The order is the store's bucket order, which is a stable
-        // order; fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065)'s order-independent merge means it decides nothing about
-        // the voxels anyway.
-        const uint32 numOctants = static_cast<uint32>( mOctants.size() );
-        for( uint32 octantIdx = 0u; octantIdx < numOctants; ++octantIdx )
+        const FastArray<Octant>::const_iterator begin = mOctants.begin();
+        FastArray<Octant>::const_iterator itor = begin;
+        FastArray<Octant>::const_iterator end = mOctants.end();
+
+        while( itor != end )
         {
-            const Octant &octant = mOctants[octantIdx];
-            for( uint32 bucketIdx = 0u; bucketIdx < numBuckets; ++bucketIdx )
+            const Octant &octant = *itor;
+            VoxelizerBucketMap::const_iterator itBucket = mBuckets.begin();
+            VoxelizerBucketMap::const_iterator enBucket = mBuckets.end();
+
+            while( itBucket != enBucket )
             {
-                const bool hasDiffuse = mVctMaterial->getBucketHasDiffuse( bucketIdx );
-                const bool hasEmissive = mVctMaterial->getBucketHasEmissive( bucketIdx );
-                uint32 variant = 0u;
-                if( hasDiffuse )
-                    variant |= VoxelizerJobSetting::HasDiffuseTex;
-                if( hasEmissive )
-                    variant |= VoxelizerJobSetting::HasEmissiveTex;
-                HlmsComputeJob *job = mComputeJobs[variant];
+                const uint32 octantIdx = static_cast<uint32>( itor - begin );
+                const BucketData::InstancesPerOctantIdxMap::const_iterator itNumInstances =
+                    itBucket->second.numInstancesAfterCulling.find( octantIdx );
 
-                job->setNumThreadGroups( std::max( 1u, octant.width / threadsPerGroup[0] ),
-                                         std::max( 1u, octant.height / threadsPerGroup[1] ),
-                                         std::max( 1u, octant.depth / threadsPerGroup[2] ) );
-
-                job->setConstBuffer( 0, mVctMaterial->getBucketBuffer( bucketIdx ) );
-
-                if( variant )
+                if( itNumInstances != itBucket->second.numInstancesAfterCulling.end() )
                 {
+                    const VoxelizerBucket &bucket = itBucket->first;
+                    bucket.job->setNumThreadGroups( std::max( 1u, octant.width / threadsPerGroup[0] ),
+                                                    std::max( 1u, octant.height / threadsPerGroup[1] ),
+                                                    std::max( 1u, octant.depth / threadsPerGroup[2] ) );
+
+                    bucket.job->setConstBuffer( 0, bucket.materialBuffer );
+
+                    uint8 texUnit = 1u;
+
                     DescriptorSetTexture2::TextureSlot texSlot(
                         DescriptorSetTexture2::TextureSlot::makeEmpty() );
-                    texSlot.texture = mVctMaterial->getTexturePool();
-                    HlmsSamplerblock samplerblock;
-                    samplerblock.setAddressingMode( TAM_WRAP );
-                    job->setTexture( 1u, texSlot, &samplerblock );
+                    if( bucket.needsTexPool )
+                    {
+                        texSlot.texture = mVctMaterial->getTexturePool();
+                        HlmsSamplerblock samplerblock;
+                        samplerblock.setAddressingMode( TAM_WRAP );
+                        bucket.job->setTexture( texUnit, texSlot, &samplerblock );
+                        ++texUnit;
+                    }
+
+                    const uint32 numInstancesInBucket = itNumInstances->second;
+                    const uint32 instanceRange[2] = { instanceStart,
+                                                      instanceStart + numInstancesInBucket };
+                    const uint32 voxelPixelOrigin[3] = { octant.x, octant.y, octant.z };
+
+                    paramInstanceRange.setManualValue( instanceRange, 2u );
+                    paramVoxelOrigin.setManualValue( octant.region.getMinimum() );
+                    paramVoxelPixelOrigin.setManualValue( voxelPixelOrigin, 3u );
+
+                    ShaderParams &shaderParams = bucket.job->getShaderParams( "default" );
+                    shaderParams.mParams.clear();
+                    shaderParams.mParams.push_back( paramInstanceRange );
+                    shaderParams.mParams.push_back( paramVoxelOrigin );
+                    shaderParams.mParams.push_back( paramVoxelCellSize );
+                    shaderParams.mParams.push_back( paramVoxelPixelOrigin );
+                    shaderParams.setDirty();
+
+                    bucket.job->analyzeBarriers( mResourceTransitions );
+                    mRenderSystem->executeResourceTransition( mResourceTransitions );
+                    hlmsCompute->dispatch( bucket.job, 0, 0 );
+
+                    instanceStart += numInstancesInBucket;
                 }
 
-                const uint32 range[2] = { rangeIndex( octantIdx, bucketIdx, numBuckets ), 0u };
-                const uint32 voxelPixelOrigin[3] = { octant.x, octant.y, octant.z };
-
-                paramRange.setManualValue( range, 2u );
-                paramVoxelOrigin.setManualValue( octant.region.getMinimum() );
-                paramVoxelPixelOrigin.setManualValue( voxelPixelOrigin, 3u );
-
-                ShaderParams &shaderParams = job->getShaderParams( "default" );
-                shaderParams.mParams.clear();
-                shaderParams.mParams.push_back( paramRange );
-                shaderParams.mParams.push_back( paramVoxelOrigin );
-                shaderParams.mParams.push_back( paramVoxelCellSize );
-                shaderParams.mParams.push_back( paramVoxelPixelOrigin );
-                shaderParams.setDirty();
-
-                job->analyzeBarriers( mResourceTransitions );
-                mRenderSystem->executeResourceTransition( mResourceTransitions );
-                hlmsCompute->dispatch( job, 0, 0 );
-                ++mLastDispatchCount;
+                ++itBucket;
             }
+
+            ++itor;
         }
 
         OgreProfileGpuEnd( "VCT Voxelization Jobs" );
 
-        // The dispatches are recorded; the host's buffers may be grown before the next
-        // build, so nothing of theirs stays bound in the shared jobs.
-        clearComputeJobResources();
-
-        // These textures are no longer needed, they're not used for the injection
-        // phase. Save memory.
+        // This texture is no longer needed, it's not used for the injection phase. Save memory.
         mAccumValVox->scheduleTransitionTo( GpuResidency::OnStorage );
-
-        // THE MERGE ACCUMULATOR STAYS RESIDENT (Jahshaka fork ad452604a+0338ca7f2+c4c80b5f7 (was 0071)). fork ad452604a+155a56bf8+0338ca7f2+c4c80b5f7 (was 0065)
-        // gave it upstream's transient treatment: OnStorage at the end of every
-        // build(), Resident at the start of the next one. On NVIDIA 595.84 that
-        // per-build create/destroy of a large 3D storage image, while the
-        // dispatches that wrote the previous one may still be executing, HANGS
-        // THE CHANNEL: NVRM Xid 109 CTX SWITCH TIMEOUT -> VK_ERROR_DEVICE_LOST.
-        // Measured (lane XID-2, the owner's own sequence scripted -- hide and
-        // show a plane in an Epic scene, 100 cycles a run): 4/4 and 6/6 runs
-        // lost the device with the round trip, 0/6 and 0/6 without it, every
-        // failure carrying a kernel Xid line from that pid and no passing run
-        // ever carrying one. It is NOT the delayed-block reuse window (fork b028638c1
-        // (was 0067)'s subject: a 16-frame window still hangs 4/6), NOT the 512 MB
-        // force-flush (disabled: 6/6), NOT the cached image views (purged on
-        // residency loss: 6/6) and NOT the ray-query tier (rays off: 6/6).
-        // Keeping the image alive is the only arm that cures it, and it is also
-        // the right design: under a cascade chain a build happens every frame or
-        // two, so the residency round trip never actually saves anything -- it
-        // only returns memory the next build immediately asks for again.
-        // THE COST is one accumulator per voxeliser held for its lifetime:
-        // width * height * depth * 13 * 4 bytes (13.6 MB at 64^3, 109 MB at
-        // 128^3). A future lane may share ONE scratch volume across a chain's
-        // cascades; that is an optimisation, not a correctness matter.
 
         if( mNeedsAlbedoMipmaps || mNeedsAllMipmaps )
             mAlbedoVox->_autogenerateMipmaps();
-        for( size_t h = 0u; h < 2u; ++h )
-        {
-            mCoverageVox[h]->_autogenerateMipmaps();
-            mPositionVox[h]->_autogenerateMipmaps();
-        }
         if( mNeedsAllMipmaps )
         {
             mEmissiveVox->_autogenerateMipmaps();

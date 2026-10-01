@@ -11,7 +11,6 @@ uniform float2 sectionsBandArc;
 
 uniform uint3 numProbes;
 uniform float3 aspectRatioFixer;
-uniform uint3 windowOffset;
 
 #define p_worldViewProjMatrix worldViewProjMatrix
 #define p_vertexBase vertexBase
@@ -24,7 +23,6 @@ uniform uint3 windowOffset;
 
 #define p_numProbes			numProbes
 #define p_aspectRatioFixer	aspectRatioFixer
-#define p_windowOffset		windowOffset
 
 #define PARAMS_ARG_DECL
 #define PARAMS_ARG

@@ -7,7 +7,7 @@
             "thread_groups" : [1, 1, 1],
 
             "source" : "IrradianceFieldGenFromVct_cs",
-            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "sRGB.any", "JahVoxelSample_piece_all.any", "JahVoxelMarch_piece_all.any", "JahEnvironment_piece_all.any", "JahFieldWindow_piece_all.any", "IrradianceFieldGenFromVct_piece_cs.any"],
+            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "sRGB.any", "IrradianceFieldGenFromVct_piece_cs.any"],
             "inform_shader_of_texture_data_change" : true,
 
             "uav_units" : 2,
@@ -17,15 +17,13 @@
                 {}
             ],
 
-            "properties" :
-            {
-                "vct_anisotropic" : 0,
-                "hlms_num_vct_cascades" : 1
-            },
-
             "params_glsl" :
             [
                 ["directionsBuffer",        [0], "int"],
+                ["vctProbe",                [1], "int"],
+                ["vctProbeX",               [2], "int"],
+                ["vctProbeY",               [3], "int"],
+                ["vctProbeZ",               [4], "int"],
 
                 ["irradianceField",         [0], "int"],
                 ["irradianceFieldDepth",    [1], "int"]
@@ -45,6 +43,7 @@
 
             "properties" :
             {
+                "process_depth" : 1,
                 "full_width" : 256
             }
         },
@@ -62,8 +61,97 @@
 
             "properties" :
             {
+                "process_depth" : 0,
                 "full_width" : 256
             }
+        },
+
+        "IrradianceField/Integration/Depth" :
+        {
+            "threads_per_group" : [64, 1, 1],
+            "thread_groups" : [1, 1, 1],
+
+            "source" : "IrradianceFieldIntegration_cs",
+            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "sRGB.any", "IrradianceFieldIntegration_piece_cs.any"],
+            "inform_shader_of_texture_data_change" : true,
+
+            "uav_units" : 1,
+
+            "textures" :
+            [
+                {}
+            ],
+
+            "params_glsl" :
+            [
+                ["integrationTapsBuffer",   [0], "int"]
+            ],
+
+            "properties" :
+            {
+                "integrate_depth" : 1
+            }
+        },
+
+        "IrradianceField/Integration/Colour" :
+        {
+            "threads_per_group" : [64, 1, 1],
+            "thread_groups" : [1, 1, 1],
+
+            "source" : "IrradianceFieldIntegration_cs",
+            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "sRGB.any", "IrradianceFieldIntegration_piece_cs.any"],
+            "inform_shader_of_texture_data_change" : true,
+
+            "uav_units" : 1,
+
+            "textures" :
+            [
+                {}
+            ],
+
+            "params_glsl" :
+            [
+                ["integrationTapsBuffer",   [0], "int"]
+            ],
+
+            "properties" :
+            {
+                "integrate_depth" : 0
+            }
+        },
+
+        "IrradianceField/CubemapToIfd" :
+        {
+            "threads_per_group" : [8, 8, 1],
+            "thread_groups" : [1, 1, 1],
+
+            "source" : "IrradianceFieldRaster_cs",
+            "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "sRGB.any", "IrradianceFieldRaster_piece_cs.any"],
+            "inform_shader_of_texture_data_change" : true,
+
+            "uav_units" : 2,
+
+            "textures" :
+            [
+                {},
+                {}
+            ],
+
+            "params" :
+            [
+                ["probeIdx",            [0],        "uint"],
+                ["projectionParams",    [1, 1],     "float"],
+                ["numProbes",           [0, 0, 0],  "float"]
+            ],
+
+            "params_glsl" :
+            [
+                ["colourCubemap",           [0], "int"],
+                ["depthCubemap",            [1], "int"],
+
+                ["irradianceField",         [0], "int"],
+                ["irradianceFieldDepth",    [1], "int"]
+            ]
         }
     }
 }

@@ -57,11 +57,7 @@ namespace Ogre
         float emissive[4];
         uint32 diffuseTexIdx;
         uint32 emissiveTexIdx;
-        // Jahshaka (PHOTON-WRITER-1): the datablock's perceptual roughness, so the
-        // voxel's stored radiance can be what its surface renders (the diffuse
-        // lobe's directional albedo depends on it; LightInjection reads it).
-        float roughness;
-        uint32 padding0;
+        uint32 padding01[2];
     };
     //-------------------------------------------------------------------------
     VctMaterial::VctMaterial( IdType id, VaoManager *vaoManager, CompositorManager2 *compositorManager,
@@ -109,15 +105,12 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    /// ONE ROW, WRITTEN AT A SLOT THE CALLER CHOSE. The conversion itself - the
-    /// datablock's colours, its background diffuse, its transparency and the texture
-    /// pool slices of its albedo and emissive maps - is the same whether the slot is
-    /// new or the datablock already owns it, so both the first conversion and an
-    /// in-place refresh go through here and cannot drift apart.
-    void VctMaterial::writeRow( HlmsDatablock *datablock, MaterialBucket &bucket, uint32 slot,
-                                DatablockConversionResult &out )
+    VctMaterial::DatablockConversionResult VctMaterial::addDatablockToBucket( HlmsDatablock *datablock,
+                                                                              MaterialBucket &bucket )
     {
-        OGRE_ASSERT_MEDIUM( slot < c_numDatablocksPerConstBuffer );
+        const size_t usedSlots = bucket.datablocks.size();
+
+        OGRE_ASSERT_MEDIUM( usedSlots < c_numDatablocksPerConstBuffer );
 
         ShaderVctMaterial shaderMaterial;
         memset( &shaderMaterial, 0, sizeof( shaderMaterial ) );
@@ -147,94 +140,32 @@ namespace Ogre
                 shaderMaterial.bgDiffuse[i] = bgDiffuse[i];
             shaderMaterial.diffuse[3] = transparency;
             shaderMaterial.emissive[3] = 1.0f;
-            // The scalar only: a roughness MAP is not voxelised (the voxel is one
-            // surface-averaged texel either way).
-            shaderMaterial.roughness = pbsDatablock->getRoughness();
-        }
-        else
-        {
-            // Not a PBS datablock (no diffuse lobe of HlmsPbs's to match): the
-            // matte end.
-            shaderMaterial.roughness = 1.0f;
         }
 
         TextureGpu *diffuseTex = datablock->getDiffuseTexture();
         TextureGpu *emissiveTex = datablock->getEmissiveTexture();
 
-        out = DatablockConversionResult();
-        out.slotIdx = slot;
-        out.bucketIdx = static_cast<uint32>( &bucket - &mBuckets.front() );
-        out.constBuffer = bucket.buffer;
+        DatablockConversionResult conversionResult;
+        conversionResult.slotIdx = static_cast<uint32>( usedSlots );
+        conversionResult.constBuffer = bucket.buffer;
         if( diffuseTex )
         {
-            out.diffuseTexIdx = getPoolSliceIdxForTexture( diffuseTex );
-            shaderMaterial.diffuseTexIdx = out.diffuseTexIdx;
+            conversionResult.diffuseTexIdx = getPoolSliceIdxForTexture( diffuseTex );
+            shaderMaterial.diffuseTexIdx = conversionResult.diffuseTexIdx;
         }
         if( emissiveTex )
         {
-            out.emissiveTexIdx = getPoolSliceIdxForTexture( emissiveTex );
-            shaderMaterial.emissiveTexIdx = out.emissiveTexIdx;
+            conversionResult.emissiveTexIdx = getPoolSliceIdxForTexture( emissiveTex );
+            shaderMaterial.emissiveTexIdx = conversionResult.emissiveTexIdx;
         }
 
-        bucket.buffer->upload( &shaderMaterial, slot * sizeof( ShaderVctMaterial ),
+        bucket.buffer->upload( &shaderMaterial, usedSlots * sizeof( ShaderVctMaterial ),
                                sizeof( ShaderVctMaterial ) );
-    }
-    //-------------------------------------------------------------------------
-    VctMaterial::DatablockConversionResult VctMaterial::addDatablockToBucket( HlmsDatablock *datablock,
-                                                                              MaterialBucket &bucket )
-    {
-        // SLOTS ARE NUMBERED BY THE MEMBERSHIP SET'S SIZE (0081 keeps dead and moved
-        // pointers in it on purpose - see removeDatablock), so a new datablock takes
-        // the next slot and no live one's slot is ever handed out twice.
-        const uint32 slot = static_cast<uint32>( bucket.datablocks.size() );
-        DatablockConversionResult conversionResult;
-        writeRow( datablock, bucket, slot, conversionResult );
+
         bucket.datablocks.insert( datablock );
         mDatablockConversionResults[datablock] = conversionResult;
+
         return conversionResult;
-    }
-    //-------------------------------------------------------------------------
-    const VctMaterial::DatablockConversionResult *VctMaterial::lookupDatablock(
-        const HlmsDatablock *datablock ) const
-    {
-        DatablockConversionResultMap::const_iterator itor =
-            mDatablockConversionResults.find( const_cast<HlmsDatablock *>( datablock ) );
-        return itor != mDatablockConversionResults.end() ? &itor->second : 0;
-    }
-    //-------------------------------------------------------------------------
-    void VctMaterial::refreshAll( FastArray<HlmsDatablock *> *moved )
-    {
-        // THE TEXTURE POOL IS RE-COPIED TOO. Its slices are cached by TextureGpu POINTER
-        // (getPoolSliceIdxForTexture), so a store that outlives rebuilds would keep a
-        // texture's first pixels for ever and hand a dead texture's slice to whatever
-        // texture is later allocated at its address. Forgetting the cache here makes
-        // every row re-written below copy its textures afresh into slices numbered from
-        // zero; the pool keeps its size.
-        mTextureToPoolEntry.clear();
-        mNumUsedPoolSlices = 0u;
-
-        // THE KEYS FIRST: a datablock that has to MOVE is erased from the map and
-        // re-inserted while this walks, so the walk is over a copy.
-        FastArray<HlmsDatablock *> datablocks;
-        datablocks.reserve( mDatablockConversionResults.size() );
-        DatablockConversionResultMap::const_iterator itor = mDatablockConversionResults.begin();
-        DatablockConversionResultMap::const_iterator endt = mDatablockConversionResults.end();
-        while( itor != endt )
-        {
-            datablocks.push_back( itor->first );
-            ++itor;
-        }
-
-        FastArray<HlmsDatablock *>::const_iterator itDb = datablocks.begin();
-        FastArray<HlmsDatablock *>::const_iterator enDb = datablocks.end();
-        while( itDb != enDb )
-        {
-            bool bMoved = false;
-            addDatablock( *itDb, &bMoved );
-            if( bMoved && moved )
-                moved->push_back( *itDb );
-            ++itDb;
-        }
     }
     //-------------------------------------------------------------------------
     uint16 VctMaterial::getPoolSliceIdxForTexture( TextureGpu *texture )
@@ -325,14 +256,6 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VctMaterial::initTempResources( SceneManager *sceneManager )
     {
-        // IDEMPOTENT. The texture and the camera are created under FIXED NAMES, so a
-        // second init without a destroy throws on the duplicate - which is how a
-        // rebuild that threw between the bracket's two halves used to poison every
-        // rebuild after it. Now the owner may call this freely and the failure path may
-        // call destroyTempResources without knowing whether init ran.
-        if( mDownsampleTex )
-            return;
-
         mDownsampleTex = mTextureGpuManager->createTexture(
             "VctMaterialDownsampleTex", "VctMaterialDownsampleTex", GpuPageOutStrategy::Discard,
             TextureFlags::RenderToTexture | TextureFlags::DiscardableContent, TextureTypes::Type2D );
@@ -353,9 +276,6 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VctMaterial::destroyTempResources()
     {
-        if( !mDownsampleTex )
-            return;  // never inited, or already torn down - see initTempResources
-
         mTextureGpuManager->destroyTexture( mDownsampleTex );
         mDownsampleTex = 0;
 
@@ -371,66 +291,32 @@ namespace Ogre
         mDownsampleWorkspace2D = 0;
     }
     //-------------------------------------------------------------------------
-    //-------------------------------------------------------------------------
-    void VctMaterial::removeDatablock( const HlmsDatablock *datablock )
+    VctMaterial::DatablockConversionResult VctMaterial::addDatablock( HlmsDatablock *datablock )
     {
-        // JAHSHAKA fork ad452604a+0338ca7f2+c4c80b5f7 (was 0081) -- see the header. The map is keyed by a non-const
-        // pointer; the lookup does not write through it.
-        DatablockConversionResultMap::iterator it =
-            mDatablockConversionResults.find( const_cast<HlmsDatablock *>( datablock ) );
-        if( it != mDatablockConversionResults.end() )
-            mDatablockConversionResults.erase( it );
-    }
-    //-------------------------------------------------------------------------
-    VctMaterial::DatablockConversionResult VctMaterial::addDatablock( HlmsDatablock *datablock,
-                                                                      bool *outMoved )
-    {
-        if( outMoved )
-            *outMoved = false;
+        DatablockConversionResult retVal;
 
-        DatablockConversionResultMap::iterator itResult = mDatablockConversionResults.find( datablock );
+        DatablockConversionResultMap::const_iterator itResult =
+            mDatablockConversionResults.find( datablock );
         if( itResult != mDatablockConversionResults.end() )
+            retVal = itResult->second;
+        else
         {
-            // A HIT IS RE-READ, NEVER TRUSTED. The row used to be handed back as it was
-            // first written, which was harmless while every store died with its
-            // voxelizer on each rebuild; a store that outlives rebuilds would then keep
-            // a material's FIRST parameters for the rest of its life (measured: the
-            // same datablock converted at emissive 0.5 read 0.5 at 1, 3 and 12). The row
-            // is re-written in place, at the slot the datablock already owns, so every
-            // consumer that names that slot sees the material as it is now.
-            MaterialBucket &bucket = mBuckets[itResult->second.bucketIdx];
-            const bool needsDiffuse = datablock->getDiffuseTexture() != 0;
-            const bool needsEmissive = datablock->getEmissiveTexture() != 0;
-            if( bucket.hasDiffuse == needsDiffuse && bucket.hasEmissive == needsEmissive )
+            MaterialBucket *bucket = findFreeBucketFor( datablock );
+            if( !bucket )
             {
-                writeRow( datablock, bucket, itResult->second.slotIdx, itResult->second );
-                return itResult->second;
+                // Create a new bucket
+                MaterialBucket newBucket;
+                newBucket.buffer = mVaoManager->createConstBuffer(
+                    c_numDatablocksPerConstBuffer * sizeof( ShaderVctMaterial ), BT_DEFAULT, 0, false );
+                newBucket.hasDiffuse = datablock->getDiffuseTexture() != 0;
+                newBucket.hasEmissive = datablock->getEmissiveTexture() != 0;
+                mBuckets.push_back( newBucket );
+                bucket = &mBuckets.back();
             }
 
-            // THE BUCKET'S CLASS NO LONGER FITS - a texture was added to or taken off the
-            // material, and a bucket is homogeneous in that (it decides the compute job
-            // variant). The datablock MOVES. Its old slot is abandoned, not freed: the
-            // membership set keeps the pointer, exactly as 0081 keeps a dead one, because
-            // slots are numbered by that set's size. The caller is told, because anything
-            // that recorded the old (bucket, slot) is now wrong.
-            mDatablockConversionResults.erase( itResult );
-            if( outMoved )
-                *outMoved = true;
+            retVal = addDatablockToBucket( datablock, *bucket );
         }
 
-        MaterialBucket *bucket = findFreeBucketFor( datablock );
-        if( !bucket )
-        {
-            // Create a new bucket
-            MaterialBucket newBucket;
-            newBucket.buffer = mVaoManager->createConstBuffer(
-                c_numDatablocksPerConstBuffer * sizeof( ShaderVctMaterial ), BT_DEFAULT, 0, false );
-            newBucket.hasDiffuse = datablock->getDiffuseTexture() != 0;
-            newBucket.hasEmissive = datablock->getEmissiveTexture() != 0;
-            mBuckets.push_back( newBucket );
-            bucket = &mBuckets.back();
-        }
-
-        return addDatablockToBucket( datablock, *bucket );
+        return retVal;
     }
 }  // namespace Ogre

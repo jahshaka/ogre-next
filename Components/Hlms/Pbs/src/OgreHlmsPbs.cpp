@@ -201,6 +201,7 @@ namespace Ogre
     const IdString PbsProperty::VctAnisotropic = IdString( "vct_anisotropic" );
     const IdString PbsProperty::VctEnableSpecularSdfQuality =
         IdString( "vct_enable_specular_sdf_quality" );
+    const IdString PbsProperty::VctAmbientSphere = IdString( "vct_ambient_hemisphere" );
     const IdString PbsProperty::IrradianceField = IdString( "irradiance_field" );
     const IdString PbsProperty::ObbRestraintApprox = IdString( "obb_restraint_approx" );
 
@@ -577,18 +578,16 @@ namespace Ogre
             rootLayout.addArrayBinding( DescBindingTypes::Texture,
                                         RootLayout::ArrayDesc( static_cast<uint16>( vctProbeIdx ),
                                                                static_cast<uint16>( numVctProbes ) ) );
-            // + the three anisotropic axes, then (Jahshaka, PHOTON-VOXEL-3/-4) the
-            // coverage per half-axis and the surface position per half: one array
-            // each, in setTextureReg's order.
-            // + (PHOTON-VOXEL-5) the back side and the normal on the anisotropic tiers.
-            const int32 numMoreArrays = getProperty( tid, PbsProperty::VctAnisotropic ) ? 9 : 4;
-            for( int32 i = 0; i < numMoreArrays; ++i )
+            if( getProperty( tid, PbsProperty::VctAnisotropic ) )
             {
-                vctProbeIdx += numVctProbes;
-                rootLayout.addArrayBinding(
-                    DescBindingTypes::Texture,
-                    RootLayout::ArrayDesc( static_cast<uint16>( vctProbeIdx ),
-                                           static_cast<uint16>( numVctProbes ) ) );
+                for( int32 i = 0; i < 3; ++i )
+                {
+                    vctProbeIdx += numVctProbes;
+                    rootLayout.addArrayBinding(
+                        DescBindingTypes::Texture,
+                        RootLayout::ArrayDesc( static_cast<uint16>( vctProbeIdx ),
+                                               static_cast<uint16>( numVctProbes ) ) );
+                }
             }
         }
 
@@ -1400,25 +1399,6 @@ namespace Ogre
                 setTextureReg( tid, PixelShader, "vctProbeZ", texUnit, numVctProbes );
                 texUnit += numVctProbes;
             }
-            // Jahshaka (PHOTON-VOXEL-3/-4): the coverage per half-axis (the faces looking
-            // +a, then -a) and the surface position per half - VctLighting's last four
-            // light-volume entries (the order fillBuffersFor binds them in).
-            const char *splitNames[4] = { "vctProbeCovP", "vctProbeCovN", "vctProbePosP",
-                                          "vctProbePosN" };
-            for( size_t k = 0u; k < 4u; ++k )
-            {
-                setTextureReg( tid, PixelShader, splitNames[k], texUnit, numVctProbes );
-                texUnit += numVctProbes;
-            }
-            // Jahshaka (PHOTON-VOXEL-5): level 0's back side and the voxelizer's normal - the
-            // anisotropic tiers' last two light-volume entries (VctLighting::backIndex/normalIndex).
-            if( getProperty( tid, PbsProperty::VctAnisotropic ) )
-            {
-                setTextureReg( tid, PixelShader, "vctProbeBack", texUnit, numVctProbes );
-                texUnit += numVctProbes;
-                setTextureReg( tid, PixelShader, "vctProbeNrm", texUnit, numVctProbes );
-                texUnit += numVctProbes;
-            }
         }
 
         if( getProperty( tid, PbsProperty::IrradianceField ) )
@@ -1747,6 +1727,9 @@ namespace Ogre
         OGRE_ASSERT_LOW( ( !mRefractionsTexture || ( mRefractionsTexture && mDepthTextureNoMsaa ) ) &&
                          "Refractions texture requires a depth texture!" );
 
+        const bool vctNeedsAmbientHemi =
+            !casterPass && mVctLighting && mVctLighting->needsAmbientHemisphere();
+
         AmbientLightMode ambientMode = mAmbientLightMode;
         ColourValue upperHemisphere = sceneManager->getAmbientLightUpperHemisphere();
         ColourValue lowerHemisphere = sceneManager->getAmbientLightLowerHemisphere();
@@ -1862,6 +1845,7 @@ namespace Ogre
                 setProperty( kNoTid, PbsProperty::VctAnisotropic, mVctLighting->isAnisotropic() );
                 setProperty( kNoTid, PbsProperty::VctEnableSpecularSdfQuality,
                              mVctLighting->shouldEnableSpecularSdfQuality() );
+                setProperty( kNoTid, PbsProperty::VctAmbientSphere, vctNeedsAmbientHemi );
 
                 //'Static' reflections on cubemaps look horrible
                 if( mParallaxCorrectedCubemap && mParallaxCorrectedCubemap->isRendering() )
@@ -2084,13 +2068,15 @@ namespace Ogre
 
             // vec3 ambientUpperHemi + float envMapScale
             if( ( ambientMode >= AmbientFixed && ambientMode <= AmbientHemisphereRimSquared ) ||
-                envMapScale != 1.0f )
+                envMapScale != 1.0f || vctNeedsAmbientHemi )
             {
                 mapSize += 4 * 4;
             }
 
             // vec3 ambientLowerHemi + padding + vec3 ambientHemisphereDir + padding
-            if( ambientMode >= AmbientHemisphereNormal && ambientMode <= AmbientHemisphereRimSquared )
+            if( ( ambientMode >= AmbientHemisphereNormal &&
+                  ambientMode <= AmbientHemisphereRimSquared ) ||
+                vctNeedsAmbientHemi )
             {
                 mapSize += 8 * 4;
             }
@@ -2485,7 +2471,7 @@ namespace Ogre
 
             // vec3 ambientUpperHemi + padding
             if( ( ambientMode >= AmbientFixed && ambientMode <= AmbientHemisphereRimSquared ) ||
-                envMapScale != 1.0f )
+                envMapScale != 1.0f || vctNeedsAmbientHemi )
             {
                 *passBufferPtr++ = static_cast<float>( upperHemisphere.r );
                 *passBufferPtr++ = static_cast<float>( upperHemisphere.g );
@@ -2494,7 +2480,9 @@ namespace Ogre
             }
 
             // vec3 ambientLowerHemi + padding + vec3 ambientHemisphereDir + padding
-            if( ambientMode >= AmbientHemisphereNormal && ambientMode <= AmbientHemisphereRimSquared )
+            if( ( ambientMode >= AmbientHemisphereNormal &&
+                  ambientMode <= AmbientHemisphereRimSquared ) ||
+                vctNeedsAmbientHemi )
             {
                 *passBufferPtr++ = static_cast<float>( lowerHemisphere.r );
                 *passBufferPtr++ = static_cast<float>( lowerHemisphere.g );
