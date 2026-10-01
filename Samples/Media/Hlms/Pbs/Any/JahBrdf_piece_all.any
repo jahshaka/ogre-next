@@ -41,26 +41,38 @@ float jahDisneyDiffuse( float NdotL, float NdotV, float VdotH, float perceptualR
 	return lightScatter * viewScatter * energyFactor;
 }
 
-// A POINT OR SPOT LIGHT'S DISTANCE ATTENUATION at distance d inside its range:
-// 1 / ( 0.5 + ( linear + quadratic d ) d ). `attenuation` is the pass buffer's
-// light attenuation vector: ( range, linear, quadratic, 1 / range ).
-float jahLightDistanceAttenuation( float d, vec4 attenuation )
+// A POINT OR SPOT LIGHT'S DISTANCE ATTENUATION (IMAGE-1): the inverse square
+// law with a smooth window to zero at the light's range, Karis 2013 ("Real
+// Shading in Unreal Engine 4", SIGGRAPH course notes, eq. 9) with the source
+// clamp Frostbite uses (Lagarde and de Rousiers 2014, section 4.4):
+//     E / I = saturate( 1 - ( d / R )^4 )^2 / max( d^2, rSrc^2 )
+// d the distance, R the range, rSrc the radius of the emitting source (inside
+// it the light cannot get brighter). Outside the source it is 1 / d^2 times
+// the window, which is above 0.99 to R / 3.76 and 0.879 at R / 2; at R it
+// reaches zero with a zero slope, so no light ends in an edge.
+//
+// THE UNITS: a light whose intensity is I lights a surface 1 m away facing it
+// exactly as a sun of intensity I lights a surface facing the sun.
+//
+// EVERY consumer of a point or spot light's falloff calls this: HlmsPbs's pass
+// buffer lights (800.PixelShader), Forward+ (200.ForwardPlus), the approximate
+// area lights (AreaLights, through a disc of the rectangle's area), the surface
+// cache's card job, Atom's hit decode and Photon's voxel light injection.
+float jahLightAttenuation( float d, float range, float sourceRadius )
 {
-	return 1.0 / ( 0.5 + ( attenuation.y + attenuation.z * d ) * d );
+	float x = d / range;
+	float x2 = x * x;
+	float window = clamp( 1.0 - x2 * x2, 0.0, 1.0 );
+	return ( window * window ) / max( d * d, sourceRadius * sourceRadius );
 }
 
-// ...and its FADE to zero at the range (fork change 0018: ( range - d ) / range,
-// so a light never ends in a hard edge). 800.PixelShader applies it under
-// hlms_forward_fade_attenuation_range, which the engine always sets.
-float jahLightRangeFade( float d, vec4 attenuation )
-{
-	return max( ( attenuation.x - d ) * attenuation.w, 0.0 );
-}
-
-// The two together: what a point or spot light's irradiance is scaled by.
+// The same, from the light's attenuation vector as the engine packs it:
+// ( range, source radius, unused, 1 / range ) - the slots Ogre names range,
+// linear, quadratic and the fork's inverse range. Jahshaka's engine writes
+// setAttenuation( range, 1, sourceRadius, 0 ); nothing reads the other two.
 float jahLightAttenuation( float d, vec4 attenuation )
 {
-	return jahLightDistanceAttenuation( d, attenuation ) * jahLightRangeFade( d, attenuation );
+	return jahLightAttenuation( d, attenuation.x, attenuation.y );
 }
 
 // A SPOT LIGHT'S CONE: 0 outside the outer angle, a falloff-shaped ramp to 1

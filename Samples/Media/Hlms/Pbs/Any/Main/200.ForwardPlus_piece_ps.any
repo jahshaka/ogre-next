@@ -148,10 +148,7 @@
 		if( fDistance <= attenuation.x @insertpiece( andObjLightMaskFwdPlusCmp ) )
 		{
 			lightDir *= 1.0 / fDistance;
-			midf atten = midf_c( 1.0 / (0.5 + (attenuation.y + attenuation.z * fDistance) * fDistance ) );
-			@property( hlms_forward_fade_attenuation_range )
-				atten *= midf_c( max( (attenuation.x - fDistance) * attenuation.w, 0.0f ) );
-			@end
+			midf atten = midf_c( jahLightAttenuation( fDistance, attenuation ) );	// Jahshaka (IMAGE-1): the one falloff, JahBrdf
 
 			@property( light_profiles_texture )
 				midf spotCosAngle = dot( midf3_c( -lightDir ), midf3_c( spotDirection.xyz ) );
@@ -199,10 +196,7 @@
 		if( fDistance <= attenuation.x @insertpiece( andObjLightMaskFwdPlusCmp ) )
 		{
 			lightDir *= 1.0 / fDistance;
-			midf atten = midf_c( 1.0 / (0.5 + (attenuation.y + attenuation.z * fDistance) * fDistance ) );
-			@property( hlms_forward_fade_attenuation_range )
-				atten *= midf_c( max( (attenuation.x - fDistance) * attenuation.w, 0.0f ) );
-			@end
+			midf atten = midf_c( jahLightAttenuation( fDistance, attenuation ) );	// Jahshaka (IMAGE-1): the one falloff, JahBrdf
 
 			//spotParams.x = 1.0 / cos( InnerAngle ) - cos( OuterAngle )
 			//spotParams.y = cos( OuterAngle / 2 )
@@ -252,10 +246,7 @@
 		if( fDistance <= attenuation.x )
 		{
 			//lightDir *= 1.0 / fDistance;
-			midf atten = midf_c( 1.0 / (0.5 + (attenuation.y + attenuation.z * fDistance) * fDistance ) );
-			@property( hlms_forward_fade_attenuation_range )
-				atten *= midf_c( max( (attenuation.x - fDistance) * attenuation.w, 0.0f ) );
-			@end
+			midf atten = midf_c( jahLightAttenuation( fDistance, attenuation ) );	// Jahshaka (IMAGE-1): the one falloff, JahBrdf
 
 			//float3 lightDir2	= posAndType.xyz - inPs.pos;
 			//lightDir2 *= 1.0 / max( 1, fDistance );

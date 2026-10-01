@@ -582,10 +582,7 @@
 			tmpColour = BRDF( midf3_c( lightDir ), midf3_c( light0Buf.lights[light_idx].diffuse.xyz ),
 							  midf3_c( light0Buf.lights[light_idx].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadowPoint_cur_shadow_map );
-			midf atten = midf_c( jahLightDistanceAttenuation( fDistance, light0Buf.lights[light_idx].attenuation ) );
-			@property( hlms_forward_fade_attenuation_range )	// Jahshaka fork 36162ff37+16d8e29d4 (was 0018)
-				atten *= midf_c( jahLightRangeFade( fDistance, light0Buf.lights[light_idx].attenuation ) );
-			@end
+			midf atten = midf_c( jahLightAttenuation( fDistance, light0Buf.lights[light_idx].attenuation ) );
 			finalColour += tmpColour * atten;
 		}
 		cur_shadow_map++;
@@ -600,10 +597,7 @@
 			tmpColour = BRDF( midf3_c( lightDir ), midf3_c( light0Buf.lights[@n].diffuse.xyz ),
 							  midf3_c( light0Buf.lights[@n].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadowPoint );
-			midf atten = midf_c( jahLightDistanceAttenuation( fDistance, light0Buf.lights[@n].attenuation ) );
-			@property( hlms_forward_fade_attenuation_range )	// Jahshaka fork 36162ff37+16d8e29d4 (was 0018)
-				atten *= midf_c( jahLightRangeFade( fDistance, light0Buf.lights[@n].attenuation ) );
-			@end
+			midf atten = midf_c( jahLightAttenuation( fDistance, light0Buf.lights[@n].attenuation ) );
 			finalColour += tmpColour * atten;
 		}
 	@end
@@ -637,10 +631,7 @@
 			tmpColour = BRDF( midf3_c( lightDir ), midf3_c( light0Buf.lights[light_idx].diffuse.xyz ),
 							  midf3_c( light0Buf.lights[light_idx].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow_cur_shadow_map );
-			midf atten = midf_c( jahLightDistanceAttenuation( fDistance, light0Buf.lights[light_idx].attenuation ) );
-			@property( hlms_forward_fade_attenuation_range )	// Jahshaka fork 36162ff37+16d8e29d4 (was 0018)
-				atten *= midf_c( jahLightRangeFade( fDistance, light0Buf.lights[light_idx].attenuation ) );
-			@end
+			midf atten = midf_c( jahLightAttenuation( fDistance, light0Buf.lights[light_idx].attenuation ) );
 			finalColour += tmpColour * (atten * spotAtten);
 		}
 		cur_shadow_map++;
@@ -673,10 +664,7 @@
 			tmpColour = BRDF( midf3_c( lightDir ), midf3_c( light0Buf.lights[@n].diffuse.xyz ),
 							  midf3_c( light0Buf.lights[@n].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow );
-			midf atten = midf_c( jahLightDistanceAttenuation( fDistance, light0Buf.lights[@n].attenuation ) );
-			@property( hlms_forward_fade_attenuation_range )	// Jahshaka fork 36162ff37+16d8e29d4 (was 0018)
-				atten *= midf_c( jahLightRangeFade( fDistance, light0Buf.lights[@n].attenuation ) );
-			@end
+			midf atten = midf_c( jahLightAttenuation( fDistance, light0Buf.lights[@n].attenuation ) );
 			finalColour += tmpColour * (atten * spotAtten);
 		}
 	@end
