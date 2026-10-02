@@ -55,15 +55,35 @@ float jahDisneyDiffuse( float NdotL, float NdotV, float VdotH, float perceptualR
 // exactly as a sun of intensity I lights a surface facing the sun.
 //
 // EVERY consumer of a point or spot light's falloff calls this: HlmsPbs's pass
-// buffer lights (800.PixelShader), Forward+ (200.ForwardPlus), the approximate
-// area lights (AreaLights, through a disc of the rectangle's area), the surface
-// cache's card job, Atom's hit decode and Photon's voxel light injection.
-float jahLightAttenuation( float d, float range, float sourceRadius )
+// buffer lights (800.PixelShader), Forward+ (200.ForwardPlus), the surface
+// cache's card job, Atom's hit decode and Photon's voxel light injection (the
+// area lights take jahAreaLightAttenuation below, the same window).
+// The window alone: saturate( 1 - ( d / R )^4 )^2 - the range term every light's
+// falloff in this family shares.
+float jahLightWindow( float d, float range )
 {
 	float x = d / range;
 	float x2 = x * x;
 	float window = clamp( 1.0 - x2 * x2, 0.0, 1.0 );
-	return ( window * window ) / max( d * d, sourceRadius * sourceRadius );
+	return window * window;
+}
+
+float jahLightAttenuation( float d, float range, float sourceRadius )
+{
+	return jahLightWindow( d, range ) / max( d * d, sourceRadius * sourceRadius );
+}
+
+// AN AREA LIGHT'S FALLOFF (AREA-SCALE-1): a Lambertian disc of radius r and
+// radiance I, seen from a point on its axis d away, gives E = pi I r^2 / ( r^2 + d^2 );
+// so the reflected radiance relative to contact is r^2 / ( r^2 + d^2 ) - 1 at
+// contact (an emitting plane lights a surface it touches with its own radiance),
+// r^2 / d^2 far away - times the same window. The approximate area lights
+// (AreaLights) call it with the disc of the rectangle's area, which is within 1 %
+// of the rectangle's own form factor on its axis (gi.area_energy).
+float jahAreaLightAttenuation( float d, float range, float discRadius )
+{
+	float r2 = discRadius * discRadius;
+	return jahLightWindow( d, range ) * r2 / max( r2 + d * d, 1e-8 );
 }
 
 // The same, from the light's attenuation vector as the engine packs it:

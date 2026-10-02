@@ -71,9 +71,6 @@
 								  dot( areaLightBitangent, float3( pixelData.normal ) ) ) * 3.75 * invHalfRectSize.xy;
 			lightUV.xy = clamp( lightUV.xy, -0.5f, 0.5f );
 			lightUVForTex = clamp( lightUVForTex.xy, -0.5f, 0.5f );
-	//		float booster = 1.0f - smoothstep( 0.2f, 1.9f, max( abs( lightUV.x ), abs( lightUV.y ) ) );
-	//		booster = 1.0f + booster * 2.25f;
-			midf booster = lerp( _h( 1.0f ), _h( 4.0f ), pixelData.roughness );
 
 		@property( !hlms_lights_area_tex_colour || !hlms_lights_area_tex_mask )
 			midf diffuseMask = _h( 1.0f );
@@ -156,17 +153,18 @@
 			tmpColour = BRDF_AreaLightApprox( midf3_c( lightDir ),
 											  midf3_c( light1Buf.areaApproxLights[i].diffuse.xyz ) * diffuseMask,
 											  midf3_c( light1Buf.areaApproxLights[i].specular.xyz ) * specCol,
-											  pixelData ) * ( globalDot * globalDot ) * booster;
-			// Jahshaka (IMAGE-1): THE ONE FALLOFF (JahBrdf), from a disc of the
-			// rectangle's area: attenuation.y is that disc's radius r (the engine
-			// writes sqrt( width height / pi )), and r^2 / max( d^2, r^2 ) is the
-			// far field of a Lambertian emitter of that area normalised to 1 at
-			// contact, where an emitting plane lights a surface it touches with
-			// its own radiance. So the light keeps its contact brightness and
-			// falls off as area / d^2 beyond its own size, windowed to its range.
-			float areaSrcR = light1Buf.areaApproxLights[i].attenuation.y;
-			midf atten = midf_c( areaSrcR * areaSrcR *
-								 jahLightAttenuation( fDistance, light1Buf.areaApproxLights[i].attenuation.x, areaSrcR ) );
+											  pixelData ) * ( globalDot * globalDot );
+			// Jahshaka (AREA-SCALE-1): ONE AREA-LIGHT ENERGY. An area light of
+			// intensity I is a Lambertian emitter of radiance I; its falloff is
+			// JahBrdf's disc law (jahAreaLightAttenuation): a disc of the
+			// rectangle's area (attenuation.y = r = sqrt( width height / pi ), the
+			// engine's) seen on its axis, r^2 / ( r^2 + d^2 ) - 1 at contact, area /
+			// d^2 far away, within 1 % of the rectangle's own closed form at every
+			// distance (gi.area_energy) - windowed to the range. Upstream's
+			// roughness booster ( x lerp( 1, 4, roughness ) ) and IMAGE-1's
+			// r^2 / max( d^2, r^2 ) drew 4.2-5.3 x the closed form at 1-2.5 m.
+			midf atten = midf_c( jahAreaLightAttenuation( fDistance, light1Buf.areaApproxLights[i].attenuation.x,
+														  light1Buf.areaApproxLights[i].attenuation.y ) );
 
 			@property( obb_restraint_approx )
 				atten *= obbRestraintFade;
