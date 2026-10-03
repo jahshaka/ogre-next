@@ -324,6 +324,13 @@ for( int i=0; i<floatBitsToInt( light2Buf.numAreaLtcLights ); ++i )
 			ltcSpecular	*= obbRestraintFade;
 		@end
 
+		// ONE LAW (PHOTON-II-1 F5): the LTC form factor is the light's own distance law, and
+		// the range is JahBrdf's window - the same window every light in this family and
+		// Photon's voxel injection apply - never a hard cut at the range alone.
+		midf ltcWindow = midf_c( jahLightWindow( fDistance, light2Buf.areaLtcLights[i].diffuse.w ) );
+		ltcDiffuse	*= ltcWindow;
+		ltcSpecular	*= ltcWindow;
+
 		finalColour += midf3_c( light2Buf.areaLtcLights[i].diffuse.xyz ) * ltcDiffuse * pixelData.diffuse.xyz;
 		finalColour += midf3_c( light2Buf.areaLtcLights[i].specular.xyz ) * ltcSpecular * pixelData.specular.xyz;
 	}
