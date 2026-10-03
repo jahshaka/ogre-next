@@ -167,6 +167,16 @@ namespace Ogre
             vMax.z += 5.0f;  // Backwards is towards +Z!
         }
 
+        // The depth range must reach every RECEIVER this split can show, not only the casters:
+        // the far plane sits at vMin.z, and a receiver past it reads as the clear depth, i.e.
+        // fully lit (OGRE_SAMPLE_SHADOW). With the casters' box alone, a caster that does not
+        // reach the ground (a floating object, or one whose receivers do not cast) has its
+        // shadow cut by a straight line, or lost entirely. Fold the split frustum's downstream
+        // extent in, exactly as FocusedShadowCameraSetup does. Only the depth range moves; the
+        // texel-snapped position and the fixed ortho window (what makes this setup stable) are
+        // untouched.
+        vMin.z = std::min( vMin.z, vMinCamFrustumLS.z );
+
         const float padding = 3.0f;
         Aabb aabb( scalarWorldToLightSpace * cam->getDerivedPosition(),
                    Ogre::Vector3( farDistance + padding ) );
