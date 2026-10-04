@@ -170,6 +170,19 @@ namespace Ogre
                 if( extensionName == VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME )
                     enabledExtensions.push_back(
                         VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME );
+                // Jahshaka (VR-START-1): THE OPENXR INTEROP SET, instance half. What
+                // XR_KHR_vulkan_enable's xrGetVulkanInstanceExtensionsKHR asks of the
+                // application (Monado 25 and WiVRn 26 both list exactly these three plus
+                // get_physical_device_properties2, above). Enabled whenever the loader
+                // advertises them, so a desktop-booted engine can bind an XrSession later
+                // in the same process — VR is no longer decided at boot.
+                if( extensionName == VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME )
+                    enabledExtensions.push_back( VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME );
+                if( extensionName == VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME )
+                    enabledExtensions.push_back(
+                        VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME );
+                if( extensionName == VK_KHR_EXTERNAL_FENCE_CAPABILITIES_EXTENSION_NAME )
+                    enabledExtensions.push_back( VK_KHR_EXTERNAL_FENCE_CAPABILITIES_EXTENSION_NAME );
 #ifdef VK_KHR_portability_enumeration
                 // Portability drivers (MoltenVK on macOS) are hidden by the loader
                 // unless this extension + the matching create flag are used;
@@ -1341,6 +1354,40 @@ namespace Ogre
                 outExtensions.push_back( "VK_KHR_present_mode_fifo_latest_ready" );
             else if( extensionName == "VK_EXT_present_mode_fifo_latest_ready" )
                 outExtensions.push_back( "VK_EXT_present_mode_fifo_latest_ready" );
+        }
+
+        // Jahshaka (VR-START-1): THE OPENXR INTEROP SET, device half - what
+        // XR_KHR_vulkan_enable's xrGetVulkanDeviceExtensionsKHR asks of the application
+        // (Monado 25 and WiVRn 26 both list exactly these nine). Most are core in 1.1/1.2
+        // and change nothing; the three _fd ones let the runtime share swapchain memory
+        // and semaphores with us. Enabled whenever the driver advertises them, on every
+        // device, so an XrSession can be bound to the engine's OWN device after a
+        // desktop boot (and again after a headset reconnect) instead of the runtime
+        // having to create the device at boot. A separate pass, like the one above.
+        {
+            static const char *const kXrInterop[] = {
+                VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+                VK_KHR_EXTERNAL_FENCE_EXTENSION_NAME,
+                VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+                VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
+                VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
+                VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,
+#if !defined( _WIN32 ) && !defined( __APPLE__ )
+                VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+                VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
+                VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME,
+#endif
+            };
+            for( const char *want : kXrInterop )
+            {
+                bool advertised = false, already = false;
+                for( const VkExtensionProperties &ext : availableExtensions )
+                    advertised = advertised || strcmp( ext.extensionName, want ) == 0;
+                for( const char *have : outExtensions )
+                    already = already || strcmp( have, want ) == 0;
+                if( advertised && !already )
+                    outExtensions.push_back( want );
+            }
         }
 
 #if OGRE_DEBUG_MODE >= OGRE_DEBUG_HIGH

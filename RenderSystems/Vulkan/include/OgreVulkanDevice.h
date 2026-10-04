@@ -90,7 +90,9 @@ namespace Ogre
        We need the ability to re-enumerate devices to handle physical device removing, that
        requires fresh VkInstance instance, as otherwise Vulkan returns obsolete physical devices list.
     */
-    class VulkanInstance final
+    // Jahshaka (VR-START-1): EXPORTED, so the OpenXR connection can check the
+    // runtime's instance-extension list against what this instance enabled.
+    class _OgreVulkanExport VulkanInstance final
     {
     public:
         static void enumerateExtensionsAndLayers( VulkanExternalInstance *externalInstance );
