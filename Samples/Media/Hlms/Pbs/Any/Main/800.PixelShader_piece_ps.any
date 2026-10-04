@@ -694,6 +694,12 @@
 			finalColour += midf3_c( material.emissive.xyz );
 		@end
 	@end
+	/// Jahshaka fork (TORNADO-1): a custom piece's own emissive term, ADDED after the
+	/// material's (colour x map) and outside its property gate, so a datablock with
+	/// no emissive of its own can still emit. Without this hook a piece could not
+	/// write emissive at all: custom_ps_preLights runs before this block and the
+	/// material buffer is read-only. Expands to nothing unless a piece defines it.
+	@insertpiece( custom_ps_emissive )
 @end
 
 @piece( CubemapManualPcc )
