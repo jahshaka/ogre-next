@@ -62,8 +62,6 @@ namespace Ogre
         FastArray<VkExtensionProperties> instanceExtensions;
     };
 
-    struct VulkanDeviceCreationRequest;
-
     /// Use it to pass an external device
     ///
     /// See VulkanExternalInstance on extensions verification.
@@ -74,16 +72,6 @@ namespace Ogre
         FastArray<VkExtensionProperties> deviceExtensions;
         VkQueue graphicsQueue;
         VkQueue presentQueue;
-
-        /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): OPTIONAL. When the caller built this device
-        /// from VulkanDevice::buildDeviceCreationRequest() (the OpenXR route:
-        /// xrCreateVulkanDeviceKHR is handed exactly the VkDeviceCreateInfo Ogre
-        /// would have used), point this at that request and Ogre records the
-        /// features that were actually ENABLED instead of re-querying what the
-        /// physical device merely SUPPORTS. Without it the old behaviour stands:
-        /// Ogre believes the hardware's capabilities and can compile shaders using
-        /// features the handed-in device never enabled.
-        const VulkanDeviceCreationRequest *creationRequest = 0;
     };
 
     /**
@@ -265,13 +253,12 @@ namespace Ogre
         /// enabled under AddressSanitizer, on the very GPU where the same call
         /// succeeds without it). A process-wide static like Mesh::
         /// msOptimizeForShadowMapping, because the device can be built before any
-        /// render system exists (the OpenXR route calls buildDeviceCreationRequest):
-        /// the application sets it before it loads the render system. Default true.
+        /// render system exists: the application sets it before it loads the render
+        /// system. Default true.
         static bool msRayQueryAllowed;
 
         /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the device-extension names createDevice()
-        /// would request on this physical device, in its exact order. createDevice()
-        /// calls this, so an external creator that calls it too cannot drift.
+        /// would request on this physical device, in its exact order.
         static void fillDeviceExtensionRequest(
             VkPhysicalDevice physicalDevice,
             const FastArray<VkExtensionProperties> &availableExtensions,
@@ -282,22 +269,6 @@ namespace Ogre
         /// fillDeviceFeatures() calls this.
         static void fillDeviceFeaturesFor( VkPhysicalDevice physicalDevice,
                                            VkPhysicalDeviceFeatures &outFeatures );
-
-        /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): EVERYTHING vkCreateDevice would have been
-        /// given by createDevice() - the extension list, the base features and the
-        /// whole VkPhysicalDeviceFeatures2 pNext chain - filled into a caller-owned
-        /// request, so an external device creator (OpenXR's xrCreateVulkanDeviceKHR)
-        /// can create a device Ogre will believe.
-        ///
-        /// Call it AFTER the render system exists (the plugin's construction runs
-        /// VulkanInstance::enumerateExtensionsAndLayers, which is what decides
-        /// whether VK_KHR_get_physical_device_properties2 is usable) and BEFORE the
-        /// first createRenderWindow. The request OWNS its chain and the chain points
-        /// into it: never copy a filled request, pass it by pointer/reference.
-        static void buildDeviceCreationRequest(
-            VkInstance instance, VkPhysicalDevice physicalDevice,
-            const FastArray<VkExtensionProperties> &availableExtensions,
-            VulkanDeviceCreationRequest &outRequest );
 
         bool hasDeviceExtension( const IdString extension ) const;
 
@@ -327,9 +298,7 @@ namespace Ogre
 
     private:
         /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the one implementation of the
-        /// VkPhysicalDeviceFeatures2 pNext chain, shared by the plain path
-        /// (fillDeviceFeatures2) and the exported request
-        /// (buildDeviceCreationRequest) so the two can never disagree.
+        /// VkPhysicalDeviceFeatures2 pNext chain (fillDeviceFeatures2's).
         static bool buildFeatureChain(
             VkInstance instance, VkPhysicalDevice physicalDevice,
             const FastArray<IdString> &sortedDeviceExtensions,
@@ -338,49 +307,6 @@ namespace Ogre
             VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
             VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures,
             RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures );
-    };
-
-    /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): a caller-owned copy of everything
-    /// VulkanDevice::createDevice() hands to vkCreateDevice. Fill it with
-    /// VulkanDevice::buildDeviceCreationRequest(), point a VkDeviceCreateInfo at
-    /// extensions.begin() / pNext() / features, create the device (yourself or via a
-    /// third party such as OpenXR), then hand the SAME request back to Ogre through
-    /// VulkanExternalDevice::creationRequest.
-    ///
-    /// The pNext chain points into this object, so it is non-copyable by declaration
-    /// (below). Keep it alive for as long as Ogre holds the external device.
-    struct _OgreVulkanExport VulkanDeviceCreationRequest
-    {
-        /// Static string literals, Ogre's order. Safe to hand to Vulkan directly.
-        FastArray<const char *> extensions;
-        /// The same names, sorted, in the form Ogre keeps them (VulkanDevice::mDeviceExtensions).
-        FastArray<IdString> sortedExtensions;
-
-        VkPhysicalDeviceFeatures features;
-
-        VkPhysicalDeviceFeatures2 features2;
-        VkPhysicalDevice16BitStorageFeatures storage16Bit;
-        VkPhysicalDeviceShaderFloat16Int8Features shaderFloat16Int8;
-        VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT cacheControl;
-        VulkanDevice::RayQueryVkFeatures rayQuery;
-        VulkanDevice::ExtraVkFeatures extraFeatures;
-#ifdef VK_KHR_present_mode_fifo_latest_ready
-        VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR fifoLatestReady;
-#endif
-        /// False when VK_KHR_get_physical_device_properties2 is unavailable: there is
-        /// no chain at all and vkCreateDevice must take pEnabledFeatures = &features.
-        bool hasFeatures2;
-
-        VulkanDeviceCreationRequest();
-
-        /// NOT COPYABLE, and the compiler says so rather than this comment: the pNext
-        /// chain above points INTO this object, so a copy would hand vkCreateDevice a
-        /// chain that walks the original - or a dead one.
-        VulkanDeviceCreationRequest( const VulkanDeviceCreationRequest & ) = delete;
-        VulkanDeviceCreationRequest &operator=( const VulkanDeviceCreationRequest & ) = delete;
-
-        /// VkDeviceCreateInfo::pNext (null when !hasFeatures2).
-        const void *pNext() const { return hasFeatures2 ? &features2 : 0; }
     };
 
     // Mask away read flags from srcAccessMask

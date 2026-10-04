@@ -632,8 +632,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanDevice::fillDeviceFeatures()
     {
-        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): one implementation, shared with the exported
-        // creation request - see fillDeviceFeaturesFor below.
+        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the body lives in fillDeviceFeaturesFor below.
         fillDeviceFeaturesFor( mPhysicalDevice, mDeviceFeatures );
     }
     //-------------------------------------------------------------------------
@@ -874,79 +873,6 @@ namespace Ogre
                                   mRayQueryFeatures, mDeviceExtraFeatures );
     }
     //-------------------------------------------------------------------------
-    VulkanDeviceCreationRequest::VulkanDeviceCreationRequest()
-    {
-        memset( &features, 0, sizeof( features ) );
-        memset( &features2, 0, sizeof( features2 ) );
-        memset( &storage16Bit, 0, sizeof( storage16Bit ) );
-        memset( &shaderFloat16Int8, 0, sizeof( shaderFloat16Int8 ) );
-        memset( &cacheControl, 0, sizeof( cacheControl ) );
-        memset( &rayQuery, 0, sizeof( rayQuery ) );
-        memset( &extraFeatures, 0, sizeof( extraFeatures ) );
-#ifdef VK_KHR_present_mode_fifo_latest_ready
-        memset( &fifoLatestReady, 0, sizeof( fifoLatestReady ) );
-#endif
-        hasFeatures2 = false;
-    }
-    //-------------------------------------------------------------------------
-    void VulkanDevice::buildDeviceCreationRequest(
-        VkInstance instance, VkPhysicalDevice physicalDevice,
-        const FastArray<VkExtensionProperties> &availableExtensions,
-        VulkanDeviceCreationRequest &outRequest )
-    {
-        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): createDevice() for a device we are NOT the ones
-        // creating. Same extension list, same base features, same feature chain, same
-        // order - the only difference is that the result is handed back to the caller
-        // instead of to vkCreateDevice.
-        fillDeviceExtensionRequest( physicalDevice, availableExtensions, outRequest.extensions );
-
-        outRequest.sortedExtensions.clear();
-        outRequest.sortedExtensions.reserve( outRequest.extensions.size() );
-        for( const char *ext : outRequest.extensions )
-        {
-            LogManager::getSingleton().logMessage(
-                "Vulkan: External device creation requests device extension: " + String( ext ) );
-            outRequest.sortedExtensions.push_back( ext );
-        }
-        std::sort( outRequest.sortedExtensions.begin(), outRequest.sortedExtensions.end() );
-
-        fillDeviceFeaturesFor( physicalDevice, outRequest.features );
-
-#ifdef VK_KHR_present_mode_fifo_latest_ready
-        makeVkStruct( outRequest.fifoLatestReady,
-                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR );
-        outRequest.fifoLatestReady.presentModeFifoLatestReady = VK_TRUE;
-#endif
-
-        outRequest.hasFeatures2 = buildFeatureChain(
-            instance, physicalDevice, outRequest.sortedExtensions, outRequest.features2,
-            outRequest.storage16Bit, outRequest.shaderFloat16Int8, outRequest.cacheControl,
-            outRequest.rayQuery, outRequest.extraFeatures );
-
-        if( outRequest.hasFeatures2 )
-        {
-            outRequest.features2.features = outRequest.features;
-#ifdef VK_KHR_present_mode_fifo_latest_ready
-            // createDevice()'s own ordering: this one goes on AFTER the query, at the
-            // head of the chain (fork d014b064f+1a64cd1d8 (was 0013)).
-            bool bHasFifoLatestReady = false;
-            for( const char *ext : outRequest.extensions )
-            {
-                if( strcmp( ext, "VK_KHR_present_mode_fifo_latest_ready" ) == 0 ||
-                    strcmp( ext, "VK_EXT_present_mode_fifo_latest_ready" ) == 0 )
-                {
-                    bHasFifoLatestReady = true;
-                }
-            }
-            if( bHasFifoLatestReady )
-            {
-                outRequest.fifoLatestReady.pNext = outRequest.features2.pNext;
-                outRequest.features2.pNext = &outRequest.fifoLatestReady;
-            }
-#endif
-        }
-    }
-    //-------------------------------------------------------------------------
     void VulkanDevice::destroyQueues( FastArray<VulkanQueue> &queueArray )
     {
         FastArray<VulkanQueue>::iterator itor = queueArray.begin();
@@ -1075,61 +1001,6 @@ namespace Ogre
             VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT deviceCacheControlFeatures;
             fillDeviceFeatures2( deviceFeatures2, device16BitStorageFeatures,
                                  deviceShaderFloat16Int8Features, deviceCacheControlFeatures );
-
-            // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the call above asked the PHYSICAL DEVICE what
-            // it SUPPORTS. On an external device that is not what was ENABLED: the
-            // device belongs to somebody else (an OpenXR runtime), and believing the
-            // hardware makes Ogre compile shaders against features - shaderFloat16 and
-            // 16-bit storage decide RSC_SHADER_FLOAT16, which changes both the Hlms
-            // variants and the shader-cache fingerprint - the device never enabled.
-            // When the caller built that device from OUR creation request (the only way
-            // to get this right), the request IS the enabled set.
-            if( externalDevice->creationRequest )
-            {
-                const VulkanDeviceCreationRequest &req = *externalDevice->creationRequest;
-                // The BASE VkPhysicalDeviceFeatures as well: setPhysicalDevice() filled
-                // mDeviceFeatures from fillDeviceFeatures(), i.e. from what the GPU
-                // supports, and on an external device that is again not what was
-                // enabled. Today the two agree (the request is built by the same
-                // function on the same physical device), but only by construction - a
-                // caller that trims the request would leave Ogre believing in geometry
-                // or tessellation shaders that were never enabled, and mSupportedStages
-                // is derived from exactly those two bits.
-                mDeviceFeatures = req.features;
-                mSupportedStages = 0xFFFFFFFF;
-                if( !mDeviceFeatures.geometryShader )
-                    mSupportedStages ^= VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
-                if( !mDeviceFeatures.tessellationShader )
-                {
-                    mSupportedStages ^= VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT |
-                                        VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT;
-                }
-
-                mDeviceExtraFeatures = req.extraFeatures;
-                mRayQueryFeatures = req.rayQuery;
-                // The copied chain pointed into the caller's request; nothing walks it
-                // after vkCreateDevice, so do not keep the dangling links.
-                mRayQueryFeatures.accelStruct.pNext = 0;
-                mRayQueryFeatures.rayQuery.pNext = 0;
-                mRayQueryFeatures.bufferDeviceAddress.pNext = 0;
-                mRayQueryFeatures.descriptorIndexing.pNext = 0;
-                LogManager::getSingleton().logMessage(
-                    "Vulkan: External device features taken from the caller's creation "
-                    "request (what was enabled), not from what the GPU supports." );
-                LogManager::getSingleton().logMessage(
-                    String( "Vulkan: hardware ray query " ) +
-                    ( mRayQueryFeatures.enabled ? "AVAILABLE (as enabled on the external device)"
-                                                : "not available (not enabled on the external "
-                                                  "device)" ) );
-            }
-            else
-            {
-                LogManager::getSingleton().logMessage(
-                    "Vulkan: [WARNING] External device supplied with no creation request. "
-                    "Ogre will assume every feature the physical device SUPPORTS was "
-                    "enabled on it - see VulkanDevice::buildDeviceCreationRequest.",
-                    LML_CRITICAL );
-            }
         }
 
         vkGetPhysicalDeviceProperties( mPhysicalDevice, &mDeviceProperties );
@@ -1267,10 +1138,8 @@ namespace Ogre
         VkPhysicalDevice physicalDevice, const FastArray<VkExtensionProperties> &availableExtensions,
         FastArray<const char *> &outExtensions )
     {
-        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): lifted verbatim out of createDevice() so that an
-        // EXTERNAL device creator (OpenXR's xrCreateVulkanDeviceKHR) asks for exactly
-        // what Ogre would have asked for. createDevice() is now its only other caller,
-        // which is what keeps the two lists from drifting apart.
+        // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): lifted out of createDevice(), its one caller
+        // (the external-creator exporter it once also served was deleted by VR-START-1).
         outExtensions.clear();
         for( const VkExtensionProperties &ext : availableExtensions )
         {
