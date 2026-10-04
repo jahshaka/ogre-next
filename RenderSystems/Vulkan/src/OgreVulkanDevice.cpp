@@ -277,6 +277,7 @@ namespace Ogre
                                     RenderSystem *renderSystem ) :
         mVkInstance( externalInstance ? externalInstance->instance : nullptr ),
         mVkInstanceIsExternal( externalInstance && externalInstance->instance ),
+        mApiVersion( 0u ),
         CreateDebugReportCallback( 0 ),
         DestroyDebugReportCallback( 0 ),
         mDebugReportCallback( 0 ),
@@ -337,6 +338,7 @@ namespace Ogre
                 "Vulkan: Instance apiVersion " +
                 StringConverter::toString( VK_VERSION_MAJOR( appInfo.apiVersion ) ) + "." +
                 StringConverter::toString( VK_VERSION_MINOR( appInfo.apiVersion ) ) );
+            mApiVersion = appInfo.apiVersion;
 
             VkInstanceCreateInfo createInfo;
             makeVkStruct( createInfo, VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO );

@@ -101,6 +101,10 @@ namespace Ogre
     public:
         VkInstance mVkInstance;
         bool mVkInstanceIsExternal;
+        /// Jahshaka (VR-START-1): the VkApplicationInfo::apiVersion this instance was
+        /// created with (0 for an external instance - its creator knows). An OpenXR
+        /// runtime's XR_KHR_vulkan_enable minimum is checked against it.
+        uint32 mApiVersion;
 
         FastArray<VulkanPhysicalDevice> mVulkanPhysicalDevices;
 
