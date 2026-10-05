@@ -323,6 +323,8 @@ namespace Ogre {
 
         pLog->logMessage( " * Shader 16-bit floating point (half): " +
                           StringConverter::toString( hasCapability( RSC_SHADER_FLOAT16 ), true ) );
+        pLog->logMessage( " * Multiview: " +
+                          StringConverter::toString( hasCapability( RSC_MULTIVIEW ), true ) );
 
         if( hasCapability( RSC_COMPUTE_PROGRAM ) )
         {

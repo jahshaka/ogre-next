@@ -714,6 +714,7 @@ namespace Ogre
         VkPhysicalDevice16BitStorageFeatures &device16BitStorageFeatures,
         VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
         VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures,
+        VkPhysicalDeviceMultiviewFeatures &deviceMultiviewFeatures,
         RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures )
     {
         // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): this WAS fillDeviceFeatures2()'s body. It is a
@@ -737,6 +738,7 @@ namespace Ogre
                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES );
         makeVkStruct( deviceCacheControlFeatures,
                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES_EXT );
+        makeVkStruct( deviceMultiviewFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES );
 
         PFN_vkGetPhysicalDeviceFeatures2KHR GetPhysicalDeviceFeatures2KHR =
             (PFN_vkGetPhysicalDeviceFeatures2KHR)vkGetInstanceProcAddr(
@@ -757,6 +759,13 @@ namespace Ogre
         {
             *lastNext = &deviceCacheControlFeatures;
             lastNext = &deviceCacheControlFeatures.pNext;
+        }
+        // MULTIVIEW (VK_KHR_multiview; core in Vulkan 1.1, requested as the extension so a 1.0
+        // instance gets it too): chained on the extension it belongs to.
+        if( hasExt( VK_KHR_MULTIVIEW_EXTENSION_NAME ) )
+        {
+            *lastNext = &deviceMultiviewFeatures;
+            lastNext = &deviceMultiviewFeatures.pNext;
         }
 
         // Jahshaka (fork d014b064f (was 0038)): the ray-query feature structs. Chained only
@@ -803,6 +812,12 @@ namespace Ogre
         outExtraFeatures.shaderInt8 = deviceShaderFloat16Int8Features.shaderInt8;
         outExtraFeatures.pipelineCreationCacheControl =
             deviceCacheControlFeatures.pipelineCreationCacheControl;
+        // The query FILLED the struct with everything the driver can do, and the chain goes
+        // straight to vkCreateDevice: keep `multiview` alone. Its geometry/tessellation
+        // companions are not used by any pass and stay off.
+        outExtraFeatures.multiview = deviceMultiviewFeatures.multiview;
+        deviceMultiviewFeatures.multiviewGeometryShader = VK_FALSE;
+        deviceMultiviewFeatures.multiviewTessellationShader = VK_FALSE;
 
         // Jahshaka (fork d014b064f (was 0038)): the query above FILLED these structs with
         // everything the driver can do, and this same chain is handed straight to
@@ -866,13 +881,14 @@ namespace Ogre
         VkPhysicalDeviceFeatures2 &deviceFeatures2,
         VkPhysicalDevice16BitStorageFeatures &device16BitStorageFeatures,
         VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
-        VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures )
+        VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures,
+        VkPhysicalDeviceMultiviewFeatures &deviceMultiviewFeatures )
     {
         // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the chain is built by the shared builder above.
         return buildFeatureChain( mInstance->mVkInstance, mPhysicalDevice, mDeviceExtensions,
                                   deviceFeatures2, device16BitStorageFeatures,
                                   deviceShaderFloat16Int8Features, deviceCacheControlFeatures,
-                                  mRayQueryFeatures, mDeviceExtraFeatures );
+                                  deviceMultiviewFeatures, mRayQueryFeatures, mDeviceExtraFeatures );
     }
     //-------------------------------------------------------------------------
     void VulkanDevice::destroyQueues( FastArray<VulkanQueue> &queueArray )
@@ -1001,8 +1017,10 @@ namespace Ogre
             VkPhysicalDevice16BitStorageFeatures device16BitStorageFeatures;
             VkPhysicalDeviceShaderFloat16Int8Features deviceShaderFloat16Int8Features;
             VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT deviceCacheControlFeatures;
+            VkPhysicalDeviceMultiviewFeatures deviceMultiviewFeatures;
             fillDeviceFeatures2( deviceFeatures2, device16BitStorageFeatures,
-                                 deviceShaderFloat16Int8Features, deviceCacheControlFeatures );
+                                 deviceShaderFloat16Int8Features, deviceCacheControlFeatures,
+                                 deviceMultiviewFeatures );
         }
 
         vkGetPhysicalDeviceProperties( mPhysicalDevice, &mDeviceProperties );
@@ -1156,6 +1174,8 @@ namespace Ogre
                 outExtensions.push_back( VK_EXT_SHADER_SUBGROUP_VOTE_EXTENSION_NAME );
             else if( extensionName == VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME )
                 outExtensions.push_back( VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME );
+            else if( extensionName == VK_KHR_MULTIVIEW_EXTENSION_NAME )
+                outExtensions.push_back( VK_KHR_MULTIVIEW_EXTENSION_NAME );
             else if( extensionName == VK_KHR_STORAGE_BUFFER_STORAGE_CLASS_EXTENSION_NAME )
             {
                 // Required by VK_KHR_16bit_storage
@@ -1352,6 +1372,7 @@ namespace Ogre
         VkPhysicalDevice16BitStorageFeatures device16BitStorageFeatures;
         VkPhysicalDeviceShaderFloat16Int8Features deviceShaderFloat16Int8Features;
         VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT deviceCacheControlFeatures;
+        VkPhysicalDeviceMultiviewFeatures deviceMultiviewFeatures;
 #ifdef VK_KHR_present_mode_fifo_latest_ready
         // Jahshaka fork d014b064f+1a64cd1d8 (was 0013): the present mode is legal only when its feature
         // was enabled at device creation. Guarded on the SDK macro so an older
@@ -1363,7 +1384,8 @@ namespace Ogre
         fifoLatestReadyFeature.presentModeFifoLatestReady = VK_TRUE;
 #endif
         if( fillDeviceFeatures2( deviceFeatures2, device16BitStorageFeatures,
-                                 deviceShaderFloat16Int8Features, deviceCacheControlFeatures ) )
+                                 deviceShaderFloat16Int8Features, deviceCacheControlFeatures,
+                                 deviceMultiviewFeatures ) )
         {
             createInfo.pNext = &deviceFeatures2;
             deviceFeatures2.features = mDeviceFeatures;

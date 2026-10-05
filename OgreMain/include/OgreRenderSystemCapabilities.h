@@ -259,6 +259,14 @@ namespace Ogre
         /// Metal: Always supported.
         RSC_SHADER_FLOAT16 = OGRE_CAPS_VALUE(CAPS_CATEGORY_COMMON_3, 15),
         RSC_UMA            = OGRE_CAPS_VALUE(CAPS_CATEGORY_COMMON_3, 16),
+        /// MULTIVIEW: a render pass can broadcast every draw to several views, each view one
+        /// array layer of every attachment (RenderPassDescriptor::mNumViews). Shaders read
+        /// the view in gl_ViewIndex (GL_EXT_multiview) and Hlms sets `hlms_multiview`.
+        ///
+        /// Vulkan: VK_KHR_multiview's `multiview` feature (core in 1.1).
+        ///
+        /// Others: Unsupported.
+        RSC_MULTIVIEW      = OGRE_CAPS_VALUE(CAPS_CATEGORY_COMMON_3, 17),
 
         // ***** DirectX specific caps *****
         /// Is DirectX feature "per stage constants" supported

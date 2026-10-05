@@ -143,6 +143,9 @@ namespace Ogre
 
             // VkPhysicalDevicePipelineCreationCacheControlFeatures
             VkBool32 pipelineCreationCacheControl;
+
+            // VkPhysicalDeviceMultiviewFeatures (VK_KHR_multiview, core in 1.1)
+            VkBool32 multiview;
         };
 
         /// Jahshaka (fork d014b064f (was 0038)): the feature structs a hardware ray-query tier
@@ -223,7 +226,8 @@ namespace Ogre
             VkPhysicalDeviceFeatures2 &deviceFeatures2,
             VkPhysicalDevice16BitStorageFeatures &device16BitStorageFeatures,
             VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
-            VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures );
+            VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures,
+            VkPhysicalDeviceMultiviewFeatures &deviceMultiviewFeatures );
 
         static void destroyQueues( FastArray<VulkanQueue> &queueArray );
 
@@ -310,6 +314,7 @@ namespace Ogre
             VkPhysicalDevice16BitStorageFeatures &device16BitStorageFeatures,
             VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
             VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures,
+            VkPhysicalDeviceMultiviewFeatures &deviceMultiviewFeatures,
             RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures );
     };
 
