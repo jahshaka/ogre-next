@@ -2456,6 +2456,10 @@ namespace Ogre
         const CompositorShadowNode *getCurrentShadowNode() const { return mCurrentShadowNode; }
 
         bool isUsingInstancedStereo() const;
+        /// True when the current scene pass is MULTIVIEW (CompositorPassDef::mNumViews > 1):
+        /// the views are broadcast by the render pass, so the render queue draws each object
+        /// once even when isUsingInstancedStereo() (the eyes are views, not instances).
+        bool isUsingMultiview() const;
 
         /** Add a listener which will get called back on scene manager events.
          */

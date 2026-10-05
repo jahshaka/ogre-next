@@ -1323,6 +1323,10 @@ namespace Ogre
         static const IdString EmulateClipDistances;
         static const IdString DualParaboloidMapping;
         static const IdString InstancedStereo;
+        /// The view count of a MULTIVIEW scene pass (CompositorPassDef::mNumViews > 1);
+        /// shaders read the view in gl_ViewIndex. With InstancedStereo also set, the eyes
+        /// are the views and each object is drawn ONCE (not once per eye).
+        static const IdString Multiview;
         static const IdString ViewMatrix;
         static const IdString StaticBranchLights;
         static const IdString StaticBranchShadowMapLights;

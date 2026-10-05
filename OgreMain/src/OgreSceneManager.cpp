@@ -3557,6 +3557,12 @@ namespace Ogre
         return retVal;
     }
     //---------------------------------------------------------------------
+    bool SceneManager::isUsingMultiview() const
+    {
+        return mCurrentPass && mCurrentPass->getType() == PASS_SCENE &&
+               mCurrentPass->getDefinition()->mNumViews > 1u;
+    }
+    //---------------------------------------------------------------------
     void SceneManager::addListener( Listener *newListener ) { mListeners.push_back( newListener ); }
     //---------------------------------------------------------------------
     void SceneManager::removeListener( Listener *delListener )

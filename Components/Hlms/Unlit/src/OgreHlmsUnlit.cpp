@@ -668,6 +668,8 @@ namespace Ogre
 
             if( passSceneDef->mInstancedStereo )
                 setProperty( kNoTid, HlmsBaseProp::InstancedStereo, 1 );
+            if( passSceneDef->mNumViews > 1u )
+                setProperty( kNoTid, HlmsBaseProp::Multiview, passSceneDef->mNumViews );
         }
         const bool isInstancedStereo = passSceneDef && passSceneDef->mInstancedStereo;
 

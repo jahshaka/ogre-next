@@ -694,7 +694,9 @@ namespace Ogre
         else if( mVaoManager->supportsBaseInstance() )
             baseInstanceAndIndirectBuffers = 1;
 
-        const bool isUsingInstancedStereo = mSceneManager->isUsingInstancedStereo();
+        // Under MULTIVIEW the eyes are views of the render pass, not instances.
+        const bool isUsingInstancedStereo =
+            mSceneManager->isUsingInstancedStereo() && !mSceneManager->isUsingMultiview();
         const uint32 instancesPerDraw = isUsingInstancedStereo ? 2u : 1u;
         const uint32 baseInstanceShift = isUsingInstancedStereo ? 1u : 0u;
 
@@ -875,7 +877,9 @@ namespace Ogre
         else if( mVaoManager->supportsBaseInstance() )
             baseInstanceAndIndirectBuffers = 1;
 
-        const bool isUsingInstancedStereo = mSceneManager->isUsingInstancedStereo();
+        // Under MULTIVIEW the eyes are views of the render pass, not instances.
+        const bool isUsingInstancedStereo =
+            mSceneManager->isUsingInstancedStereo() && !mSceneManager->isUsingMultiview();
         const uint32 instancesPerDraw = isUsingInstancedStereo ? 2u : 1u;
         const uint32 baseInstanceShift = isUsingInstancedStereo ? 1u : 0u;
         uint32 instanceCount = instancesPerDraw;
@@ -1042,7 +1046,9 @@ namespace Ogre
 
         const bool supportsBaseInstance = mVaoManager->supportsBaseInstance();
 
-        const bool isUsingInstancedStereo = mSceneManager->isUsingInstancedStereo();
+        // Under MULTIVIEW the eyes are views of the render pass, not instances.
+        const bool isUsingInstancedStereo =
+            mSceneManager->isUsingInstancedStereo() && !mSceneManager->isUsingMultiview();
         const uint32 instancesPerDraw = isUsingInstancedStereo ? 2u : 1u;
         const uint32 baseInstanceShift = isUsingInstancedStereo ? 1u : 0u;
 

@@ -126,6 +126,7 @@ namespace Ogre
     const IdString HlmsBaseProp::EmulateClipDistances = IdString( "hlms_emulate_clip_distances" );
     const IdString HlmsBaseProp::DualParaboloidMapping = IdString( "hlms_dual_paraboloid_mapping" );
     const IdString HlmsBaseProp::InstancedStereo = IdString( "hlms_instanced_stereo" );
+    const IdString HlmsBaseProp::Multiview = IdString( "hlms_multiview" );
     const IdString HlmsBaseProp::ViewMatrix = IdString( "hlms_view_matrix" );
     const IdString HlmsBaseProp::StaticBranchLights = IdString( "hlms_static_branch_lights" );
     const IdString HlmsBaseProp::StaticBranchShadowMapLights =
@@ -3531,6 +3532,8 @@ namespace Ogre
 
                 if( passSceneDef->mInstancedStereo )
                     setProperty( kNoTid, HlmsBaseProp::InstancedStereo, 1 );
+                if( passSceneDef->mNumViews > 1u )
+                    setProperty( kNoTid, HlmsBaseProp::Multiview, passSceneDef->mNumViews );
 
                 if( passSceneDef->mGenNormalsGBuf )
                     setProperty( kNoTid, HlmsBaseProp::GenNormalsGBuf, 1 );
