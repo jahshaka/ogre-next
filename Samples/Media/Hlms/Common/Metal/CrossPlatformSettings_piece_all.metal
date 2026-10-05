@@ -184,6 +184,10 @@ inline float2 uintBitsToFloat( uint2 x )
 #define OGRE_Load3D( tex, iuv, lod ) tex.read( ushort3( iuv ), lod )
 
 #define OGRE_Load2DF16( tex, iuv, lod ) tex.read( iuv, lod )
+// SCREEN TEXTURES (one texel per target pixel). Multiview is Vulkan-only
+// (RSC_MULTIVIEW), so here they are always the plain 2D loads.
+#define OGRE_LoadScreen2D( tex, iuv, lod ) OGRE_Load2D( tex, iuv, lod )
+#define OGRE_LoadScreen2DF16( tex, iuv, lod ) OGRE_Load2DF16( tex, iuv, lod )
 #define OGRE_Load2DMSF16( tex, iuv, subsample ) tex.read( iuv, subsample )
 #define OGRE_SampleF16( tex, sampler, uv ) tex.sample( sampler, uv )
 #define OGRE_SampleLevelF16( tex, sampler, uv, lod ) tex.sample( sampler, uv, level( lod ) )

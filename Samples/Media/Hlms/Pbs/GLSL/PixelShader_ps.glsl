@@ -29,8 +29,8 @@ layout(std140) uniform;
 
 @property( hlms_use_prepass )
 	@property( !hlms_use_prepass_msaa )
-		vulkan_layout( ogre_t@value(gBuf_normals) )			uniform texture2D gBuf_normals;
-		vulkan_layout( ogre_t@value(gBuf_shadowRoughness) )	uniform texture2D gBuf_shadowRoughness;
+		vulkan_layout( ogre_t@value(gBuf_normals) )			uniform OGRE_ScreenTexture2D gBuf_normals;
+		vulkan_layout( ogre_t@value(gBuf_shadowRoughness) )	uniform OGRE_ScreenTexture2D gBuf_shadowRoughness;
 	@else
 		uniform sampler2DMS gBuf_normals;
 		uniform sampler2DMS gBuf_shadowRoughness;
@@ -38,7 +38,7 @@ layout(std140) uniform;
 	@end
 
 	@property( hlms_use_ssr )
-		vulkan_layout( ogre_t@value(ssrTexture) ) uniform texture2D ssrTexture;
+		vulkan_layout( ogre_t@value(ssrTexture) ) uniform OGRE_ScreenTexture2D ssrTexture;
 	@end
 @end
 

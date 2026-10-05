@@ -27,8 +27,11 @@
 	#define layout_constbuffer(x) layout( std140 )
 @end
 
-@property( hlms_instanced_stereo )
+@property( hlms_instanced_stereo && !hlms_multiview )
 	#extension GL_ARB_shader_viewport_layer_array: require
+@end
+@property( hlms_multiview )
+	#extension GL_EXT_multiview: require
 @end
 
 @property( GL_ARB_texture_buffer_range )
@@ -236,8 +239,16 @@
 @property( !hlms_instanced_stereo )
 	#define inVs_drawId drawId
 @else
-	#define inVs_drawId (drawId >> 1u)
-	#define inVs_stereoDrawId drawId
+	@property( !hlms_multiview )
+		#define inVs_drawId (drawId >> 1u)
+		#define inVs_stereoDrawId drawId
+	@else
+		// MULTIVIEW STEREO: each object is drawn once and the render pass broadcasts it to
+		// both views, so the eye is gl_ViewIndex. The instanced-stereo encoding
+		// (drawId << 1 | eye) is rebuilt so every `inVs_stereoDrawId & 0x01u` site reads it.
+		#define inVs_drawId drawId
+		#define inVs_stereoDrawId ((drawId << 1u) | uint( gl_ViewIndex ))
+	@end
 @end
 
 #define finalDrawId inVs_drawId
@@ -246,7 +257,14 @@
 	#define inVs_uv@n uv@n@end
 
 #define outVs_Position gl_Position
-#define outVs_viewportIndex gl_ViewportIndex
+@property( !hlms_multiview )
+	#define outVs_viewportIndex gl_ViewportIndex
+@else
+	// Under multiview both views share ONE viewport: the instanced-stereo viewport
+	// write lands in a dead private.
+	int ogreMultiviewNoViewportIndex;
+	#define outVs_viewportIndex ogreMultiviewNoViewportIndex
+@end
 @property( hlms_emulate_clip_distances )
 #define outVs_clipDistance0 outVs.clipDistance0
 @else
@@ -322,6 +340,19 @@
 #define OGRE_ddx( val ) dFdx( val )
 #define OGRE_ddy( val ) dFdy( val )
 #define OGRE_Load2D( tex, iuv, lod ) texelFetch( tex, ivec2( iuv ), lod )
+
+// SCREEN TEXTURES: a texture with one texel per pixel of the target (the prepass
+// G-buffers, the SSR result). Under multiview they hold one array layer per view
+// and are read at the fragment's own view.
+@property( hlms_multiview )
+	#define OGRE_ScreenTexture2D texture2DArray
+	#define OGRE_LoadScreen2D( tex, iuv, lod ) texelFetch( tex, ivec3( ivec2( iuv ), int( gl_ViewIndex ) ), lod )
+	#define OGRE_LoadScreen2DF16( tex, iuv, lod ) midf4_c( OGRE_LoadScreen2D( tex, iuv, lod ) )
+@else
+	#define OGRE_ScreenTexture2D texture2D
+	#define OGRE_LoadScreen2D( tex, iuv, lod ) OGRE_Load2D( tex, iuv, lod )
+	#define OGRE_LoadScreen2DF16( tex, iuv, lod ) OGRE_Load2DF16( tex, iuv, lod )
+@end
 #define OGRE_LoadArray2D( tex, iuv, arrayIdx, lod ) texelFetch( tex, ivec3( iuv, arrayIdx ), lod )
 #define OGRE_Load2DMS( tex, iuv, subsample ) texelFetch( tex, iuv, subsample )
 

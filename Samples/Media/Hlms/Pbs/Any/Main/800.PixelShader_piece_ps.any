@@ -477,7 +477,13 @@
 				pixelData.viewDir	= midf3_c( normalize( -inPs.pos ) );
 			@end
 		@else
-			if( gl_FragCoord.x > passBuf.rightEyePixelStartX )
+			@property( hlms_multiview )
+				// MULTIVIEW: both eyes rasterise at the same origin of their own layer,
+				// so the eye is the view, never the fragment's x.
+				if( gl_ViewIndex == 1 )
+			@else
+				if( gl_FragCoord.x > passBuf.rightEyePixelStartX )
+			@end
 				pixelData.viewDir = midf3_c( normalize( -inPs.pos + passBuf.leftToRightView.xyz ) );
 			else
 				pixelData.viewDir = midf3_c( normalize( -inPs.pos ) );
@@ -938,8 +944,8 @@
 				pixelData.normal = normalize( OGRE_Load2DMSF16( gBuf_normals, iFragCoord, gBufSubsample ).xyz * _h( 2.0 ) - _h( 1.0 ) );
 				midf2 shadowRoughness = OGRE_Load2DMSF16( gBuf_shadowRoughness, iFragCoord, gBufSubsample ).xy;
 			@else
-				pixelData.normal = normalize( OGRE_Load2DF16( gBuf_normals, iFragCoord, 0 ).xyz * _h( 2.0 ) - _h( 1.0 ) );
-				midf2 shadowRoughness = OGRE_Load2DF16( gBuf_shadowRoughness, iFragCoord, 0 ).xy;
+				pixelData.normal = normalize( OGRE_LoadScreen2DF16( gBuf_normals, iFragCoord, 0 ).xyz * _h( 2.0 ) - _h( 1.0 ) );
+				midf2 shadowRoughness = OGRE_LoadScreen2DF16( gBuf_shadowRoughness, iFragCoord, 0 ).xy;
 			@end
 
 			midf fShadow = shadowRoughness.x;
@@ -1039,7 +1045,7 @@
 
 			@property( hlms_use_ssr )
 				//TODO: SSR pass should be able to combine global & local cubemap.
-				float4 ssrReflection = OGRE_Load2D( ssrTexture, iFragCoord, 0 ).xyzw;
+				float4 ssrReflection = OGRE_LoadScreen2D( ssrTexture, iFragCoord, 0 ).xyzw;
 				/// JAHSHAKA fork 16d8e29d4 (was 0036): a screen-space reflection REPLACES the
 				/// environment term it supersedes, always -- it never adds to it.
 				/// The two are estimates of ONE integral (the radiance arriving
