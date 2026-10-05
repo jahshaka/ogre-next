@@ -431,6 +431,8 @@ namespace Ogre
         ushort mFragmentProgramConstantBoolCount;
         /// The number of simultaneous render targets supported
         ushort mNumMultiRenderTargets;
+        /// RSC_MULTIVIEW: the most views one render pass may broadcast to (0 = none).
+        uint8 mMaxMultiviewViews;
         /// Maximum texture width/height for 2D textures
         uint32 mMaxTextureResolution2D;
         /// Maximum texture width/height for 3D (volume) textures
@@ -552,6 +554,7 @@ namespace Ogre
 
         /// The number of simultaneous render targets supported
         void setNumMultiRenderTargets( ushort num ) { mNumMultiRenderTargets = num; }
+        void setMaxMultiviewViews( uint8 num ) { mMaxMultiviewViews = num; }
 
         ushort getNumWorldMatrices() const { return mNumWorldMatrices; }
 
@@ -583,6 +586,7 @@ namespace Ogre
 
         /// The number of simultaneous render targets supported
         ushort getNumMultiRenderTargets() const { return mNumMultiRenderTargets; }
+        uint8  getMaxMultiviewViews() const { return mMaxMultiviewViews; }
 
         /** Max number of textures per shader stage that can be fit in
             DescriptorSetTexture and DescriptorSetTexture2

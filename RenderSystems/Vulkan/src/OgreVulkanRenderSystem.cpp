@@ -886,7 +886,12 @@ namespace Ogre
             rsc->setCapability( RSC_VP_AND_RT_ARRAY_INDEX_FROM_ANY_SHADER );
 
         if( mDevice->mDeviceExtraFeatures.multiview )
+        {
             rsc->setCapability( RSC_MULTIVIEW );
+            // A view mask is a uint32 and a view is a bit: never more than 32 views.
+            rsc->setMaxMultiviewViews( static_cast<uint8>(
+                std::min<uint32>( mDevice->mDeviceExtraFeatures.maxMultiviewViewCount, 32u ) ) );
+        }
 
         rsc->setCapability( RSC_SHADER_RELAXED_FLOAT );
 
@@ -3567,7 +3572,7 @@ namespace Ogre
         uint32 viewMask = 0u;
         if( passPso.numViews > 1u )
         {
-            viewMask = ( 1u << passPso.numViews ) - 1u;
+            viewMask = passPso.numViews >= 32u ? 0xFFFFFFFFu : ( ( 1u << passPso.numViews ) - 1u );
             makeVkStruct( multiviewCi, VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO );
             multiviewCi.subpassCount = 1u;
             multiviewCi.pViewMasks = &viewMask;

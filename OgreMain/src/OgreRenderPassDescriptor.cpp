@@ -33,6 +33,9 @@ THE SOFTWARE.
 #include "OgreException.h"
 #include "OgreLogManager.h"
 #include "OgrePixelFormatGpuUtils.h"
+#include "OgreRenderSystem.h"
+#include "OgreRenderSystemCapabilities.h"
+#include "OgreRoot.h"
 #include "OgreStringConverter.h"
 #include "OgreTextureGpu.h"
 
@@ -416,6 +419,27 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void RenderPassDescriptor::checkMultiview() const
     {
+        // THE DEVICE FIRST: one clear refusal instead of a shader compile failure or an
+        // invalid view mask further down (GL3+, D3D11 and Metal have no multiview).
+        const RenderSystem *renderSystem = Root::getSingleton().getRenderSystem();
+        const RenderSystemCapabilities *caps =
+            renderSystem ? renderSystem->getCapabilities() : 0;
+        if( !caps || !caps->hasCapability( RSC_MULTIVIEW ) )
+        {
+            OGRE_EXCEPT( Exception::ERR_RENDERINGAPI_ERROR,
+                         "Multiview (mNumViews = " + StringConverter::toString( mNumViews ) +
+                             ") requested but the RenderSystem does not support RSC_MULTIVIEW",
+                         "RenderPassDescriptor::checkMultiview" );
+        }
+        if( mNumViews > caps->getMaxMultiviewViews() )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                         "Multiview with " + StringConverter::toString( mNumViews ) +
+                             " views exceeds the device's maximum of " +
+                             StringConverter::toString( caps->getMaxMultiviewViews() ),
+                         "RenderPassDescriptor::checkMultiview" );
+        }
+
         // Every attachment must hold the views' layers: view v renders into slice + v.
         struct Check
         {
@@ -423,6 +447,15 @@ namespace Ogre
             {
                 if( !texture )
                     return;
+                // A cube view of several layers is illegal; the views are 2D array layers.
+                if( texture->getTextureType() == TextureTypes::TypeCube ||
+                    texture->getTextureType() == TextureTypes::TypeCubeArray )
+                {
+                    OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                                 "Multiview needs Type2DArray attachments; texture '" +
+                                     texture->getNameStr() + "' is a cubemap",
+                                 "RenderPassDescriptor::checkMultiview" );
+                }
                 if( uint32( slice ) + numViews > texture->getNumSlices() )
                 {
                     OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,

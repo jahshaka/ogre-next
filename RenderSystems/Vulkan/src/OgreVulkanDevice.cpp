@@ -816,6 +816,27 @@ namespace Ogre
         // straight to vkCreateDevice: keep `multiview` alone. Its geometry/tessellation
         // companions are not used by any pass and stay off.
         outExtraFeatures.multiview = deviceMultiviewFeatures.multiview;
+        outExtraFeatures.maxMultiviewViewCount = 0u;
+        if( outExtraFeatures.multiview )
+        {
+            PFN_vkGetPhysicalDeviceProperties2KHR GetPhysicalDeviceProperties2KHR =
+                (PFN_vkGetPhysicalDeviceProperties2KHR)vkGetInstanceProcAddr(
+                    instance, "vkGetPhysicalDeviceProperties2KHR" );
+            if( GetPhysicalDeviceProperties2KHR )
+            {
+                VkPhysicalDeviceMultiviewProperties multiviewProps;
+                makeVkStruct( multiviewProps, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES );
+                VkPhysicalDeviceProperties2 props2;
+                makeVkStruct( props2, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 );
+                props2.pNext = &multiviewProps;
+                GetPhysicalDeviceProperties2KHR( physicalDevice, &props2 );
+                outExtraFeatures.maxMultiviewViewCount = multiviewProps.maxMultiviewViewCount;
+            }
+            // No count, no multiview: a view mask needs a known ceiling.
+            if( !outExtraFeatures.maxMultiviewViewCount )
+                outExtraFeatures.multiview = VK_FALSE;
+        }
+        deviceMultiviewFeatures.multiview = outExtraFeatures.multiview;
         deviceMultiviewFeatures.multiviewGeometryShader = VK_FALSE;
         deviceMultiviewFeatures.multiviewTessellationShader = VK_FALSE;
 

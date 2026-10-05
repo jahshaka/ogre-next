@@ -43,6 +43,7 @@ namespace Ogre {
         , mStencilBufferBitDepth(0)
         , mNumVertexBlendMatrices(0)
         , mNumMultiRenderTargets(1)
+        , mMaxMultiviewViews(0)
         , mMaxTextureResolution2D(1024)
         , mMaxTextureResolution3D(512)
         , mMaxTextureResolutionCubemap(512)
@@ -324,7 +325,8 @@ namespace Ogre {
         pLog->logMessage( " * Shader 16-bit floating point (half): " +
                           StringConverter::toString( hasCapability( RSC_SHADER_FLOAT16 ), true ) );
         pLog->logMessage( " * Multiview: " +
-                          StringConverter::toString( hasCapability( RSC_MULTIVIEW ), true ) );
+                          StringConverter::toString( hasCapability( RSC_MULTIVIEW ), true ) +
+                          " (max views " + StringConverter::toString( mMaxMultiviewViews ) + ")" );
 
         if( hasCapability( RSC_COMPUTE_PROGRAM ) )
         {

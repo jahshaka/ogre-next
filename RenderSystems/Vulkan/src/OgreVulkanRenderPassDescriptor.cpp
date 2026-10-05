@@ -612,7 +612,8 @@ namespace Ogre
         uint32 viewMask = 0u;
         if( mNumViews > 1u )
         {
-            viewMask = ( 1u << mNumViews ) - 1u;
+            // checkMultiview bounds mNumViews by the device (at most 32): never 1 << 32.
+            viewMask = mNumViews >= 32u ? 0xFFFFFFFFu : ( ( 1u << mNumViews ) - 1u );
             makeVkStruct( multiviewCi, VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO );
             multiviewCi.subpassCount = 1u;
             multiviewCi.pViewMasks = &viewMask;

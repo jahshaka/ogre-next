@@ -146,6 +146,8 @@ namespace Ogre
 
             // VkPhysicalDeviceMultiviewFeatures (VK_KHR_multiview, core in 1.1)
             VkBool32 multiview;
+            // VkPhysicalDeviceMultiviewProperties::maxMultiviewViewCount (0 without multiview)
+            uint32 maxMultiviewViewCount;
         };
 
         /// Jahshaka (fork d014b064f (was 0038)): the feature structs a hardware ray-query tier
