@@ -142,6 +142,22 @@ namespace Ogre
         return CmpResult();
     }
     //-------------------------------------------------------------------------
+    const VkRenderPassMultiviewCreateInfo *VulkanCache::findMultiview(
+        const VkRenderPassCreateInfo &renderPassCi )
+    {
+        const VkBaseInStructure *next =
+            reinterpret_cast<const VkBaseInStructure *>( renderPassCi.pNext );
+        if( !next )
+            return 0;
+        if( next->sType != VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO || next->pNext )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                         "VulkanCache only understands a VkRenderPassMultiviewCreateInfo in pNext",
+                         "VulkanCache::findMultiview" );
+        }
+        return reinterpret_cast<const VkRenderPassMultiviewCreateInfo *>( next );
+    }
+    //-------------------------------------------------------------------------
     bool VulkanCache::VkRenderPassCreateInfoCmp::operator()( const VkRenderPassCreateInfo &a,
                                                              const VkRenderPassCreateInfo &b ) const
     {
@@ -149,6 +165,31 @@ namespace Ogre
 
         if( a.flags != b.flags )
             return a.flags < b.flags;
+
+        // MULTIVIEW: a different view mask is a different (incompatible) render pass.
+        {
+            const VkRenderPassMultiviewCreateInfo *mvA = VulkanCache::findMultiview( a );
+            const VkRenderPassMultiviewCreateInfo *mvB = VulkanCache::findMultiview( b );
+            if( ( mvA != 0 ) != ( mvB != 0 ) )
+                return mvA == 0;
+            if( mvA )
+            {
+                if( mvA->subpassCount != mvB->subpassCount )
+                    return mvA->subpassCount < mvB->subpassCount;
+                for( uint32 i = 0u; i < mvA->subpassCount; ++i )
+                {
+                    if( mvA->pViewMasks[i] != mvB->pViewMasks[i] )
+                        return mvA->pViewMasks[i] < mvB->pViewMasks[i];
+                }
+                if( mvA->correlationMaskCount != mvB->correlationMaskCount )
+                    return mvA->correlationMaskCount < mvB->correlationMaskCount;
+                for( uint32 i = 0u; i < mvA->correlationMaskCount; ++i )
+                {
+                    if( mvA->pCorrelationMasks[i] != mvB->pCorrelationMasks[i] )
+                        return mvA->pCorrelationMasks[i] < mvB->pCorrelationMasks[i];
+                }
+            }
+        }
         if( a.attachmentCount != b.attachmentCount )
             return a.attachmentCount < b.attachmentCount;
         for( size_t i = 0u; i < a.attachmentCount; ++i )
@@ -227,6 +268,12 @@ namespace Ogre
             }
             delete[] itor->first.pSubpasses;
             delete[] itor->first.pDependencies;
+            if( const VkRenderPassMultiviewCreateInfo *mv = findMultiview( itor->first ) )
+            {
+                // One allocation for the masks (view masks then correlation masks).
+                delete[] mv->pViewMasks;
+                delete mv;
+            }
 
             ++itor;
         }
@@ -317,6 +364,22 @@ namespace Ogre
                 rpciCopy.pDependencies = dependencies;
                 memcpy( dependencies, renderPassCi.pDependencies,
                         rpciCopy.dependencyCount * sizeof( VkSubpassDependency ) );
+            }
+
+            if( const VkRenderPassMultiviewCreateInfo *mv = findMultiview( renderPassCi ) )
+            {
+                OGRE_ASSERT_LOW( mv->dependencyCount == 0u &&
+                                 "Multiview view offsets are not supported by the cache" );
+                VkRenderPassMultiviewCreateInfo *mvCopy = new VkRenderPassMultiviewCreateInfo( *mv );
+                uint32 *masks = new uint32[mv->subpassCount + mv->correlationMaskCount + 1u];
+                memcpy( masks, mv->pViewMasks, mv->subpassCount * sizeof( uint32 ) );
+                memcpy( masks + mv->subpassCount, mv->pCorrelationMasks,
+                        mv->correlationMaskCount * sizeof( uint32 ) );
+                mvCopy->pViewMasks = masks;
+                mvCopy->pCorrelationMasks = masks + mv->subpassCount;
+                mvCopy->dependencyCount = 0u;
+                mvCopy->pViewOffsets = 0;
+                rpciCopy.pNext = mvCopy;
             }
 
             VkResult result =

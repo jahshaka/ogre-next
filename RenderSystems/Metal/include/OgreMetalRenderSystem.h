@@ -215,7 +215,8 @@ namespace Ogre
 
     protected:
         TextureGpu *createDepthBufferFor( TextureGpu *colourTexture, bool preferDepthTexture,
-                                          PixelFormatGpu depthBufferFormat, uint16 poolId ) override;
+                                          PixelFormatGpu depthBufferFormat, uint16 poolId,
+                                          uint8 numViews ) override;
 
     public:
         void _setTextureCoordCalculation( size_t unit, TexCoordCalcMethod m,

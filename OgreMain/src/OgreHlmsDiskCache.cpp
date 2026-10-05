@@ -45,7 +45,7 @@ THE SOFTWARE.
 
 namespace Ogre
 {
-    static const uint16 c_hlmsDiskCacheVersion = 6u;
+    static const uint16 c_hlmsDiskCacheVersion = 7u;  // 7: HlmsPassPso::numViews
 
     HlmsDiskCache::HlmsDiskCache( HlmsManager *hlmsManager ) :
         mTemplatesOutOfDate( false ),

@@ -58,6 +58,11 @@ namespace Ogre
             CmpResult cmp( const VkSubpassDependency &a, const VkSubpassDependency &b ) const;
         };
 
+        /// The VkRenderPassMultiviewCreateInfo in a create info's pNext chain, or null.
+        /// The only pNext the cache understands; anything else is refused loudly.
+        static const VkRenderPassMultiviewCreateInfo *findMultiview(
+            const VkRenderPassCreateInfo &renderPassCi );
+
         VulkanDevice *mDevice;
 
         typedef map<VkRenderPassCreateInfo, VkRenderPass, VkRenderPassCreateInfoCmp>::type

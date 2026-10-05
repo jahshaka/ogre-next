@@ -454,7 +454,8 @@ namespace Ogre
         void endRenderPassDescriptor() override;
 
         TextureGpu *createDepthBufferFor( TextureGpu *colourTexture, bool preferDepthTexture,
-                                          PixelFormatGpu depthBufferFormat, uint16 poolId ) override;
+                                          PixelFormatGpu depthBufferFormat, uint16 poolId,
+                                          uint8 numViews ) override;
 
         void notifySwapchainCreated( VulkanWindow *window );
         void notifySwapchainDestroyed( VulkanWindow *window );

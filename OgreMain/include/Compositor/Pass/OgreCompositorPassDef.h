@@ -131,6 +131,14 @@ namespace Ogre
         ViewportRect mVpRect[16];
         uint32       mNumViewports;
 
+        /// MULTIVIEW (RSC_MULTIVIEW): 0 or 1 = off; N > 1 = the pass renders N views,
+        /// view v into array layer `slice + v` of every attachment of its RTV, in ONE
+        /// render pass (RenderPassDescriptor::mNumViews). Valid for any pass that opens a
+        /// render pass (scene, quad, clear, ...); every pass sharing the RTV in a row must
+        /// agree, or the render pass is split. Scene passes also need it set to draw each
+        /// object once instead of once per eye (instanced stereo).
+        uint8 mNumViews;
+
         /// Shadow map index it belongs to (only filled in passes owned by Shadow Nodes)
         uint32 mShadowMapIdx;
 
@@ -242,6 +250,7 @@ namespace Ogre
             mCustomId( 0u ),
             mParentTargetDef( parentTargetDef ),
             mNumViewports( 1u ),
+            mNumViews( 0u ),
             mShadowMapIdx( ~0U ),
             mNumInitialPasses( ~0U ),
             mIdentifier( 0U ),

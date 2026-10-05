@@ -1030,7 +1030,8 @@ namespace Ogre
     TextureGpu *GL3PlusRenderSystem::createDepthBufferFor( TextureGpu *colourTexture,
                                                            bool preferDepthTexture,
                                                            PixelFormatGpu depthBufferFormat,
-                                                           uint16 poolId )
+                                                           uint16 poolId,
+                                                           uint8 numViews )
     {
         if( depthBufferFormat == PFG_UNKNOWN )
         {
@@ -1041,7 +1042,7 @@ namespace Ogre
         }
 
         return RenderSystem::createDepthBufferFor( colourTexture, preferDepthTexture, depthBufferFormat,
-                                                   poolId );
+                                                   poolId, numViews );
     }
 
     String GL3PlusRenderSystem::getErrorDescription( long errorNumber ) const { return BLANKSTRING; }

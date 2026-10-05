@@ -95,7 +95,8 @@ namespace Ogre
         mNumColourEntries( 0 ),
         mRequiresTextureFlipping( false ),
         mReadyWindowForPresent( false ),
-        mInformationOnly( false )
+        mInformationOnly( false ),
+        mNumViews( 0 )
     {
     }
     //-----------------------------------------------------------------------------------
@@ -324,6 +325,9 @@ namespace Ogre
         if( entryTypes & RenderPassDescriptor::Colour )
             colourEntriesModified();
 
+        if( mNumViews > 1u )
+            checkMultiview();
+
         if( mNumColourEntries == 0 && !mDepth.texture && !mStencil.texture )
         {
             OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
@@ -410,9 +414,50 @@ namespace Ogre
             setClearColour( i, clearColour );
     }
     //-----------------------------------------------------------------------------------
+    void RenderPassDescriptor::checkMultiview() const
+    {
+        // Every attachment must hold the views' layers: view v renders into slice + v.
+        struct Check
+        {
+            static void target( const TextureGpu *texture, uint16 slice, uint8 numViews )
+            {
+                if( !texture )
+                    return;
+                if( uint32( slice ) + numViews > texture->getNumSlices() )
+                {
+                    OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                                 "Multiview with " + StringConverter::toString( numViews ) +
+                                     " views needs slices [" + StringConverter::toString( slice ) +
+                                     ", " + StringConverter::toString( slice + numViews ) +
+                                     ") but texture '" + texture->getNameStr() + "' has " +
+                                     StringConverter::toString( texture->getNumSlices() ),
+                                 "RenderPassDescriptor::checkMultiview" );
+                }
+            }
+        };
+        for( size_t i = 0; i < mNumColourEntries; ++i )
+        {
+            if( mColour[i].allLayers )
+            {
+                OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                             "Multiview and layered rendering (allLayers) are exclusive. Texture: " +
+                                 mColour[i].texture->getNameStr(),
+                             "RenderPassDescriptor::checkMultiview" );
+            }
+            Check::target( mColour[i].texture, mColour[i].slice, mNumViews );
+            Check::target( mColour[i].resolveTexture, mColour[i].resolveSlice, mNumViews );
+        }
+        Check::target( mDepth.texture, mDepth.slice, mNumViews );
+        Check::target( mStencil.texture, mStencil.slice, mNumViews );
+    }
+    //-----------------------------------------------------------------------------------
     bool RenderPassDescriptor::hasSameAttachments( const RenderPassDescriptor *otherPassDesc ) const
     {
         if( !otherPassDesc )
+            return false;
+
+        // A different view count is a different render pass, whatever it attaches.
+        if( std::max<uint8>( this->mNumViews, 1u ) != std::max<uint8>( otherPassDesc->mNumViews, 1u ) )
             return false;
 
         if( this->mNumColourEntries != otherPassDesc->mNumColourEntries )
@@ -495,6 +540,7 @@ namespace Ogre
         memset( this, 0, sizeof( *this ) );
         readyWindowForPresent = desc.mReadyWindowForPresent;
         numColourEntries = desc.getNumColourEntries();
+        numViews = desc.mNumViews > 1u ? desc.mNumViews : 0u;
 
         // Load & Store actions don't matter for generating different FBOs.
 
@@ -521,6 +567,9 @@ namespace Ogre
 
         if( this->numColourEntries != other.numColourEntries )
             return this->numColourEntries < other.numColourEntries;
+
+        if( this->numViews != other.numViews )
+            return this->numViews < other.numViews;
 
         for( size_t i = 0; i < numColourEntries; ++i )
         {

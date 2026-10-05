@@ -199,6 +199,19 @@ namespace Ogre
     public:
         bool mInformationOnly;
 
+        /** MULTIVIEW (RSC_MULTIVIEW). 0 or 1 = off. N > 1 = every draw of the pass is
+            broadcast to N views; view v renders into array layer `slice + v` of EVERY
+            attachment (colour, resolve, depth and stencil must all have that many
+            slices; allLayers must be off). Shaders read the view in gl_ViewIndex
+            (GL_EXT_multiview); Hlms sets `hlms_multiview` to N.
+
+            The viewport is ONE rectangle shared by all views, so the views rasterise
+            at the same origin.
+        @remarks
+            After changing this value you MUST call entriesModified( All ).
+        */
+        uint8 mNumViews;
+
     public:
         void checkWarnIfRtvWasFlushed( uint32 entriesToFlush );
 
@@ -209,6 +222,7 @@ namespace Ogre
                                                 const StoreAction::StoreAction storeAction,
                                                 const bool                     bIsDepthStencil );
         virtual void colourEntriesModified();
+        void         checkMultiview() const;
 
     public:
         RenderPassDescriptor();
@@ -265,6 +279,7 @@ namespace Ogre
     {
         bool                 readyWindowForPresent;
         uint8                numColourEntries;
+        uint8                numViews;
         bool                 allLayers[OGRE_MAX_MULTIPLE_RENDER_TARGETS];
         RenderPassTargetBase colour[OGRE_MAX_MULTIPLE_RENDER_TARGETS];
         RenderPassTargetBase depth;

@@ -236,6 +236,8 @@ namespace Ogre
 
         RenderPassDescriptor *renderPassDesc = mRenderPassDesc;
 
+        renderPassDesc->mNumViews = mDefinition->mNumViews;
+
         const size_t numColourAttachments = rtv->colourAttachments.size();
 
         if( numColourAttachments > OGRE_MAX_MULTIPLE_RENDER_TARGETS )
@@ -369,8 +371,10 @@ namespace Ogre
             else if( linkedColourAttachment )
             {
                 RenderSystem *renderSystem = mParentNode->getRenderSystem();
-                renderPassTargetAttachment->texture = renderSystem->getDepthBufferFor(
-                    linkedColourAttachment, depthBufferId, preferDepthTexture, depthBufferFormat );
+                renderPassTargetAttachment->texture =
+                    renderSystem->getDepthBufferFor( linkedColourAttachment, depthBufferId,
+                                                     preferDepthTexture, depthBufferFormat,
+                                                     mDefinition->mNumViews );
             }
         }
         else if( rtvEntry.textureName != IdString() )

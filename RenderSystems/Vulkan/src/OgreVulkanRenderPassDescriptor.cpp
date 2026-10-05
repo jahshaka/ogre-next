@@ -347,11 +347,13 @@ namespace Ogre
 
         const uint8 mipLevel = bResolveTex ? colour.resolveMipLevel : colour.mipLevel;
         const uint16 slice = bResolveTex ? colour.resolveSlice : colour.slice;
+        // MULTIVIEW: the attachment is the views' layers [slice, slice + mNumViews).
+        const uint32 numViewLayers = mNumViews > 1u ? mNumViews : 1u;
 
         if( !texture->isRenderWindowSpecific() || ( texture->isMultisample() && !bResolveTex ) )
         {
             fboDesc.mImageViews[currAttachmIdx] = texture->_createView(
-                texture->getPixelFormat(), mipLevel, 1u, slice, false, false, 1u, texName );
+                texture->getPixelFormat(), mipLevel, 1u, slice, false, false, numViewLayers, texName );
         }
         else
         {
@@ -368,7 +370,7 @@ namespace Ogre
             {
                 texName = textureVulkan->getWindowFinalTextureName( surfIdx );
                 fboDesc.mWindowImageViews[surfIdx] = texture->_createView(
-                    texture->getPixelFormat(), mipLevel, 1u, slice, false, false, 1u, texName );
+                    texture->getPixelFormat(), mipLevel, 1u, slice, false, false, numViewLayers, texName );
             }
         }
 
@@ -424,7 +426,7 @@ namespace Ogre
         VulkanTextureGpu *texture = static_cast<VulkanTextureGpu *>( mDepth.texture );
         VkImage texName = texture->getFinalTextureName();
         return texture->_createView( texture->getPixelFormat(), mDepth.mipLevel, 1u, mDepth.slice, false,
-                                     false, 1u, texName );
+                                     false, mNumViews > 1u ? mNumViews : 1u, texName );
     }
     //-----------------------------------------------------------------------------------
     void VulkanRenderPassDescriptor::setupFbo( VulkanFrameBufferDescValue &fboDesc )
@@ -602,6 +604,23 @@ namespace Ogre
         renderPassCreateInfo.pAttachments = attachments;
         renderPassCreateInfo.subpassCount = 1u;
         renderPassCreateInfo.pSubpasses = &subpass;
+
+        // MULTIVIEW (RenderPassDescriptor::mNumViews): one subpass broadcasting to views
+        // 0..N-1, correlated (the views are rendered from nearby cameras). The
+        // framebuffer stays at layers = 1, as multiview requires.
+        VkRenderPassMultiviewCreateInfo multiviewCi;
+        uint32 viewMask = 0u;
+        if( mNumViews > 1u )
+        {
+            viewMask = ( 1u << mNumViews ) - 1u;
+            makeVkStruct( multiviewCi, VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO );
+            multiviewCi.subpassCount = 1u;
+            multiviewCi.pViewMasks = &viewMask;
+            multiviewCi.correlationMaskCount = 1u;
+            multiviewCi.pCorrelationMasks = &viewMask;
+            renderPassCreateInfo.pNext = &multiviewCi;
+        }
+
         VkResult result =
             vkCreateRenderPass( mQueue->mDevice, &renderPassCreateInfo, 0, &fboDesc.mRenderPass );
         checkVkResult( mQueue->mOwnerDevice, result, "vkCreateRenderPass" );

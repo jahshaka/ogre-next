@@ -3912,6 +3912,7 @@ namespace Ogre
         }
 
         passPso.adapterId = 1;  // TODO: Ask RenderSystem current adapter ID.
+        passPso.numViews = renderPassDesc->mNumViews > 1u ? renderPassDesc->mNumViews : 0u;
 
         if( sceneManager->getCurrentPrePassMode() == PrePassUse )
             strongMacroblockBits |= HlmsMacroblock::DepthWriteDisabled;

@@ -3416,13 +3416,14 @@ namespace Ogre
     TextureGpu *VulkanRenderSystem::createDepthBufferFor( TextureGpu *colourTexture,
                                                           bool preferDepthTexture,
                                                           PixelFormatGpu depthBufferFormat,
-                                                          uint16 poolId )
+                                                          uint16 poolId,
+                                                          uint8 numViews )
     {
         if( depthBufferFormat == PFG_UNKNOWN )
             depthBufferFormat = DepthBuffer::DefaultDepthBufferFormat;
 
         return RenderSystem::createDepthBufferFor( colourTexture, preferDepthTexture, depthBufferFormat,
-                                                   poolId );
+                                                   poolId, numViews );
     }
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::notifySwapchainCreated( VulkanWindow *window )
@@ -3559,6 +3560,21 @@ namespace Ogre
         renderPassCreateInfo.pAttachments = attachments;
         renderPassCreateInfo.subpassCount = 1u;
         renderPassCreateInfo.pSubpasses = &subpass;
+
+        // MULTIVIEW: the pipeline's render pass must carry the same view mask as the
+        // pass it draws in (VulkanRenderPassDescriptor::setupFbo builds the same one).
+        VkRenderPassMultiviewCreateInfo multiviewCi;
+        uint32 viewMask = 0u;
+        if( passPso.numViews > 1u )
+        {
+            viewMask = ( 1u << passPso.numViews ) - 1u;
+            makeVkStruct( multiviewCi, VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO );
+            multiviewCi.subpassCount = 1u;
+            multiviewCi.pViewMasks = &viewMask;
+            multiviewCi.correlationMaskCount = 1u;
+            multiviewCi.pCorrelationMasks = &viewMask;
+            renderPassCreateInfo.pNext = &multiviewCi;
+        }
 
         VkRenderPass retVal = mCache->getRenderPass( renderPassCreateInfo );
         return retVal;

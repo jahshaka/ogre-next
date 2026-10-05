@@ -65,6 +65,10 @@ namespace Ogre
         /// For multi-GPU support
         uint32 adapterId;
 
+        /// RenderPassDescriptor::mNumViews (0 = not multiview). A multiview pipeline
+        /// must be built against a render pass with the same view mask.
+        uint8 numViews;
+
         bool operator==( const HlmsPassPso &_r ) const
         {
             for( size_t i = 0u; i < OGRE_MAX_MULTIPLE_RENDER_TARGETS; ++i )
@@ -75,7 +79,8 @@ namespace Ogre
             return !( this->stencilParams != _r.stencilParams ) &&     //
                    this->depthFormat == _r.depthFormat &&              //
                    this->sampleDescription == _r.sampleDescription &&  //
-                   this->adapterId == _r.adapterId;
+                   this->adapterId == _r.adapterId &&                  //
+                   this->numViews == _r.numViews;
         }
         bool operator!=( const HlmsPassPso &_r ) const { return !( *this == _r ); }
         bool operator<( const HlmsPassPso &other ) const
@@ -94,7 +99,10 @@ namespace Ogre
             if( this->sampleDescription != other.sampleDescription )
                 return this->sampleDescription < other.sampleDescription;
 
-            return this->adapterId < other.adapterId;
+            if( this->adapterId != other.adapterId )
+                return this->adapterId < other.adapterId;
+
+            return this->numViews < other.numViews;
         }
     };
 

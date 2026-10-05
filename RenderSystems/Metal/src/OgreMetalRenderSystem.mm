@@ -1251,13 +1251,14 @@ namespace Ogre
     TextureGpu *MetalRenderSystem::createDepthBufferFor( TextureGpu *colourTexture,
                                                          bool preferDepthTexture,
                                                          PixelFormatGpu depthBufferFormat,
-                                                         uint16 poolId )
+                                                         uint16 poolId,
+                                                         uint8 numViews )
     {
         if( depthBufferFormat == PFG_UNKNOWN )
             depthBufferFormat = DepthBuffer::DefaultDepthBufferFormat;
 
         return RenderSystem::createDepthBufferFor( colourTexture, preferDepthTexture, depthBufferFormat,
-                                                   poolId );
+                                                   poolId, numViews );
     }
     //-------------------------------------------------------------------------
     void MetalRenderSystem::_setTextureCoordCalculation( size_t unit, TexCoordCalcMethod m,

@@ -140,6 +140,8 @@ namespace Ogre
         }
 
         mCurrentState.pass.adapterId = 1;       // TODO: Ask RenderSystem current adapter ID.
+        mCurrentState.pass.numViews =
+            renderPassDesc->mNumViews > 1u ? renderPassDesc->mNumViews : 0u;
         mCurrentState.sampleMask = 0xffffffff;  // TODO
 
         mCurrentPassHash = getPassHash();

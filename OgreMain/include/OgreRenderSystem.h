@@ -830,8 +830,11 @@ namespace Ogre
         /// Reads DepthBuffer::AvailableDepthFormats and alters DepthBuffer::DefaultDepthBufferFormat
         void selectDepthBufferFormat( const uint8 supportedFormats );
 
+        /// numViews > 1: a MULTIVIEW pass's depth (RenderPassDescriptor::mNumViews), a
+        /// Type2DArray with one slice per view.
         virtual TextureGpu *createDepthBufferFor( TextureGpu *colourTexture, bool preferDepthTexture,
-                                                  PixelFormatGpu depthBufferFormat, uint16 poolId );
+                                                  PixelFormatGpu depthBufferFormat, uint16 poolId,
+                                                  uint8 numViews );
 
         /// Detroys a depth buffer associated in the pool. If no texture is found the it skips.
         void destroySharedDepthBuffer( TextureGpu *depthTexture );
@@ -843,9 +846,12 @@ namespace Ogre
         /// Does nothing if input is not a shared depth buffer.
         void _dereferenceSharedDepthBuffer( TextureGpu *depthBuffer );
 
+        /// numViews > 1: the depth of a MULTIVIEW pass (CompositorPassDef::mNumViews): a
+        /// Type2DArray with numViews slices, never shared with a single-view target.
         virtual TextureGpu *getDepthBufferFor( TextureGpu *colourTexture, uint16 poolId,
                                                bool           preferDepthTexture,
-                                               PixelFormatGpu depthBufferFormat );
+                                               PixelFormatGpu depthBufferFormat,
+                                               uint8          numViews = 0u );
 
         /** In Direct3D11, UAV & RenderTargets share the same slots. Because of this,
             we enforce the same behavior on all RenderSystems.

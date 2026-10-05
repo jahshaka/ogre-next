@@ -670,7 +670,8 @@ namespace Ogre
     }
     //---------------------------------------------------------------------
     TextureGpu *RenderSystem::createDepthBufferFor( TextureGpu *colourTexture, bool preferDepthTexture,
-                                                    PixelFormatGpu depthBufferFormat, uint16 poolId )
+                                                    PixelFormatGpu depthBufferFormat, uint16 poolId,
+                                                    uint8 numViews )
     {
         uint32 textureFlags = TextureFlags::RenderToTexture;
 
@@ -684,9 +685,13 @@ namespace Ogre
         LwString depthBufferName( LwString::FromEmptyPointer( tmpBuffer, sizeof( tmpBuffer ) ) );
         depthBufferName.a( "DepthBuffer_", Id::generateNewId<TextureGpu>() );
 
+        // MULTIVIEW: one depth slice per view.
+        const bool bMultiview = numViews > 1u;
         TextureGpu *retVal = mTextureGpuManager->createTexture(
-            depthBufferName.c_str(), GpuPageOutStrategy::Discard, textureFlags, TextureTypes::Type2D );
-        retVal->setResolution( colourTexture->getInternalWidth(), colourTexture->getInternalHeight() );
+            depthBufferName.c_str(), GpuPageOutStrategy::Discard, textureFlags,
+            bMultiview ? TextureTypes::Type2DArray : TextureTypes::Type2D );
+        retVal->setResolution( colourTexture->getInternalWidth(), colourTexture->getInternalHeight(),
+                               bMultiview ? numViews : 1u );
         retVal->setPixelFormat( depthBufferFormat );
         retVal->_setDepthBufferDefaults( poolId, preferDepthTexture, depthBufferFormat );
         retVal->_setSourceType( TextureSourceType::SharedDepthBuffer );
@@ -701,7 +706,7 @@ namespace Ogre
     //---------------------------------------------------------------------
     TextureGpu *RenderSystem::getDepthBufferFor( TextureGpu *colourTexture, uint16 poolId,
                                                  bool preferDepthTexture,
-                                                 PixelFormatGpu depthBufferFormat )
+                                                 PixelFormatGpu depthBufferFormat, uint8 numViews )
     {
         if( poolId == DepthBuffer::POOL_NO_DEPTH || depthBufferFormat == PFG_NULL )
             return 0;  // RenderTarget explicitly requested no depth buffer
@@ -715,8 +720,8 @@ namespace Ogre
 
         if( poolId == DepthBuffer::NO_POOL_EXPLICIT_RTV )
         {
-            TextureGpu *retVal =
-                createDepthBufferFor( colourTexture, preferDepthTexture, depthBufferFormat, poolId );
+            TextureGpu *retVal = createDepthBufferFor( colourTexture, preferDepthTexture,
+                                                       depthBufferFormat, poolId, numViews );
             return retVal;
         }
 
@@ -726,9 +731,16 @@ namespace Ogre
 
         TextureGpu *retVal = 0;
 
+        // MULTIVIEW: a multiview depth matches only a pass with the same view count, and a
+        // single-view pass never takes a multiview depth.
+        const bool bMultiview = numViews > 1u;
+        const uint32 wantedSlices = bMultiview ? numViews : 1u;
+
         while( itor != endt && !retVal )
         {
             if( preferDepthTexture == ( *itor )->isTexture() &&
+                bMultiview == ( ( *itor )->getTextureType() == TextureTypes::Type2DArray ) &&
+                ( *itor )->getNumSlices() == wantedSlices &&
                 ( depthBufferFormat == PFG_UNKNOWN ||
                   depthBufferFormat == ( *itor )->getPixelFormat() ) &&
                 ( *itor )->supportsAsDepthBufferFor( colourTexture ) )
@@ -746,8 +758,8 @@ namespace Ogre
         // Not found yet? Create a new one!
         if( !retVal )
         {
-            retVal =
-                createDepthBufferFor( colourTexture, preferDepthTexture, depthBufferFormat, poolId );
+            retVal = createDepthBufferFor( colourTexture, preferDepthTexture, depthBufferFormat,
+                                           poolId, numViews );
             mDepthBufferPool2[poolId].push_back( retVal );
 
             if( !retVal )
