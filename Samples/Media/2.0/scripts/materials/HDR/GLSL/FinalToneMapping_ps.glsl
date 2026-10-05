@@ -1,5 +1,14 @@
 #version ogre_glsl_ver_330
 
+// JAHSHAKA (LAYERED-STEREO-1): THE MULTIVIEW ARM. A stereo chain renders each eye
+// into its own layer of a two-layer array and draws every pass once, broadcast
+// to both layers (VK_KHR_multiview); its tonemap is this program with
+// JAH_MULTIVIEW defined, reading the scene at the fragment's own view. The
+// exposure and bloom inputs are not per eye and stay 2D.
+#ifdef JAH_MULTIVIEW
+	#extension GL_EXT_multiview : require
+#endif
+
 vulkan_layout( location = 0 )
 out vec4 fragColour;
 
@@ -147,7 +156,11 @@ vec3 fromSRGB( vec3 x )
 	return x * x;
 }
 
+#ifdef JAH_MULTIVIEW
+vulkan_layout( ogre_t0 ) uniform texture2DArray rt0;
+#else
 vulkan_layout( ogre_t0 ) uniform texture2D rt0;
+#endif
 vulkan_layout( ogre_t1 ) uniform texture2D lumRt;
 vulkan_layout( ogre_t2 ) uniform texture2D bloomRt;
 
@@ -216,7 +229,11 @@ void main()
 {
 	float fInvLumAvg = texture( vkSampler2D( lumRt, samplerPoint ), vec2( 0.0, 0.0 ) ).x;
 
+#ifdef JAH_MULTIVIEW
+	vec4 vSample = texture( vkSampler2DArray( rt0, samplerPoint ), vec3( inPs.uv0, float( gl_ViewIndex ) ) );
+#else
 	vec4 vSample = texture( vkSampler2D( rt0, samplerPoint ), inPs.uv0 );
+#endif
 
 	vSample.xyz *= fInvLumAvg;
 	vSample.xyz	+= fromSRGB( texture( vkSampler2D( bloomRt, samplerBilinear ),
