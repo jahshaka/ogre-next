@@ -493,6 +493,37 @@ namespace Ogre
         uint32                 mHlmsCasterHash;
         HlmsDatablock         *mHlmsDatablock;
         MaterialPtr            mMaterial;  ///< Only valid when using low level materials
+
+    public:
+        /** (Jahshaka fork, ASYNC-SHADERS-1) The renderable's PLACEHOLDER hashes — this
+            renderable's geometry (vertex layout, skeleton, pose) hashed with its Hlms'
+            asynchronous placeholder datablock — which Hlms::getMaterialAsync derives on demand
+            and caches here. Valid while mHlmsPlaceholderKey equals {mHlmsHash, mHlmsCasterHash}
+            and mHlmsPlaceholderOf is the placeholder datablock they were derived with: any
+            change to what the renderable hashes to moves its own hashes and so re-derives
+            these. For Hlms use only.
+        */
+        uint32               _mHlmsPlaceholderHash[2];
+        uint32               _mHlmsPlaceholderKey[2];
+        HlmsDatablock const *_mHlmsPlaceholderOf;
+        /// The pass hash ([0] colour, [1] caster) whose placeholder this renderable last made
+        /// sure exists (Hlms::getMaterialAsync builds it while the object is still drawn).
+        uint32               _mHlmsPlaceholderPrewarmed[2];
+
+        /** (ASYNC-SHADERS-1) Swaps the datablock pointer and NOTHING else — no hash, no link,
+            no material reset — and returns the previous one. Hlms::getMaterialAsync and
+            RenderQueue use it, on the main thread inside RenderQueue::render, to hash and to
+            fill buffers against the placeholder; the caller always swaps back before anything
+            else can look. Never use it to change a renderable's material: use setDatablock.
+        */
+        HlmsDatablock *_swapDatablockForPlaceholder( HlmsDatablock *datablock )
+        {
+            HlmsDatablock *previous = mHlmsDatablock;
+            mHlmsDatablock = datablock;
+            return previous;
+        }
+
+    protected:
         // clang-format off
         public: uint8 mCustomParameter;
         // clang-format on

@@ -53,6 +53,7 @@ THE SOFTWARE.
 #include "OgreHighLevelGpuProgramManager.h"
 #include "OgreHlmsCompute.h"
 #include "OgreHlmsLowLevel.h"
+#include "OgreHlmsAsyncCompiler.h"
 #include "OgreHlmsManager.h"
 #include "OgreInternalCubemapProbe.h"
 #include "OgreItem.h"
@@ -1163,6 +1164,12 @@ namespace Ogre
     //-----------------------------------------------------------------------
     void Root::shutdown()
     {
+        // ASYNC-SHADERS-1: the shader compile service first. Its jobs hold pipelines, blocks
+        // and programs of Hlms that the steps below tear down; stopping it drops them while
+        // all of that still lives ("shutdown with compiles pending is clean").
+        if( mHlmsManager )
+            mHlmsManager->getAsyncCompiler()->setNumThreads( 0u );
+
         // Since background thread might be access resources,
         // ensure shutdown before destroying resource manager.
         mResourceBackgroundQueue->shutdown();
@@ -1574,6 +1581,10 @@ namespace Ogre
     //-----------------------------------------------------------------------
     bool Root::_updateAllRenderTargets()
     {
+        // ASYNC-SHADERS-1: what the shader compile service finished since the last frame lands
+        // now, before any pass of this frame asks for it.
+        mHlmsManager->_publishAsyncCompiles();
+
         // update all targets but don't swap buffers
         // mActiveRenderer->_updateAllRenderTargets(false);
         mCompositorManager2->_update();

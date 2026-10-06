@@ -202,5 +202,30 @@ namespace Ogre
         return prg;
     }
     //---------------------------------------------------------------------------
+    HighLevelGpuProgramPtr HighLevelGpuProgramManager::createProgramDetached( const String &name,
+                                                                              const String &groupName,
+                                                                              const String &language,
+                                                                              GpuProgramType gptype )
+    {
+        // getFactory reads a map written only while plugins load; getNextHandle is atomic.
+        ResourcePtr ret = ResourcePtr(
+            getFactory( language )->create( this, name, getNextHandle(), groupName, false, 0 ) );
+
+        HighLevelGpuProgramPtr prg = std::static_pointer_cast<HighLevelGpuProgram>( ret );
+        prg->setType( gptype );
+        prg->setSyntaxCode( language );
+        return prg;
+    }
+    //---------------------------------------------------------------------------
+    bool HighLevelGpuProgramManager::_registerDetachedProgram( const HighLevelGpuProgramPtr &program )
+    {
+        if( getResourceByName( program->getName(), program->getGroup() ) )
+            return false;
+        ResourcePtr res = std::static_pointer_cast<Resource>( program );
+        addImpl( res );
+        ResourceGroupManager::getSingleton()._notifyResourceCreated( res );
+        return true;
+    }
+    //---------------------------------------------------------------------------
     HighLevelGpuProgramFactory::~HighLevelGpuProgramFactory() {}
 }  // namespace Ogre

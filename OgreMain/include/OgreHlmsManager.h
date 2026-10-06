@@ -119,6 +119,10 @@ namespace Ogre
 
         TextureGpu *mBlueNoise;
 
+        /// (Jahshaka fork, ASYNC-SHADERS-1) The shader compile service. Never null; off (no
+        /// threads) until a host starts it.
+        HlmsAsyncCompiler *mAsyncCompiler;
+
     public:
         typedef std::map<IdString, HlmsDatablock *> HlmsDatablockMap;
 
@@ -170,6 +174,17 @@ namespace Ogre
         Hlms *getHlms( IdString name );
 
         HlmsCompute *getComputeHlms() { return mComputeHlms; }
+
+        /** (Jahshaka fork, ASYNC-SHADERS-1) The shader compile service that builds permutations
+            OUTSIDE the frame for asynchronous passes (CompositorWorkspace::
+            setAsyncShaderCompile). Off until setNumThreads; Root publishes what it finished at
+            the start of every _updateAllRenderTargets.
+        */
+        HlmsAsyncCompiler *getAsyncCompiler() const { return mAsyncCompiler; }
+
+        /// (ASYNC-SHADERS-1) Main thread: publishes every finished asynchronous compile.
+        /// Returns how many landed.
+        size_t _publishAsyncCompiles();
 
         /** Creates a macroblock that matches the same parameter as the input.
             If it already exists, returns the existing one.

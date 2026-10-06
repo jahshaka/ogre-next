@@ -30,6 +30,8 @@ THE SOFTWARE.
 
 #include "OgreHlmsManager.h"
 
+#include "OgreHlmsAsyncCompiler.h"
+
 #include "OgreHlms.h"
 #include "OgreHlmsCompute.h"
 #include "OgreLogManager.h"
@@ -47,6 +49,7 @@ namespace Ogre
         mComputeHlms( 0 ),
         mRenderSystem( 0 ),
         mBlueNoise( 0 ),
+        mAsyncCompiler( 0 ),
         mDefaultHlmsType( HLMS_PBS )
 #if !OGRE_NO_JSON
         ,
@@ -56,6 +59,8 @@ namespace Ogre
         memset( mRegisteredHlms, 0, sizeof( mRegisteredHlms ) );
         memset( mDeleteRegisteredOnExit, 0, sizeof( mDeleteRegisteredOnExit ) );
         memset( mBlocks, 0, sizeof( mBlocks ) );
+
+        mAsyncCompiler = OGRE_NEW HlmsAsyncCompiler();
 
         mMacroblocks.reserve( OGRE_HLMS_MAX_LIFETIME_MACROBLOCKS );
         mBlendblocks.reserve( OGRE_HLMS_MAX_LIFETIME_BLENDBLOCKS );
@@ -88,6 +93,9 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     HlmsManager::~HlmsManager()
     {
+        // ASYNC-SHADERS-1: the service stops (and drops what it holds) while every Hlms, block
+        // and the RenderSystem its jobs point at are still alive.
+        mAsyncCompiler->setNumThreads( 0u );
 #if !OGRE_NO_JSON
         ResourceGroupManager::getSingleton()._unregisterScriptLoader( this );
 #endif
@@ -105,6 +113,16 @@ namespace Ogre
                 }
             }
         }
+
+        OGRE_DELETE mAsyncCompiler;
+        mAsyncCompiler = 0;
+    }
+    //-----------------------------------------------------------------------------------
+    size_t HlmsManager::_publishAsyncCompiles()
+    {
+        return mAsyncCompiler->isRunning() || mAsyncCompiler->getNumOutstanding()
+                   ? mAsyncCompiler->publish()
+                   : 0u;
     }
     //-----------------------------------------------------------------------------------
     Hlms *HlmsManager::getHlms( IdString name )
@@ -646,6 +664,7 @@ namespace Ogre
     {
         if( mRegisteredHlms[type] )
         {
+            mAsyncCompiler->cancel( mRegisteredHlms[type] );  // ASYNC-SHADERS-1
             // TODO: Go through all the MovableObjects and remove the Hlms?
             mRegisteredHlms[type]->_notifyManager( 0 );
             if( mDeleteRegisteredOnExit[type] )
@@ -673,6 +692,7 @@ namespace Ogre
     {
         if( mComputeHlms )
         {
+            mAsyncCompiler->cancel( mComputeHlms );  // ASYNC-SHADERS-1
             mComputeHlms->_notifyManager( 0 );
             mComputeHlms = 0;
         }
@@ -766,6 +786,8 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void HlmsManager::_changeRenderSystem( RenderSystem *newRs )
     {
+        // ASYNC-SHADERS-1: no job may outlive the RenderSystem it builds pipelines with.
+        mAsyncCompiler->cancelAll();
         renderSystemDestroyAllBlocks();
         mRenderSystem = newRs;
 

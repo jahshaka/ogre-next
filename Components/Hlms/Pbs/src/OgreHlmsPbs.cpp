@@ -595,6 +595,13 @@ namespace Ogre
         mListener->setupRootLayout( rootLayout, mT[tid].setProperties, tid );
     }
     //-----------------------------------------------------------------------------------
+    void HlmsPbs::asyncShaderCacheEntryCreated( const HlmsCache *entry, const HlmsCache &passCache,
+                                           const HlmsPropertyVec &properties )
+    {
+        mListener->shaderCacheEntryCreated( mShaderProfile, entry, passCache, properties,
+                                            QueuedRenderable(), kNoTid );
+    }
+    //-----------------------------------------------------------------------------------
     const HlmsCache *HlmsPbs::createShaderCacheEntry( uint32 renderableHash, const HlmsCache &passCache,
                                                       uint32 finalHash,
                                                       const QueuedRenderable &queuedRenderable,

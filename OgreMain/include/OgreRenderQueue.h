@@ -287,6 +287,21 @@ namespace Ogre
 
         ParallelHlmsCompileQueue mParallelHlmsCompileQueue;
 
+        /// (Jahshaka fork, ASYNC-SHADERS-1) See setAsyncShaderCompile.
+        bool mAsyncShaderCompile;
+        /// True for the length of a render() that runs asynchronously.
+        bool mRenderingAsync;
+        /// Draws made with a placeholder / skipped while pending, since the queue was made.
+        uint64 mNumPlaceholderDraws;
+        uint64 mNumPendingSkips;
+
+        /// getMaterial or, inside an asynchronous render(), Hlms::getMaterialAsync.
+        const HlmsCache *getMaterialFor( Hlms *hlms, const HlmsCache *lastHlmsCache,
+                                         const HlmsCache &passCache,
+                                         const QueuedRenderable &queuedRenderable, bool casterPass,
+                                         ParallelHlmsCompileQueue *parallelCompileQueue,
+                                         bool allowPlaceholder, bool &outPlaceholder );
+
         /** Returns a new (or an existing) indirect buffer that can hold the requested number of
         draws.
         @param numDraws
@@ -331,6 +346,23 @@ namespace Ogre
 
         /// Empty the queue - should only be called by SceneManagers.
         void clear();
+
+        /** (Jahshaka fork, ASYNC-SHADERS-1) While true, render() never compiles inside the
+            frame: a permutation that is not built yet goes to the HlmsManager's
+            HlmsAsyncCompiler and the object is drawn with its Hlms' placeholder datablock (or
+            not drawn) until it lands. Only takes effect while the compiler is running.
+            CompositorWorkspace sets and restores it around its own _update
+            (CompositorWorkspace::setAsyncShaderCompile); a pass of a workspace that did not
+            ask for it is blocking, as upstream.
+        */
+        void setAsyncShaderCompile( bool bAsync ) { mAsyncShaderCompile = bAsync; }
+        bool getAsyncShaderCompile() const { return mAsyncShaderCompile; }
+
+        /// (ASYNC-SHADERS-1) Draws this queue made with a placeholder material, ever.
+        uint64 getNumPlaceholderDraws() const { return mNumPlaceholderDraws; }
+        /// (ASYNC-SHADERS-1) Draws this queue skipped (nothing built yet, not even the
+        /// placeholder), ever.
+        uint64 getNumPendingSkips() const { return mNumPendingSkips; }
 
         /** The RenderQueue keeps track of API state to avoid redundant state change passes
             Calling this function forces the RenderQueue to re-set the Macro- & Blendblocks,

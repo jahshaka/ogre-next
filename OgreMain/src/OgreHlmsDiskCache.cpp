@@ -128,7 +128,9 @@ namespace Ogre
         }
 
         {
-            // Copy shaders
+            // Copy shaders. (ASYNC-SHADERS-1: under the Hlms mutex — the asynchronous compiler's
+            // threads append to the code cache while the main thread saves it.)
+            ScopedLock lock( hlms->mMutex );
             mCache.sourceCode.reserve( hlms->mShaderCodeCache.size() );
             Hlms::ShaderCodeCacheVec::const_iterator itor = hlms->mShaderCodeCache.begin();
             Hlms::ShaderCodeCacheVec::const_iterator endt = hlms->mShaderCodeCache.end();

@@ -40,6 +40,7 @@ THE SOFTWARE.
 #include "OgreForward3D.h"
 #include "OgreHighLevelGpuProgram.h"
 #include "OgreHighLevelGpuProgramManager.h"
+#include "OgreHlmsAsyncCompiler.h"
 #include "OgreHlmsListener.h"
 #include "OgreHlmsManager.h"
 #include "OgreLight.h"
@@ -48,6 +49,7 @@ THE SOFTWARE.
 #include "OgrePixelFormatGpuUtils.h"
 #include "OgreProfiler.h"
 #include "OgreRenderQueue.h"
+#include "OgreRenderable.h"
 #include "OgreRootLayout.h"
 #include "OgreSceneManager.h"
 #include "OgreViewport.h"
@@ -317,6 +319,8 @@ namespace Ogre
 #endif
         mPrecisionMode( PrecisionFull32 ),
         mFastShaderBuildHack( false ),
+        mAsyncPlaceholderDatablock( 0 ),
+        mAsyncPlaceholderFillFor( 0 ),
         mDefaultDatablock( 0 ),
         mType( type ),
         mTypeName( typeName ),
@@ -324,7 +328,8 @@ namespace Ogre
     {
         memset( mShaderTargets, 0, sizeof( mShaderTargets ) );
 
-        _setNumThreads( 1u );
+        // ASYNC-SHADERS-1: every slot, once (see kAsyncTidBase). Nothing ever resizes mT again.
+        mT.resize( kAsyncTidBase + kNumAsyncTids );
 
         if( libraryFolders )
         {
@@ -1991,7 +1996,21 @@ namespace Ogre
         return retVal;
     }
     //-----------------------------------------------------------------------------------
-    void Hlms::_setNumThreads( size_t numThreads ) { mT.resize( numThreads ); }
+    void Hlms::_setNumThreads( size_t numThreads )
+    {
+        // ASYNC-SHADERS-1: mT is sized once in the constructor and must never reallocate (the
+        // asynchronous compiler's threads hold slots in it across frames). A SceneManager
+        // with more workers than the slots below kAsyncTidBase is refused here, loudly,
+        // instead of corrupting a service thread's slot.
+        if( numThreads > kAsyncTidBase )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                         "Hlms supports at most " + StringConverter::toString( kAsyncTidBase ) +
+                             " shader compile threads per SceneManager; asked for " +
+                             StringConverter::toString( numThreads ),
+                         "Hlms::_setNumThreads" );
+        }
+    }
     //-----------------------------------------------------------------------------------
     void Hlms::_setShadersGenerated( uint32 shadersGenerated ) { mShadersGenerated = shadersGenerated; }
     //-----------------------------------------------------------------------------------
@@ -2073,6 +2092,9 @@ namespace Ogre
         if( itor->second.visibleToManager )
             mHlmsManager->_datablockDestroyed( name );
 
+        if( itor->second.datablock == mAsyncPlaceholderDatablock )
+            mAsyncPlaceholderDatablock = 0;  // ASYNC-SHADERS-1: never a dangling placeholder
+
         OGRE_DELETE itor->second.datablock;
         mDatablocks.erase( itor );
     }
@@ -2093,6 +2115,7 @@ namespace Ogre
 
         mDatablocks.clear();
         mDefaultDatablock = 0;
+        mAsyncPlaceholderDatablock = 0;  // ASYNC-SHADERS-1
     }
     //-----------------------------------------------------------------------------------
     void Hlms::destroyAllDatablocks()
@@ -2166,6 +2189,11 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void Hlms::clearShaderCache()
     {
+        // ASYNC-SHADERS-1: the asynchronous jobs of this Hlms point at its stub entries and
+        // its code cache; drop them (waiting for any that is running) before those die.
+        if( mHlmsManager && mHlmsManager->getAsyncCompiler() )
+            mHlmsManager->getAsyncCompiler()->cancel( this );
+
         mPassCache.clear();
 
         // Empty mShaderCache so that mHlmsManager->destroyMacroblock would
@@ -2536,6 +2564,20 @@ namespace Ogre
         HighLevelGpuProgramManager *gpuProgramManager = HighLevelGpuProgramManager::getSingletonPtr();
 
         HighLevelGpuProgramPtr gp;
+        if( tid >= kAsyncTidBase )
+        {
+            // ASYNC-SHADERS-1: an asynchronous compile runs beside a main thread that is
+            // creating and registering resources of its own, and registration (the manager's
+            // map, the ResourceGroupManager's group lists) is not thread-safe at this build's
+            // OGRE_THREAD_SUPPORT 0. So the program is created DETACHED and the main thread
+            // registers it when it publishes the entry.
+            gp = gpuProgramManager->createProgramDetached(
+                StringConverter::toString( finalHash ) + ShaderFiles[shaderType],
+                ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME, mShaderProfile,
+                static_cast<GpuProgramType>( shaderType ) );
+            mT[tid].asyncPrograms.push_back( gp );
+        }
+        else
         {
             // gpuProgramManager->createProgram may be called from different Hlms implementations
             ScopedLock lock( msGlobalMutex );
@@ -2626,11 +2668,16 @@ namespace Ogre
     void Hlms::parseCustomPiece( const int32 customPieceName, const size_t tid )
     {
         // Parse custom arbitrary shader piece specified by the datablock.
-        DatablockCustomPieceFileMap::const_iterator it =
-            mDatablockCustomPieceFiles.find( customPieceName );
-        OGRE_ASSERT_LOW( it != mDatablockCustomPieceFiles.end() );
-
-        String inString = it->second.sourceCode;
+        String inString;
+        {
+            // ASYNC-SHADERS-1: an asynchronous compile reads this map while the main thread
+            // may be adding a datablock's piece file to it; both sides hold mMutex.
+            ScopedLock lock( mMutex );
+            DatablockCustomPieceFileMap::const_iterator it =
+                mDatablockCustomPieceFiles.find( customPieceName );
+            OGRE_ASSERT_LOW( it != mDatablockCustomPieceFiles.end() );
+            inString = it->second.sourceCode;
+        }
         String outString;
 
         this->parseMath( inString, outString, tid );
@@ -4043,14 +4090,34 @@ namespace Ogre
                         { &passCache, stubEntry, queuedRenderable, hash[0], finalHash } );
                 }
             }
-            else if( lastReturnedValue->flags == HLMS_CACHE_FLAGS_COMPILATION_REQUIRED )
+            else
             {
-                // Stub entry was created for previous frame, but compilation was skipped
-                // due to exhausted time budget, and attempt should be repeated
-                HlmsCache *stubEntry = const_cast<HlmsCache *>( lastReturnedValue );
+                // ASYNC-SHADERS-1: a BLOCKING pass never draws a hole for an entry the
+                // asynchronous compiler is building: it waits for that one request.
+                if( lastReturnedValue->flags == HLMS_CACHE_FLAGS_ASYNC_PENDING )
+                    waitForAsyncEntry( lastReturnedValue );
 
-                parallelQueue->pushRequest(
-                    { &passCache, stubEntry, queuedRenderable, hash[0], finalHash } );
+                if( lastReturnedValue->flags == HLMS_CACHE_FLAGS_COMPILATION_REQUIRED )
+                {
+                    // Stub entry was created for previous frame, but compilation was skipped
+                    // due to exhausted time budget, and attempt should be repeated
+                    HlmsCache *stubEntry = const_cast<HlmsCache *>( lastReturnedValue );
+
+                    // (Jahshaka) Without a queue it is compiled here: the pin dereferenced the
+                    // null queue (a stub can now also come back REQUIRED from a cancelled
+                    // asynchronous job, and be met by a serial pass).
+                    if( parallelQueue && mType != HLMS_LOW_LEVEL )
+                    {
+                        parallelQueue->pushRequest(
+                            { &passCache, stubEntry, queuedRenderable, hash[0], finalHash } );
+                    }
+                    else
+                    {
+                        lastReturnedValue =
+                            createShaderCacheEntry( hash[0], passCache, finalHash, queuedRenderable,
+                                                    stubEntry, UINT64_MAX, kNoTid );
+                    }
+                }
             }
         }
 
@@ -4063,6 +4130,467 @@ namespace Ogre
     {
         createShaderCacheEntry( renderableHash, passCache, finalHash, queuedRenderable,
                                 reservedStubEntry, deadline, tid );
+    }
+    //-----------------------------------------------------------------------------------
+    //-----------------------------------------------------------------------------------
+    // ASYNC-SHADERS-1 (Jahshaka fork): the asynchronous half of the Hlms.
+    //
+    // createShaderCacheEntry is split in two. The MERGE (the renderable's and the pass'
+    // properties, notifyPropertiesMergedPreGenerationStep, the listener's
+    // propertiesMergedPreGenerationStep, the PSO's blocks and vertex layout) runs on the
+    // main thread when the entry is first asked for, exactly where it always ran; the
+    // BUILD (template parse, the shading-language compile, the pipeline) runs on an
+    // HlmsAsyncCompiler thread from the job's own copies; the PUBLISH (the stub gets its
+    // PSO, the programs are registered, the Hlms' tail hook runs) is the main thread's again.
+    //-----------------------------------------------------------------------------------
+    class Hlms::AsyncPsoJob final : public HlmsAsyncJob
+    {
+    public:
+        Hlms           *mHlms;
+        HlmsCache      *mStub;
+        HlmsCache       mPassCache;  ///< a copy: RenderQueue's pass cache is rewritten every pass
+        ShaderCodeCache mCodeCache;  ///< merged properties + pieces (the code cache key)
+        bool            mNeedsCode;
+        uint32          mShaderCounter;
+        HlmsPso         mPso;
+        /// A reference on the datablock's blocks for as long as the job lives: the worker reads
+        /// them while the main thread may release the datablock (HlmsManager reuses a freed slot).
+        const HlmsMacroblock *mMacroRef;
+        const HlmsBlendblock *mBlendRef;
+
+        vector<HighLevelGpuProgramPtr>::type mPrograms;  ///< created detached on the worker
+
+        AsyncPsoJob( Hlms *hlms, HlmsCache *stub, const PiecesMap *pieces ) :
+            HlmsAsyncJob( hlms, stub ),
+            mHlms( hlms ),
+            mStub( stub ),
+            mCodeCache( pieces ),
+            mNeedsCode( false ),
+            mShaderCounter( 0u ),
+            mMacroRef( 0 ),
+            mBlendRef( 0 )
+        {
+            mPso.initialize();
+        }
+
+        ~AsyncPsoJob() override { releaseRefs(); }
+
+        void releaseRefs()
+        {
+            if( mMacroRef )
+                mHlms->mHlmsManager->destroyMacroblock( mMacroRef );
+            if( mBlendRef )
+                mHlms->mHlmsManager->destroyBlendblock( mBlendRef );
+            mMacroRef = 0;
+            mBlendRef = 0;
+        }
+
+        /// The strong blocks applyStrongBlockRules made belong to the entry once it is
+        /// published; a job that never publishes gives them back.
+        void releaseStrongBlocks()
+        {
+            if( mPso.strongBlocks & HlmsPso::HasStrongMacroblock )
+                mHlms->mHlmsManager->destroyMacroblock( mPso.macroblock );
+            if( mPso.strongBlocks & HlmsPso::HasStrongBlendblock )
+                mHlms->mHlmsManager->destroyBlendblock( mPso.blendblock );
+            mPso.strongBlocks = 0;
+        }
+
+        void run( size_t tid ) override
+        {
+            ThreadData &t = mHlms->mT[tid];
+            t.asyncPrograms.clear();
+            if( mNeedsCode )
+            {
+                try
+                {
+                    mHlms->compileShaderCode( mCodeCache, mShaderCounter, tid );
+                }
+                catch( ... )
+                {
+                    mPrograms.swap( t.asyncPrograms );
+                    throw;
+                }
+                mPrograms.swap( t.asyncPrograms );
+            }
+            mPso.vertexShader = mCodeCache.shaders[VertexShader];
+            mPso.geometryShader = mCodeCache.shaders[GeometryShader];
+            mPso.tesselationHullShader = mCodeCache.shaders[HullShader];
+            mPso.tesselationDomainShader = mCodeCache.shaders[DomainShader];
+            mPso.pixelShader = mCodeCache.shaders[PixelShader];
+
+            if( !mHlms->mRenderSystem->_hlmsPipelineStateObjectCreated( &mPso, UINT64_MAX ) )
+                mFailed = true;  // no deadline was given: the backend refused it
+        }
+
+        void registerPrograms()
+        {
+            HighLevelGpuProgramManager &mgr = HighLevelGpuProgramManager::getSingleton();
+            for( const HighLevelGpuProgramPtr &gp : mPrograms )
+                mgr._registerDetachedProgram( gp );
+            mPrograms.clear();
+        }
+
+        void publish() override
+        {
+            registerPrograms();
+            if( mFailed )
+            {
+                if( mPso.rsData )
+                    mHlms->mRenderSystem->_hlmsPipelineStateObjectDestroyed( &mPso );
+                releaseStrongBlocks();
+                mStub->flags = HLMS_CACHE_FLAGS_ASYNC_FAILED;
+            }
+            else
+            {
+                mStub->pso = mPso;
+                mStub->flags = HLMS_CACHE_FLAGS_NONE;
+                mHlms->asyncShaderCacheEntryCreated( mStub, mPassCache,
+                                                     mCodeCache.mergedCache.setProperties );
+            }
+            releaseRefs();
+        }
+
+        void discard() override
+        {
+            // The stub may be about to die with its cache (clearShaderCache cancels first);
+            // if it lives on (the service was stopped) a later pass rebuilds it.
+            if( mPso.rsData )
+                mHlms->mRenderSystem->_hlmsPipelineStateObjectDestroyed( &mPso );
+            releaseStrongBlocks();
+            mStub->flags = HLMS_CACHE_FLAGS_COMPILATION_REQUIRED;
+            mPrograms.clear();
+            releaseRefs();
+        }
+    };
+    //-----------------------------------------------------------------------------------
+    Hlms::AsyncPsoJob *Hlms::makeAsyncPsoJob( uint32 renderableHash, const HlmsCache &passCache,
+                                              uint32 finalHash, const QueuedRenderable &queuedRenderable,
+                                              HlmsCache *stub )
+    {
+        OgreProfileExhaustive( "Hlms::makeAsyncPsoJob" );
+
+        // The main thread's slot: inside an asynchronous RenderQueue::render nothing else uses
+        // it (Ogre's in-frame compile queue is not started there).
+        const size_t tid = kNoTid;
+
+        // ---- createShaderCacheEntry's merge, unchanged ----
+        mT[tid].setProperties.clear();
+        const RenderableCache &renderableCache = getRenderableCache( renderableHash );
+        mT[tid].setProperties.reserve( passCache.setProperties.size() +
+                                       renderableCache.setProperties.size() );
+        mT[tid].setProperties.insert( mT[tid].setProperties.end(), renderableCache.setProperties.begin(),
+                                      renderableCache.setProperties.end() );
+        for( const HlmsProperty &p : passCache.setProperties )
+            setProperty( tid, p.keyName, p.value );
+
+        mT[tid].textureNameStrings.clear();
+        for( size_t i = 0; i < NumShaderTypes; ++i )
+            mT[tid].textureRegs[i].clear();
+
+        for( const IdString &ext : mRsSpecificExtensions )
+            setProperty( tid, ext, 1 );
+
+        AsyncPsoJob *job = OGRE_NEW AsyncPsoJob( this, stub, renderableCache.pieces );
+        try
+        {
+            const PropertiesMergeStatus status =
+                notifyPropertiesMergedPreGenerationStep( tid, job->mCodeCache.mergedCache.pieces );
+            if( status != PropertiesMergeStatusOk )
+            {
+                const HlmsDatablock *datablock = queuedRenderable.renderable->getDatablock();
+                const String meshName =
+                    SceneManager::deduceMovableObjectName( queuedRenderable.movableObject );
+                LogManager::getSingleton().logMessage(
+                    "[async] datablock '" + *datablock->getNameStr() + "' from MovableObject '" +
+                    meshName + "' has issues. See previous log entries." );
+                if( status == PropertiesMergeStatusError )
+                {
+                    OGRE_EXCEPT( Exception::ERR_INVALID_STATE,
+                                 "Errors encountered while generating shaders. See Ogre.log",
+                                 "Hlms::makeAsyncPsoJob" );
+                }
+            }
+            mListener->propertiesMergedPreGenerationStep( this, passCache, renderableCache.setProperties,
+                                                          renderableCache.pieces, mT[tid].setProperties,
+                                                          queuedRenderable, tid );
+
+            unsetProperty( tid, HlmsPsoProp::Macroblock );
+            unsetProperty( tid, HlmsPsoProp::Blendblock );
+            unsetProperty( tid, HlmsPsoProp::InputLayoutId );
+            job->mCodeCache.mergedCache.setProperties = mT[tid].setProperties;
+
+            {
+                ScopedLock lock( mMutex );
+                ShaderCodeCacheVec::const_iterator itCodeCache =
+                    std::find( mShaderCodeCache.begin(), mShaderCodeCache.end(), job->mCodeCache );
+                if( itCodeCache != mShaderCodeCache.end() )
+                {
+                    for( size_t i = 0; i < NumShaderTypes; ++i )
+                        job->mCodeCache.shaders[i] = itCodeCache->shaders[i];
+                }
+                else
+                {
+                    job->mNeedsCode = true;
+                    job->mShaderCounter = mShadersGenerated++;
+                }
+            }
+
+            // ---- createShaderCacheEntry's PSO, from the merged (pre-template) set: the same
+            // set its code-cache-hit path derives the PSO from ----
+            HlmsPso &pso = job->mPso;
+            const bool casterPass = getProperty( tid, HlmsBaseProp::ShadowCaster ) != 0;
+
+            const HlmsDatablock *datablock = queuedRenderable.renderable->getDatablock();
+            job->mMacroRef = datablock->getMacroblock( casterPass );
+            job->mBlendRef = datablock->getBlendblock( casterPass );
+            mHlmsManager->addReference( job->mMacroRef );
+            mHlmsManager->addReference( job->mBlendRef );
+            pso.macroblock = job->mMacroRef;
+            pso.blendblock = job->mBlendRef;
+            pso.pass = passCache.pso.pass;
+
+            applyStrongBlockRules( pso, tid );
+
+            const size_t numGlobalClipDistances =
+                (size_t)getProperty( tid, HlmsBaseProp::PsoClipDistances );
+            pso.clipDistances = static_cast<uint8>( ( 1u << numGlobalClipDistances ) - 1u );
+            pso.sampleMask = 0xffffffff;
+
+            const VertexArrayObjectArray &vaos =
+                queuedRenderable.renderable->getVaos( static_cast<VertexPass>( casterPass ) );
+            if( !vaos.empty() )
+            {
+                pso.operationType = vaos.front()->getOperationType();
+                pso.vertexElements = vaos.front()->getVertexDeclaration();
+            }
+            else
+            {
+                v1::RenderOperation renderOp;
+                queuedRenderable.renderable->getRenderOperation( renderOp, casterPass );
+                pso.operationType = renderOp.operationType;
+                pso.vertexElements = renderOp.vertexData->vertexDeclaration->convertToV2();
+            }
+            pso.enablePrimitiveRestart = false;
+
+            job->mPassCache = passCache;
+        }
+        catch( ... )
+        {
+            job->releaseStrongBlocks();
+            OGRE_DELETE job;
+            throw;
+        }
+        return job;
+    }
+    //-----------------------------------------------------------------------------------
+    void Hlms::requestAsyncEntry( uint32 renderableHash, const HlmsCache &passCache, uint32 finalHash,
+                                  const QueuedRenderable &queuedRenderable, HlmsCache *stub,
+                                  const bool urgent )
+    {
+        stub->flags = HLMS_CACHE_FLAGS_ASYNC_PENDING;
+        AsyncPsoJob *job = 0;
+        try
+        {
+            job = makeAsyncPsoJob( renderableHash, passCache, finalHash, queuedRenderable, stub );
+        }
+        catch( Exception &e )
+        {
+            LogManager::getSingleton().logMessage(
+                "[async] the permutation " + StringConverter::toString( finalHash ) +
+                    " cannot be requested: " + e.getFullDescription(),
+                LML_CRITICAL );
+        }
+        if( !job )
+        {
+            stub->flags = HLMS_CACHE_FLAGS_ASYNC_FAILED;
+            return;
+        }
+
+        // THE WARM FAST PATH. When the shaders are already built (the code cache: this process
+        // built them for another pass, or the disk cache loaded them) only the PIPELINE is
+        // missing, and the driver's pipeline cache usually holds it. Ask for it here with a
+        // deadline in the past: Vulkan creates it with FAIL_ON_PIPELINE_COMPILE_REQUIRED, so a
+        // cache hit (well under a millisecond) lands this frame and a real compile is refused
+        // at once and goes to the service. Measured reason: after a tier change on a warm cache
+        // the blocking path built 7 permutations in ~40 ms while the asynchronous one dropped
+        // those objects for a frame.
+        if( !job->mNeedsCode )
+        {
+            job->mPso.vertexShader = job->mCodeCache.shaders[VertexShader];
+            job->mPso.geometryShader = job->mCodeCache.shaders[GeometryShader];
+            job->mPso.tesselationHullShader = job->mCodeCache.shaders[HullShader];
+            job->mPso.tesselationDomainShader = job->mCodeCache.shaders[DomainShader];
+            job->mPso.pixelShader = job->mCodeCache.shaders[PixelShader];
+            bool created = false;
+            try
+            {
+                created = mRenderSystem->_hlmsPipelineStateObjectCreated( &job->mPso, 0u );
+            }
+            catch( Exception & )
+            {
+                created = false;
+            }
+            if( created )
+            {
+                job->publish();
+                OGRE_DELETE job;
+                return;
+            }
+        }
+        mHlmsManager->getAsyncCompiler()->submit( job, urgent );
+    }
+    //-----------------------------------------------------------------------------------
+    void Hlms::asyncShaderCacheEntryCreated( const HlmsCache *, const HlmsCache &,
+                                             const HlmsPropertyVec & )
+    {
+    }
+    //-----------------------------------------------------------------------------------
+    void Hlms::setAsyncPlaceholderDatablock( HlmsDatablock *datablock )
+    {
+        if( datablock && datablock->getCreator() != this )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                         "The placeholder datablock must be one of this Hlms' own",
+                         "Hlms::setAsyncPlaceholderDatablock" );
+        }
+        mAsyncPlaceholderDatablock = datablock;
+    }
+    //-----------------------------------------------------------------------------------
+    void Hlms::waitForAsyncEntry( const HlmsCache *entry )
+    {
+        if( entry->flags != HLMS_CACHE_FLAGS_ASYNC_PENDING )
+            return;
+        HlmsAsyncCompiler *compiler = mHlmsManager ? mHlmsManager->getAsyncCompiler() : 0;
+        if( !compiler || !compiler->waitFor( entry ) )
+        {
+            // No job builds it any more (the service stopped under it): a blocking pass
+            // builds it itself.
+            const_cast<HlmsCache *>( entry )->flags = HLMS_CACHE_FLAGS_COMPILATION_REQUIRED;
+        }
+    }
+    //-----------------------------------------------------------------------------------
+    const HlmsCache *Hlms::getMaterialAsync( HlmsCache const *lastReturnedValue,
+                                             const HlmsCache &passCache,
+                                             const QueuedRenderable &queuedRenderable,
+                                             bool casterPass, bool allowPlaceholder,
+                                             bool &outPlaceholder )
+    {
+        outPlaceholder = false;
+
+        // Low level has no asynchronous path (upstream gives it no parallel one either), and
+        // GLSL proper needs createShaderCacheEntry's tail (uniform bindings) on the main thread.
+        if( mType == HLMS_LOW_LEVEL || mShaderProfile == "glsl" )
+        {
+            return getMaterial( lastReturnedValue, passCache, queuedRenderable, casterPass,
+                                nullptr );
+        }
+
+        uint32 hash[2];
+        hash[0] = casterPass ? queuedRenderable.renderable->getHlmsCasterHash()
+                             : queuedRenderable.renderable->getHlmsHash();
+        hash[1] = passCache.hash;
+        OGRE_ASSERT_LOW( ( hash[0] & hash[1] ) == 0u &&
+                         "The renderable and pass halves of the shader hash overlap" );
+        const uint32 finalHash = hash[0] | hash[1];
+
+        const HlmsCache *entry = lastReturnedValue;
+        if( entry->hash != finalHash )
+        {
+            entry = this->getShaderCache( finalHash );
+            if( !entry )
+            {
+                HlmsCache *stub = addStubShaderCache( finalHash );
+                requestAsyncEntry( hash[0], passCache, finalHash, queuedRenderable, stub );
+                entry = stub;
+            }
+            else if( entry->flags == HLMS_CACHE_FLAGS_COMPILATION_REQUIRED )
+            {
+                requestAsyncEntry( hash[0], passCache, finalHash, queuedRenderable,
+                                   const_cast<HlmsCache *>( entry ) );
+            }
+        }
+
+        if( !allowPlaceholder || !mAsyncPlaceholderDatablock )
+            return entry;
+
+        Renderable *renderable = queuedRenderable.renderable;
+        if( renderable->getDatablock() == mAsyncPlaceholderDatablock )
+            return entry;  // it IS the placeholder: nothing to stand in for it
+
+        const bool ready = entry->flags == HLMS_CACHE_FLAGS_NONE;
+        const uint8 passIdx = casterPass ? 1u : 0u;
+        // A READY object pre-builds its placeholder for this pass once (per pass hash): the
+        // placeholder must be built BEFORE the object's material changes, or the first
+        // frames after the change have nothing to draw it with.
+        if( ready && renderable->_mHlmsPlaceholderPrewarmed[passIdx] == hash[1] &&
+            renderable->_mHlmsPlaceholderOf == mAsyncPlaceholderDatablock &&
+            renderable->_mHlmsPlaceholderKey[0] == renderable->getHlmsHash() &&
+            renderable->_mHlmsPlaceholderKey[1] == renderable->getHlmsCasterHash() )
+        {
+            return entry;
+        }
+
+        // ---- THE PLACEHOLDER: this renderable's geometry with the placeholder's material ----
+        struct DatablockSwap
+        {
+            Renderable    *r;
+            HlmsDatablock *previous;
+            DatablockSwap( Renderable *_r, HlmsDatablock *with ) :
+                r( _r ),
+                previous( _r->_swapDatablockForPlaceholder( with ) )
+            {
+            }
+            ~DatablockSwap() { r->_swapDatablockForPlaceholder( previous ); }
+        };
+
+        if( renderable->_mHlmsPlaceholderOf != mAsyncPlaceholderDatablock ||
+            renderable->_mHlmsPlaceholderKey[0] != renderable->getHlmsHash() ||
+            renderable->_mHlmsPlaceholderKey[1] != renderable->getHlmsCasterHash() )
+        {
+            uint32 phHash = 0u, phCasterHash = 0u;
+            try
+            {
+                DatablockSwap swap( renderable, mAsyncPlaceholderDatablock );
+                calculateHashFor( renderable, phHash, phCasterHash );
+            }
+            catch( Exception &e )
+            {
+                LogManager::getSingleton().logMessage(
+                    "[async] no placeholder for this renderable: " + e.getFullDescription(),
+                    LML_CRITICAL );
+                return entry;
+            }
+            renderable->_mHlmsPlaceholderHash[0] = phHash;
+            renderable->_mHlmsPlaceholderHash[1] = phCasterHash;
+            renderable->_mHlmsPlaceholderKey[0] = renderable->getHlmsHash();
+            renderable->_mHlmsPlaceholderKey[1] = renderable->getHlmsCasterHash();
+            renderable->_mHlmsPlaceholderOf = mAsyncPlaceholderDatablock;
+            renderable->_mHlmsPlaceholderPrewarmed[0] = renderable->_mHlmsPlaceholderPrewarmed[1] =
+                0xFFFFFFFFu;
+        }
+
+        const uint32 phRenderableHash = renderable->_mHlmsPlaceholderHash[passIdx];
+        const uint32 phFinalHash = phRenderableHash | hash[1];
+        const HlmsCache *placeholder = this->getShaderCache( phFinalHash );
+        if( !placeholder || placeholder->flags == HLMS_CACHE_FLAGS_COMPILATION_REQUIRED )
+        {
+            HlmsCache *stub =
+                placeholder ? const_cast<HlmsCache *>( placeholder ) : addStubShaderCache( phFinalHash );
+            DatablockSwap swap( renderable, mAsyncPlaceholderDatablock );
+            // URGENT: after a pass change (a tier) every object waits, and they all wait for
+            // the few placeholders (one per vertex layout and pass) first.
+            requestAsyncEntry( phRenderableHash, passCache, phFinalHash, queuedRenderable, stub,
+                               true );
+            placeholder = stub;
+        }
+        renderable->_mHlmsPlaceholderPrewarmed[passIdx] = hash[1];
+
+        if( ready || placeholder->flags != HLMS_CACHE_FLAGS_NONE )
+            return entry;  // ready: draw it; else not even the placeholder: no draw (a stub)
+
+        outPlaceholder = true;
+        return placeholder;
     }
     //-----------------------------------------------------------------------------------
     uint32 Hlms::getMaterialSerial01( uint32 lastReturnedValue, const HlmsCache &passCache,
@@ -4106,7 +4634,14 @@ namespace Ogre
                           queuedRenderable, hash[0], finalHash } );
                 }
             }
-            else if( shaderCache->flags == HLMS_CACHE_FLAGS_COMPILATION_REQUIRED )
+            else
+            {
+                // ASYNC-SHADERS-1: a warm-up promises the permutation is built when it returns.
+                if( shaderCache->flags == HLMS_CACHE_FLAGS_ASYNC_PENDING )
+                    waitForAsyncEntry( shaderCache );
+            }
+
+            if( shaderCache && shaderCache->flags == HLMS_CACHE_FLAGS_COMPILATION_REQUIRED )
             {
                 // Stub entry was created for previous frame, but compilation was skipped
                 // due to exhausted time budget, and attempt should be repeated.
@@ -4154,6 +4689,7 @@ namespace Ogre
 
         if( itor == mDatablockCustomPieceFiles.end() )
         {
+            ScopedLock lock( mMutex );  // ASYNC-SHADERS-1: see parseCustomPiece
             mDatablockCustomPieceFiles.insert(
                 { filenameHash, { filename, resourceGroup, sourceCode } } );
         }
@@ -4195,6 +4731,7 @@ namespace Ogre
 
             if( itor == mDatablockCustomPieceFiles.end() )
             {
+                ScopedLock lock( mMutex );  // ASYNC-SHADERS-1: see parseCustomPiece
                 mDatablockCustomPieceFiles.insert( { filenameHash, entry } );
             }
             else if( itor->second.sourceCode != sourceCode )
@@ -4226,6 +4763,7 @@ namespace Ogre
 
         if( itor == mDatablockCustomPieceFiles.end() )
         {
+            ScopedLock lock( mMutex );  // ASYNC-SHADERS-1: see parseCustomPiece
             mDatablockCustomPieceFiles.insert( { filenameHash, { filename, "", sourceCode } } );
         }
         else if( itor->second.sourceCode != sourceCode )

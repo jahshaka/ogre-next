@@ -90,6 +90,8 @@ namespace Ogre
         bool mValid;
         bool mEnabled;
         bool mAmalgamatedProfiling;
+        /// (Jahshaka fork, ASYNC-SHADERS-1) See setAsyncShaderCompile.
+        bool mAsyncShaderCompile;
 
         CompositorWorkspaceListenerVec mListeners;
 
@@ -328,6 +330,20 @@ namespace Ogre
         Camera *getDefaultCamera() const { return mDefaultCamera; }
 
         SceneManager *getSceneManager() const { return mSceneManager; }
+
+        /** (Jahshaka fork, ASYNC-SHADERS-1) Whether this workspace's passes may draw an object
+            whose shader is not built yet with a PLACEHOLDER while the HlmsAsyncCompiler builds
+            it outside the frame (RenderQueue::setAsyncShaderCompile), instead of waiting for
+            the compile inside the frame. Default false: upstream's blocking behaviour.
+
+            Turn it on ONLY for workspaces that are re-rendered every frame (an editor view,
+            its mirrors): a workspace that renders once (a probe capture, a thumbnail, an
+            offscreen test) would keep the placeholder in what it captured. The flag is pushed
+            onto the SceneManager's RenderQueue for the length of _update and restored after,
+            so a one-shot workspace updated from inside an asynchronous one is still blocking.
+        */
+        void setAsyncShaderCompile( bool bAsync ) { mAsyncShaderCompile = bAsync; }
+        bool getAsyncShaderCompile() const { return mAsyncShaderCompile; }
 
         /// Usually by convention the RenderTarget[0] is the one we're rendering to. May be empty.
         const CompositorChannelVec &getExternalRenderTargets() const { return mExternalRenderTargets; }

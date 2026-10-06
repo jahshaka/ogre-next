@@ -126,6 +126,23 @@ namespace Ogre
         HighLevelGpuProgramPtr createProgram( const String &name, const String &groupName,
                                               const String &language, GpuProgramType gptype );
 
+        /** (Jahshaka fork, ASYNC-SHADERS-1) createProgram WITHOUT registering the program:
+            neither this manager's maps nor the ResourceGroupManager's group lists are touched,
+            so it may be called from a thread other than the one registering resources (the
+            HlmsAsyncCompiler's). The program is complete and may be loaded on that thread;
+            register it later on the main thread with _registerDetachedProgram.
+        */
+        HighLevelGpuProgramPtr createProgramDetached( const String &name, const String &groupName,
+                                                      const String &language, GpuProgramType gptype );
+
+        /** (ASYNC-SHADERS-1) Registers a program made by createProgramDetached, as createProgram
+            would have. Main thread. A name already registered (only possible after an Hlms
+            reset its counter) leaves the program detached: its owner's references keep it.
+        @return
+            True if it was registered.
+        */
+        bool _registerDetachedProgram( const HighLevelGpuProgramPtr &program );
+
         /** Override standard Singleton retrieval.
         @remarks
         Why do we do this? Well, it's because the Singleton

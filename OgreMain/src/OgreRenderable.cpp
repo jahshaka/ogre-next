@@ -46,6 +46,7 @@ namespace Ogre
         mHlmsHash( 0 ),
         mHlmsCasterHash( 0 ),
         mHlmsDatablock( 0 ),
+        _mHlmsPlaceholderOf( 0 ),
         mCustomParameter( 0 ),
         mRenderQueueSubGroup( msDefaultRenderQueueSubGroup ),
         mHasSkeletonAnimation( false ),
@@ -57,6 +58,9 @@ namespace Ogre
         mUseIdentityProjection( false ),
         mUseIdentityView( false )
     {
+        _mHlmsPlaceholderHash[0] = _mHlmsPlaceholderHash[1] = 0u;
+        _mHlmsPlaceholderKey[0] = _mHlmsPlaceholderKey[1] = 0u;
+        _mHlmsPlaceholderPrewarmed[0] = _mHlmsPlaceholderPrewarmed[1] = 0xFFFFFFFFu;
     }
     //-----------------------------------------------------------------------------------
     Renderable::~Renderable()

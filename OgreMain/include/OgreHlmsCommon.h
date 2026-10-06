@@ -211,6 +211,15 @@ namespace Ogre
         HLMS_CACHE_FLAGS_COMPILATION_REQUIRED = 1,
         /// For internal use. This entry has been submitted to ParallelHlmsCompileQueue for compilation.
         HLMS_CACHE_FLAGS_COMPILATION_REQUESTED = 2,
+        /// (Jahshaka, ASYNC-SHADERS-1) This entry is a stub being compiled by the
+        /// HlmsAsyncCompiler OUTSIDE the frame. It has no PSO until the compiler publishes it
+        /// on the main thread; an asynchronous pass draws the Hlms' placeholder meanwhile, a
+        /// blocking pass waits for this one request. See HlmsAsyncCompiler.
+        HLMS_CACHE_FLAGS_ASYNC_PENDING = 4,
+        /// (Jahshaka, ASYNC-SHADERS-1) The asynchronous compile of this entry failed (the
+        /// template or the driver rejected it; the log says why). It never gets a PSO: an
+        /// asynchronous pass keeps drawing the placeholder, a blocking pass skips the draw.
+        HLMS_CACHE_FLAGS_ASYNC_FAILED = 8,
     };
 
     struct HlmsCache

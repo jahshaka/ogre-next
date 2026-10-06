@@ -262,6 +262,12 @@ namespace Ogre
                                                  HlmsCache *reservedStubEntry, uint64 deadline,
                                                  size_t tid ) override;
 
+        /// (Jahshaka fork, ASYNC-SHADERS-1) createShaderCacheEntry's non-GLSL tail for an
+        /// asynchronously built entry: the listener's shaderCacheEntryCreated (with an empty
+        /// QueuedRenderable).
+        void asyncShaderCacheEntryCreated( const HlmsCache *entry, const HlmsCache &passCache,
+                                           const HlmsPropertyVec &properties ) override;
+
         HlmsDatablock *createDatablockImpl( IdString datablockName, const HlmsMacroblock *macroblock,
                                             const HlmsBlendblock *blendblock,
                                             const HlmsParamVec   &paramVec ) override;

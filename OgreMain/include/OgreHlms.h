@@ -147,6 +147,19 @@ namespace Ogre
         /// For single-threaded operations
         static constexpr size_t kNoTid = 0u;
 
+        /** THE ASYNCHRONOUS COMPILER'S THREAD SLOTS (Jahshaka fork, ASYNC-SHADERS-1).
+            mT is sized ONCE, at construction, to kAsyncTidBase + kNumAsyncTids and never
+            reallocates: the in-frame paths use slots [0, numWorkerThreads) as upstream does
+            (RenderQueue::renderPassPrepare calls _setNumThreads every pass with whatever the
+            SceneManager has, which used to resize mT), and HlmsAsyncCompiler thread n owns
+            slot kAsyncTidBase + n for as long as it runs, across frames and SceneManagers.
+            The last slot is the main thread's when it builds a queued job itself
+            (HlmsAsyncCompiler::waitFor). A SceneManager may have at most kAsyncTidBase workers.
+        */
+        static constexpr size_t kAsyncTidBase = 64u;
+        /// HlmsAsyncCompiler::kMaxThreads + 1 (the main thread's slot).
+        static constexpr size_t kNumAsyncTids = 9u;
+
 #ifdef OGRE_SHADER_THREADING_BACKWARDS_COMPATIBLE_API
 #    ifdef OGRE_SHADER_THREADING_USE_TLS
 #        ifdef OGRE_GCC_VISIBILITY
@@ -272,6 +285,11 @@ namespace Ogre
             HlmsPropertyVec setProperties;
             PiecesMap       pieces;
 
+            /// (ASYNC-SHADERS-1) Programs an asynchronous compile created on this slot without
+            /// registering them (HighLevelGpuProgramManager::createProgramDetached); the job
+            /// takes them and the main thread registers them when it publishes.
+            vector<HighLevelGpuProgramPtr>::type asyncPrograms;
+
             // Prevent false cache sharing
             uint8_t padding[64];
         };
@@ -347,6 +365,16 @@ namespace Ogre
         bool   mDebugOutputProperties;
         uint8  mPrecisionMode;  ///< See PrecisionMode
         bool   mFastShaderBuildHack;
+
+        /// (ASYNC-SHADERS-1) What an asynchronous pass draws an object with while its own
+        /// permutation is being built. Null: the object is not drawn until it lands
+        /// (upstream's behaviour for a stub). See setAsyncPlaceholderDatablock.
+        HlmsDatablock *mAsyncPlaceholderDatablock;
+        /// See _getAsyncPlaceholderFillFor.
+        const HlmsDatablock *mAsyncPlaceholderFillFor;
+
+        class AsyncPsoJob;
+        friend class AsyncPsoJob;
 
     public:
         struct DatablockCustomPieceFile
@@ -564,6 +592,33 @@ namespace Ogre
                                                          const QueuedRenderable &queuedRenderable,
                                                          HlmsCache *reservedStubEntry, uint64 deadline,
                                                          size_t threadIdx );
+
+        /** (ASYNC-SHADERS-1) The first half of createShaderCacheEntry, ON THE MAIN THREAD:
+            merges the renderable's and the pass' properties, runs
+            notifyPropertiesMergedPreGenerationStep and the listener's
+            propertiesMergedPreGenerationStep (so every Hlms listener keeps running where it
+            always ran), then makes the job that builds the rest OFF the frame. The stub must
+            already be in the shader cache.
+        @return
+            The job, or null when the merge itself failed (logged; the stub is marked failed).
+        */
+        AsyncPsoJob *makeAsyncPsoJob( uint32 renderableHash, const HlmsCache &passCache,
+                                      uint32 finalHash, const QueuedRenderable &queuedRenderable,
+                                      HlmsCache *stub );
+
+        /** (ASYNC-SHADERS-1) Called on the main thread when an asynchronously built entry is
+            published, where createShaderCacheEntry's override would have run its tail. The
+            QueuedRenderable the listener receives is EMPTY: the renderable that asked may be
+            gone. Default: nothing.
+        */
+        virtual void asyncShaderCacheEntryCreated( const HlmsCache *entry, const HlmsCache &passCache,
+                                                   const HlmsPropertyVec &properties );
+
+        /// (ASYNC-SHADERS-1) Creates the asynchronous request for an entry already in the cache
+        /// as a stub (new, or left COMPILATION_REQUIRED by upstream's deadline).
+        void requestAsyncEntry( uint32 renderableHash, const HlmsCache &passCache, uint32 finalHash,
+                                const QueuedRenderable &queuedRenderable, HlmsCache *stub,
+                                bool urgent = false );
 
         enum PropertiesMergeStatus
         {
@@ -1023,6 +1078,46 @@ namespace Ogre
         const HlmsCache *getMaterial( HlmsCache const *lastReturnedValue, const HlmsCache &passCache,
                                       const QueuedRenderable &queuedRenderable, bool casterPass,
                                       ParallelHlmsCompileQueue *parallelQueue );
+
+        /** (Jahshaka fork, ASYNC-SHADERS-1) getMaterial for an ASYNCHRONOUS pass: a permutation
+            that is not built yet is handed to the HlmsManager's HlmsAsyncCompiler and the frame
+            never waits for it. Until it lands the object is drawn with the Hlms' placeholder
+            datablock (setAsyncPlaceholderDatablock) — the same geometry, its own vertex layout,
+            skeleton and pose, the placeholder's material — when that permutation is built, and
+            not drawn otherwise.
+        @param allowPlaceholder
+            False for render paths that cannot swap the datablock for fillBuffersFor (v1,
+            particles): those skip the draw while pending.
+        @param outPlaceholder [out]
+            True when the returned entry is the PLACEHOLDER's: the caller must run
+            fillBuffersFor with the placeholder datablock in place (RenderQueue does).
+        */
+        const HlmsCache *getMaterialAsync( HlmsCache const *lastReturnedValue,
+                                           const HlmsCache &passCache,
+                                           const QueuedRenderable &queuedRenderable, bool casterPass,
+                                           bool allowPlaceholder, bool &outPlaceholder );
+
+        /** (ASYNC-SHADERS-1) The datablock an asynchronous pass draws a pending object with
+            (one of THIS Hlms' datablocks; e.g. a neutral grey for PBS). Null (the default):
+            a pending object is not drawn. Changing it cancels nothing; the placeholder hashes
+            cached on renderables are re-derived.
+        */
+        void           setAsyncPlaceholderDatablock( HlmsDatablock *datablock );
+        HlmsDatablock *getAsyncPlaceholderDatablock() const { return mAsyncPlaceholderDatablock; }
+
+        /** (ASYNC-SHADERS-1) Non-null only while RenderQueue fills buffers for a PLACEHOLDER
+            draw: the renderable's OWN datablock, which the fill cannot see (the renderable
+            holds the placeholder for the length of the call). A derived Hlms whose per-draw
+            data depends on the real material beyond its constants reads it here (HlmsAtom's
+            decode draws: which pixels the draw covers is the real material's bucket).
+        */
+        const HlmsDatablock *_getAsyncPlaceholderFillFor() const { return mAsyncPlaceholderFillFor; }
+        void _setAsyncPlaceholderFillFor( const HlmsDatablock *own ) { mAsyncPlaceholderFillFor = own; }
+
+        /** (ASYNC-SHADERS-1) A blocking path met an entry the asynchronous compiler is
+            building: wait for exactly that one and publish it. No-op for any other entry.
+        */
+        void waitForAsyncEntry( const HlmsCache *entry );
 
         /** Called by ParallelHlmsCompileQueue to finish the job started in getMaterial()
         @param passCache

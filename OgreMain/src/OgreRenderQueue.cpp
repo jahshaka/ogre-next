@@ -36,6 +36,10 @@ THE SOFTWARE.
 #include "OgreHardwareBufferManager.h"
 #include "OgreHlms.h"
 #include "OgreHlmsDatablock.h"
+#include "OgreHlmsAsyncCompiler.h"
+#include "OgreLogManager.h"
+#include "OgreStringConverter.h"
+#include <cstdlib>
 #include "OgreHlmsManager.h"
 #include "OgreMaterial.h"
 #include "OgreMaterialManager.h"
@@ -102,7 +106,11 @@ namespace Ogre
         mLastIndexData( 0 ),
         mLastTextureHash( 0 ),
         mCommandBuffer( 0 ),
-        mRenderingStarted( 0u )
+        mRenderingStarted( 0u ),
+        mAsyncShaderCompile( false ),
+        mRenderingAsync( false ),
+        mNumPlaceholderDraws( 0u ),
+        mNumPendingSkips( 0u )
     {
         mCommandBuffer = new CommandBuffer();
 
@@ -406,7 +414,13 @@ namespace Ogre
 
         ParallelHlmsCompileQueue *parallelCompileQueue = 0;
 
-        if( rs->supportsMultithreadedShaderCompilation() && mSceneManager->getNumWorkerThreads() > 1u )
+        // ASYNC-SHADERS-1: an asynchronous render never starts the in-frame compile queue — no
+        // worker barrier, no stopAndWait — and nothing else uses the Hlms' main-thread slot
+        // while it runs (Hlms::getMaterialAsync merges there).
+        mRenderingAsync = mAsyncShaderCompile && mHlmsManager->getAsyncCompiler()->isRunning();
+
+        if( !mRenderingAsync && rs->supportsMultithreadedShaderCompilation() &&
+            mSceneManager->getNumWorkerThreads() > 1u )
         {
             parallelCompileQueue = &mParallelHlmsCompileQueue;
             mParallelHlmsCompileQueue.start( mRoot, mSceneManager, casterPass );
@@ -526,6 +540,7 @@ namespace Ogre
 
         if( parallelCompileQueue )
             mParallelHlmsCompileQueue.stopAndWait( mSceneManager );
+        mRenderingAsync = false;
 
         OgreProfileEndGroup( "Command Preparation", OGREPROF_RENDERING );
 
@@ -614,6 +629,41 @@ namespace Ogre
         mPendingPassCaches.clear();
 
         OgreProfileEndGroup( "RenderQueue::warmUpShadersTrigger", OGREPROF_RENDERING );
+    }
+    //-----------------------------------------------------------------------
+    const HlmsCache *RenderQueue::getMaterialFor( Hlms *hlms, const HlmsCache *lastHlmsCache,
+                                                  const HlmsCache &passCache,
+                                                  const QueuedRenderable &queuedRenderable,
+                                                  bool casterPass,
+                                                  ParallelHlmsCompileQueue *parallelCompileQueue,
+                                                  bool allowPlaceholder, bool &outPlaceholder )
+    {
+        outPlaceholder = false;
+        if( !mRenderingAsync )
+        {
+            return hlms->getMaterial( lastHlmsCache, passCache, queuedRenderable, casterPass,
+                                      parallelCompileQueue );
+        }
+        const HlmsCache *retVal = hlms->getMaterialAsync(
+            lastHlmsCache, passCache, queuedRenderable, casterPass, allowPlaceholder, outPlaceholder );
+        if( outPlaceholder )
+            ++mNumPlaceholderDraws;
+        else if( retVal->flags != HLMS_CACHE_FLAGS_NONE )
+        {
+            ++mNumPendingSkips;
+            static const bool sDebug = getenv( "JAH_ASYNC_DEBUG" ) != 0;
+            if( sDebug )
+            {
+                LogManager::getSingleton().logMessage(
+                    "[async-debug] skip: hlms type " + StringConverter::toString( hlms->getType() ) +
+                    " caster " + StringConverter::toString( casterPass ) + " allowPh " +
+                    StringConverter::toString( allowPlaceholder ) + " ph " +
+                    StringConverter::toString( hlms->getAsyncPlaceholderDatablock() != 0 ) +
+                    " flags " + StringConverter::toString( (int)retVal->flags ) + " hash " +
+                    StringConverter::toString( retVal->hash ) );
+            }
+        }
+        return retVal;
     }
     //-----------------------------------------------------------------------
     void RenderQueue::renderES2( RenderSystem *rs, bool casterPass, bool dualParaboloid,
@@ -737,9 +787,10 @@ namespace Ogre
             Hlms *hlms = mHlmsManager->getHlms( hlmsType );
 
             lastHlmsCacheHash = lastHlmsCache->hash;
-            const HlmsCache *hlmsCache =
-                hlms->getMaterial( lastHlmsCache, passCache[datablock->mType], queuedRenderable,
-                                   casterPass, parallelCompileQueue );
+            bool placeholder = false;
+            const HlmsCache *hlmsCache = getMaterialFor(
+                hlms, lastHlmsCache, passCache[datablock->mType], queuedRenderable, casterPass,
+                parallelCompileQueue, false, placeholder );
             if( lastHlmsCacheHash != hlmsCache->hash )
             {
                 CbPipelineStateObject *psoCmd = mCommandBuffer->addCommand<CbPipelineStateObject>();
@@ -907,9 +958,10 @@ namespace Ogre
             Hlms *hlms = mHlmsManager->getHlms( static_cast<HlmsTypes>( datablock->mType ) );
 
             lastHlmsCacheHash = lastHlmsCache->hash;
-            const HlmsCache *hlmsCache =
-                hlms->getMaterial( lastHlmsCache, passCache[datablock->mType], queuedRenderable,
-                                   casterPass, parallelCompileQueue );
+            bool placeholder = false;
+            const HlmsCache *hlmsCache = getMaterialFor(
+                hlms, lastHlmsCache, passCache[datablock->mType], queuedRenderable, casterPass,
+                parallelCompileQueue, true, placeholder );
             if( lastHlmsCacheHash != hlmsCache->hash )
             {
                 CbPipelineStateObject *psoCmd = mCommandBuffer->addCommand<CbPipelineStateObject>();
@@ -920,8 +972,36 @@ namespace Ogre
                 lastVaoName = 0;
             }
 
-            uint32 baseInstance = hlms->fillBuffersForV2( hlmsCache, queuedRenderable, casterPass,
-                                                          lastHlmsCacheHash, mCommandBuffer );
+            uint32 baseInstance;
+            if( placeholder )
+            {
+                // ASYNC-SHADERS-1: the placeholder's shader reads the placeholder's material
+                // data, so the per-draw data is filled against it. The swap is the datablock
+                // POINTER only, on this thread, undone before anything else can look (no
+                // compile queue runs during an asynchronous render).
+                Renderable *renderable = queuedRenderable.renderable;
+                HlmsDatablock *own =
+                    renderable->_swapDatablockForPlaceholder( hlms->getAsyncPlaceholderDatablock() );
+                hlms->_setAsyncPlaceholderFillFor( own );
+                try
+                {
+                    baseInstance = hlms->fillBuffersForV2( hlmsCache, queuedRenderable, casterPass,
+                                                           lastHlmsCacheHash, mCommandBuffer );
+                }
+                catch( ... )
+                {
+                    hlms->_setAsyncPlaceholderFillFor( 0 );
+                    renderable->_swapDatablockForPlaceholder( own );
+                    throw;
+                }
+                hlms->_setAsyncPlaceholderFillFor( 0 );
+                renderable->_swapDatablockForPlaceholder( own );
+            }
+            else
+            {
+                baseInstance = hlms->fillBuffersForV2( hlmsCache, queuedRenderable, casterPass,
+                                                       lastHlmsCacheHash, mCommandBuffer );
+            }
 
             if( drawCmd != mCommandBuffer->getLastCommand() || lastVaoName != vao->getVaoName() )
             {
@@ -1076,9 +1156,10 @@ namespace Ogre
             Hlms *hlms = mHlmsManager->getHlms( static_cast<HlmsTypes>( datablock->mType ) );
 
             lastHlmsCacheHash = lastHlmsCache->hash;
-            const HlmsCache *hlmsCache =
-                hlms->getMaterial( lastHlmsCache, passCache[datablock->mType], queuedRenderable,
-                                   casterPass, parallelCompileQueue );
+            bool placeholder = false;
+            const HlmsCache *hlmsCache = getMaterialFor(
+                hlms, lastHlmsCache, passCache[datablock->mType], queuedRenderable, casterPass,
+                parallelCompileQueue, false, placeholder );
             if( lastHlmsCache != hlmsCache )
             {
                 CbPipelineStateObject *psoCmd = mCommandBuffer->addCommand<CbPipelineStateObject>();

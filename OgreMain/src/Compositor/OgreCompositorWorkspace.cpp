@@ -40,6 +40,7 @@ THE SOFTWARE.
 #include "OgreCamera.h"
 #include "OgreLogManager.h"
 #include "OgreProfiler.h"
+#include "OgreRenderQueue.h"
 #include "OgreSceneManager.h"
 #include "OgreViewport.h"
 
@@ -58,6 +59,7 @@ namespace Ogre
         mValid( false ),
         mEnabled( bEnabled ),
         mAmalgamatedProfiling( false ),
+        mAsyncShaderCompile( false ),
         mDefaultCamera( defaultCam ),
         mSceneManager( sceneManager ),
         mRenderSys( renderSys ),
@@ -814,6 +816,27 @@ namespace Ogre
             mRenderSys->compositorWorkspaceUpdate( this );
             return;
         }
+
+        // ASYNC-SHADERS-1: this workspace's compile mode for the length of its update; the
+        // enclosing one's comes back after (a nested one-shot workspace stays blocking).
+        struct AsyncScope
+        {
+            RenderQueue *rq;
+            bool         previous;
+            AsyncScope( RenderQueue *_rq, bool bAsync ) :
+                rq( _rq ),
+                previous( _rq ? _rq->getAsyncShaderCompile() : false )
+            {
+                if( rq )
+                    rq->setAsyncShaderCompile( bAsync );
+            }
+            ~AsyncScope()
+            {
+                if( rq )
+                    rq->setAsyncShaderCompile( previous );
+            }
+        } asyncScope( mSceneManager ? mSceneManager->getRenderQueue() : 0, mAsyncShaderCompile );
+
         {
             CompositorWorkspaceListenerVec::const_iterator itor = mListeners.begin();
             CompositorWorkspaceListenerVec::const_iterator endt = mListeners.end();
