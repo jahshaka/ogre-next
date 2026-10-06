@@ -29,6 +29,8 @@ THE SOFTWARE.
 
 #include "OgreHighLevelGpuProgramManager.h"
 
+#include <atomic>
+
 #include "OgreUnifiedHighLevelGpuProgram.h"
 
 namespace Ogre
@@ -207,9 +209,16 @@ namespace Ogre
                                                                               const String &language,
                                                                               GpuProgramType gptype )
     {
-        // getFactory reads a map written only while plugins load; getNextHandle is atomic.
-        ResourcePtr ret = ResourcePtr(
-            getFactory( language )->create( this, name, getNextHandle(), groupName, false, 0 ) );
+        // getFactory reads a map written only while plugins load. The HANDLE is NOT
+        // getNextHandle(): at OGRE_THREAD_SUPPORT 0 its AtomicScalar is a plain integer, and a
+        // service thread incrementing it beside the main thread handed two programs the same
+        // handle (measured: "Resource with the handle 346 already exists" at registration).
+        // Detached programs draw from their own atomic range, the top bit set, which no
+        // getNextHandle() of this process can reach.
+        static std::atomic<ResourceHandle> sDetachedHandles( ResourceHandle( 1 ) << 63u );
+        ResourcePtr ret = ResourcePtr( getFactory( language )->create(
+            this, name, sDetachedHandles.fetch_add( 1u, std::memory_order_relaxed ), groupName,
+            false, 0 ) );
 
         HighLevelGpuProgramPtr prg = std::static_pointer_cast<HighLevelGpuProgram>( ret );
         prg->setType( gptype );
@@ -219,10 +228,24 @@ namespace Ogre
     //---------------------------------------------------------------------------
     bool HighLevelGpuProgramManager::_registerDetachedProgram( const HighLevelGpuProgramPtr &program )
     {
-        if( getResourceByName( program->getName(), program->getGroup() ) )
+        // A name or a HANDLE already registered leaves the program detached (its owners'
+        // references keep it). Measured: a handle the detached program drew collided with a
+        // registered one ("Resource with the handle 346 already exists") in gi.card_lighting_
+        // indirect — and a throw here used to abort the whole publish.
+        if( getResourceByName( program->getName(), program->getGroup() ) ||
+            getByHandle( program->getHandle() ) )
+        {
             return false;
+        }
         ResourcePtr res = std::static_pointer_cast<Resource>( program );
-        addImpl( res );
+        try
+        {
+            addImpl( res );
+        }
+        catch( Exception & )
+        {
+            return false;
+        }
         ResourceGroupManager::getSingleton()._notifyResourceCreated( res );
         return true;
     }
