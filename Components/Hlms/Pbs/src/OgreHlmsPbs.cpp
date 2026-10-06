@@ -218,6 +218,7 @@ namespace Ogre
     const IdString PbsProperty::RoughnessIsShininess = IdString( "roughness_is_shininess" );
 
     const IdString PbsProperty::UseEnvProbeMap = IdString( "use_envprobe_map" );
+    const IdString PbsProperty::CasterSetHasEnvProbeMap = IdString( "caster_set_has_envprobe_map" );
     const IdString PbsProperty::NeedsViewDir = IdString( "needs_view_dir" );
     const IdString PbsProperty::OrthoCamera = IdString( "hlms_ortho_camera" );
     const IdString PbsProperty::NeedsReflDir = IdString( "needs_refl_dir" );
@@ -1148,6 +1149,17 @@ namespace Ogre
                 const bool envMap = datablock->getTexture( PBSM_REFLECTION ) != 0;
                 setProperty( kNoTid, PbsProperty::NumTextures,
                              int32( datablock->mTexturesDescSet->mTextures.size() - envMap ) );
+                // Jahshaka fork (CUTOUT-CASTER-1): fillBuffersFor binds this datablock's WHOLE
+                // baked set to an alpha-tested caster, reflection cubemap (always the set's last
+                // entry: PBSM_REFLECTION is the last texture type, and a cubemap shares no pool
+                // with a 2D array) included. The caster declares only NumTextures, so without
+                // this the root layout's baked texture range is one short: Vulkan's
+                // vkUpdateDescriptorSets then writes the cubemap into the first SAMPLER binding
+                // (VUID-VkWriteDescriptorSet-descriptorCount-00317) and the alpha test samples
+                // through an unwritten sampler -- a shadow that is solid, absent or a GPU hang
+                // (Xid 109) from run to run.
+                if( envMap )
+                    setProperty( kNoTid, PbsProperty::CasterSetHasEnvProbeMap, 1 );
 
                 setTextureProperty( kNoTid, PbsProperty::DiffuseMap, datablock, PBSM_DIFFUSE );
                 setTextureProperty( kNoTid, PbsProperty::DetailWeightMap, datablock,
@@ -1508,6 +1520,13 @@ namespace Ogre
                 setTextureReg( tid, PixelShader, "texEnvProbeMap", cubemapTexUnit );
             else
                 setTextureReg( tid, PixelShader, "texEnvProbeMap", texUnit++ );
+        }
+        else if( casterPass && getProperty( tid, PbsProperty::CasterSetHasEnvProbeMap ) )
+        {
+            // Jahshaka fork (CUTOUT-CASTER-1): the slot the baked set's reflection cubemap
+            // occupies. Declared by no shader (the caster never samples it); it widens the
+            // root layout's baked texture range (Set1TextureSlotEnd) to the set's real size.
+            ++texUnit;
         }
 
         setProperty( tid, PbsProperty::Set1TextureSlotEnd, texUnit );

@@ -740,6 +740,11 @@ namespace Ogre
         static const IdString RoughnessIsShininess;
 
         static const IdString UseEnvProbeMap;
+        /// Jahshaka fork (CUTOUT-CASTER-1): an alpha-tested CASTER whose datablock's baked texture
+        /// set ends in its reflection cubemap. The caster never samples the cubemap, but Vulkan
+        /// writes the baked set whole (VulkanRootLayout::bind), so the caster's root layout must
+        /// reserve the slot (notifyPropertiesMergedPreGenerationStep).
+        static const IdString CasterSetHasEnvProbeMap;
         static const IdString NeedsViewDir;
         /// Jahshaka fork 36162ff37+16d8e29d4 (was 0024): the rendering camera is orthographic (see
         /// preparePassHash); the pixel shader then takes viewDir = +Z.
