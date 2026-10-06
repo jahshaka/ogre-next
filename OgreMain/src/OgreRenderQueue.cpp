@@ -37,9 +37,6 @@ THE SOFTWARE.
 #include "OgreHlms.h"
 #include "OgreHlmsDatablock.h"
 #include "OgreHlmsAsyncCompiler.h"
-#include "OgreLogManager.h"
-#include "OgreStringConverter.h"
-#include <cstdlib>
 #include "OgreHlmsManager.h"
 #include "OgreMaterial.h"
 #include "OgreMaterialManager.h"
@@ -649,20 +646,7 @@ namespace Ogre
         if( outPlaceholder )
             ++mNumPlaceholderDraws;
         else if( retVal->flags != HLMS_CACHE_FLAGS_NONE )
-        {
             ++mNumPendingSkips;
-            static const bool sDebug = getenv( "JAH_ASYNC_DEBUG" ) != 0;
-            if( sDebug )
-            {
-                LogManager::getSingleton().logMessage(
-                    "[async-debug] skip: hlms type " + StringConverter::toString( hlms->getType() ) +
-                    " caster " + StringConverter::toString( casterPass ) + " allowPh " +
-                    StringConverter::toString( allowPlaceholder ) + " ph " +
-                    StringConverter::toString( hlms->getAsyncPlaceholderDatablock() != 0 ) +
-                    " flags " + StringConverter::toString( (int)retVal->flags ) + " hash " +
-                    StringConverter::toString( retVal->hash ) );
-            }
-        }
         return retVal;
     }
     //-----------------------------------------------------------------------
@@ -1577,8 +1561,17 @@ namespace Ogre
             mLastIndexData = op.indexData;
         }
 
+        // ASYNC-SHADERS-1: an object drawn one at a time (the v1 overlays, a manual render)
+        // inside an asynchronous workspace does not compile in the frame either; until its
+        // permutation lands its PSO is empty and the render system skips the draw.
+        const bool bAsync = mAsyncShaderCompile && mHlmsManager->getAsyncCompiler()->isRunning();
+        bool placeholder = false;
         const HlmsCache *hlmsCache =
-            hlms->getMaterial( &c_dummyCache, passCache, queuedRenderable, casterPass, nullptr );
+            bAsync ? hlms->getMaterialAsync( &c_dummyCache, passCache, queuedRenderable, casterPass,
+                                             false, placeholder )
+                   : hlms->getMaterial( &c_dummyCache, passCache, queuedRenderable, casterPass, nullptr );
+        if( bAsync && hlmsCache->flags != HLMS_CACHE_FLAGS_NONE )
+            ++mNumPendingSkips;
         rs->_setPipelineStateObject( &hlmsCache->pso );
 
         mLastTextureHash =
