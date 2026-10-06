@@ -127,6 +127,34 @@ namespace Ogre
         void           processPieces( const StringVector &pieceFiles );
         HlmsComputePso compileShader( HlmsComputeJob *job, uint32 finalHash );
 
+        // ---- ASYNC-SHADERS-1 (Jahshaka fork): compute permutations built off the frame ----
+        class AsyncComputeJob;
+        friend class AsyncComputeJob;
+        /// A permutation the HlmsAsyncCompiler is building, or failed to build. Main thread.
+        struct AsyncComputeEntry
+        {
+            HlmsComputeJob  *job;
+            HlmsPropertyVec  setProperties;
+            AsyncComputeJob *inFlight;  ///< null once it failed
+        };
+        typedef vector<AsyncComputeEntry>::type AsyncComputeEntryVec;
+        AsyncComputeEntryVec mAsyncComputeEntries;
+        uint32               mAsyncProgramCounter;
+
+        /// Index into mAsyncComputeEntries, or size() when none.
+        size_t findAsyncComputeEntry( const HlmsComputeJob *job, const HlmsPropertyVec &props ) const;
+        /// The service thread's half: the template parse from the job's TEXT snapshot, the
+        /// compile, the pipeline. The same steps compileShader takes, on slot `tid`.
+        void compileAsync( AsyncComputeJob &request, size_t tid );
+        /// Main thread: the request ran (published) or is dropped.
+        void asyncComputePublished( AsyncComputeJob &request );
+        void asyncComputeDiscarded( AsyncComputeJob &request );
+        /// Parses piece files from their text (the async path reads them on the main thread).
+        void processPieceTexts( const StringVector &pieceTexts, size_t tid );
+        /// dispatch(): waits for an in-flight request of the job's current permutation.
+        /// True if it waited (the permutation is published, or failed).
+        bool waitForAsyncPermutation( HlmsComputeJob *job );
+
         HlmsDatablock *createDatablockImpl( IdString              datablockName,  //
                                             const HlmsMacroblock *macroblock,     //
                                             const HlmsBlendblock *blendblock,     //
@@ -185,6 +213,24 @@ namespace Ogre
 
         /// Main function for dispatching a compute job.
         void dispatch( HlmsComputeJob *job, SceneManager *sceneManager, Camera *camera );
+
+        enum AsyncReadiness
+        {
+            AsyncReady,    ///< the permutation is built: dispatch() will not compile
+            AsyncPending,  ///< the HlmsAsyncCompiler is building it
+            AsyncFailed    ///< it could not be built (the log says why); dispatch() would throw
+        };
+
+        /** (Jahshaka fork, ASYNC-SHADERS-1) Is the permutation the job's CURRENT properties
+            select built? If not, it is handed to the HlmsManager's HlmsAsyncCompiler (once)
+            and the answer is AsyncPending — nothing waits for it. A caller that must not
+            stall (a GI rebuild after a project is open) asks this for every permutation it
+            is about to dispatch and keeps its previous result until all answer AsyncReady;
+            dispatch() itself stays blocking (and waits for an in-flight request of the same
+            permutation instead of compiling it twice). With no service running the answer is
+            AsyncReady: dispatch() compiles inside the frame, as it always did.
+        */
+        AsyncReadiness requestAsync( HlmsComputeJob *job );
 
         void _changeRenderSystem( RenderSystem *newRs ) override;
 

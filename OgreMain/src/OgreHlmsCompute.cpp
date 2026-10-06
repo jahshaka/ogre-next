@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include "OgreFileSystem.h"
 #include "OgreHighLevelGpuProgram.h"
 #include "OgreHighLevelGpuProgramManager.h"
+#include "OgreHlmsAsyncCompiler.h"
 #include "OgreHlmsComputeJob.h"
 #include "OgreHlmsManager.h"
 #include "OgreLogManager.h"
@@ -78,7 +79,8 @@ namespace Ogre
     HlmsCompute::HlmsCompute( AutoParamDataSource *autoParamDataSource ) :
         Hlms( HLMS_COMPUTE, "compute", 0, 0 ),
         mAutoParamDataSource( autoParamDataSource ),
-        mComputeShaderTarget( 0 )
+        mComputeShaderTarget( 0 ),
+        mAsyncProgramCounter( 0u )
     {
     }
     //-----------------------------------------------------------------------------------
@@ -296,12 +298,18 @@ namespace Ogre
                 OGRE_HASH128_FUNC( hashValTmp, sizeof( hashValTmp ), IdString::Seed, &hashVal );
             }
 
-            CompiledShaderMap::const_iterator itor = mCompiledShaderCache.find( hashVal );
-            if( itor != mCompiledShaderCache.end() )
+            // ASYNC-SHADERS-1: the asynchronous compiler's threads read and add to this map.
+            bool bCached = false;
             {
-                shader = itor->second;
+                ScopedLock lock( mMutex );
+                CompiledShaderMap::const_iterator itor = mCompiledShaderCache.find( hashVal );
+                if( itor != mCompiledShaderCache.end() )
+                {
+                    shader = itor->second;
+                    bCached = true;
+                }
             }
-            else
+            if( !bCached )
             {
                 HighLevelGpuProgramManager *gpuProgramManager =
                     HighLevelGpuProgramManager::getSingletonPtr();
@@ -337,6 +345,7 @@ namespace Ogre
 
                 shader = gp;
 
+                ScopedLock lock( mMutex );
                 mCompiledShaderCache[hashVal] = shader;
             }
         }
@@ -395,6 +404,19 @@ namespace Ogre
         if( itor != mComputeJobs.end() )
         {
             HlmsComputeJob *job = itor->second.computeJob;
+            // ASYNC-SHADERS-1: nothing may build a permutation of a job that is going away.
+            if( mHlmsManager )
+                mHlmsManager->getAsyncCompiler()->cancelKey( job );
+            for( size_t i = 0u; i < mAsyncComputeEntries.size(); )
+            {
+                if( mAsyncComputeEntries[i].job == job )
+                {
+                    mAsyncComputeEntries[i] = mAsyncComputeEntries.back();
+                    mAsyncComputeEntries.pop_back();
+                }
+                else
+                    ++i;
+            }
             ComputePsoCacheVec::iterator itCache = mComputeShaderCache.begin();
             ComputePsoCacheVec::iterator enCache = mComputeShaderCache.end();
 
@@ -435,6 +457,12 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void HlmsCompute::clearShaderCache()
     {
+        // ASYNC-SHADERS-1: the in-flight permutations go first (they would publish into the
+        // cache being cleared).
+        if( mHlmsManager && mHlmsManager->getAsyncCompiler() )
+            mHlmsManager->getAsyncCompiler()->cancel( this );
+        mAsyncComputeEntries.clear();
+
         if( mRenderSystem )
             mRenderSystem->_setComputePso( 0 );
 
@@ -457,6 +485,388 @@ namespace Ogre
         mFreeShaderCacheEntries.clear();
     }
     //-----------------------------------------------------------------------------------
+    //-----------------------------------------------------------------------------------
+    // ASYNC-SHADERS-1 (Jahshaka fork): a compute permutation built OFF the frame.
+    //
+    // The main thread snapshots everything compileShader would read from the job and from
+    // the resource system (the property set, the pieces, the SOURCE TEXTS of the main file
+    // and of every included piece file — ResourceGroupManager is not thread-safe at this
+    // build's OGRE_THREAD_SUPPORT 0 — and the root layout); a service thread runs the same
+    // template parse, compile and pipeline creation on its own Hlms slot; the main thread
+    // files the PSO into mComputeShaderCache when it publishes, where dispatch() finds it.
+    //-----------------------------------------------------------------------------------
+    class HlmsCompute::AsyncComputeJob final : public HlmsAsyncJob
+    {
+    public:
+        HlmsCompute    *mCompute;
+        HlmsComputeJob *mJob;  ///< identity only (the key); never dereferenced off the main thread
+        HlmsPropertyVec mJobProperties;  ///< the job's properties: the PSO cache key
+        PiecesMap       mPieces;
+        String          mSource;
+        String          mSourceFilename;  ///< for names and logs
+        StringVector    mPieceTexts;
+        RootLayout      mRootLayout;      ///< memset + setupRootLayout, as compileShader hashes it
+        bool            mIndirect;
+        String          mJobName;
+
+        // ---- results ----
+        GpuProgramPtr                        mShader;
+        vector<HighLevelGpuProgramPtr>::type mPrograms;  ///< created detached on the worker
+        HlmsComputePso                       mPso;
+
+        AsyncComputeJob( HlmsCompute *compute, HlmsComputeJob *job ) :
+            HlmsAsyncJob( compute, job ),
+            mCompute( compute ),
+            mJob( job ),
+            mIndirect( false )
+        {
+            memset( &mRootLayout, 0, sizeof( mRootLayout ) );
+            mPso.initialize();
+        }
+
+        void run( size_t tid ) override { mCompute->compileAsync( *this, tid ); }
+        void publish() override { mCompute->asyncComputePublished( *this ); }
+        void discard() override { mCompute->asyncComputeDiscarded( *this ); }
+    };
+    //-----------------------------------------------------------------------------------
+    size_t HlmsCompute::findAsyncComputeEntry( const HlmsComputeJob *job,
+                                               const HlmsPropertyVec &props ) const
+    {
+        for( size_t i = 0u; i < mAsyncComputeEntries.size(); ++i )
+        {
+            if( mAsyncComputeEntries[i].job == job && mAsyncComputeEntries[i].setProperties == props )
+                return i;
+        }
+        return mAsyncComputeEntries.size();
+    }
+    //-----------------------------------------------------------------------------------
+    bool HlmsCompute::waitForAsyncPermutation( HlmsComputeJob *job )
+    {
+        HlmsAsyncCompiler *compiler = mHlmsManager ? mHlmsManager->getAsyncCompiler() : 0;
+        if( !compiler )
+            return false;
+        bool bWaited = false;
+        size_t idx = findAsyncComputeEntry( job, job->mSetProperties );
+        while( idx < mAsyncComputeEntries.size() && mAsyncComputeEntries[idx].inFlight )
+        {
+            // The key is the job: this lands SOME permutation of it; loop until ours has.
+            if( !compiler->waitFor( job ) )
+                break;
+            bWaited = true;
+            idx = findAsyncComputeEntry( job, job->mSetProperties );
+        }
+        return bWaited;
+    }
+    //-----------------------------------------------------------------------------------
+    HlmsCompute::AsyncReadiness HlmsCompute::requestAsync( HlmsComputeJob *job )
+    {
+        // dispatch()'s own first two steps, so the permutation asked about is the one a
+        // dispatch would select.
+        job->_calculateNumThreadGroupsBasedOnSetting();
+        if( job->mPsoCacheHash < mComputeShaderCache.size() )
+            return AsyncReady;  // the job's current permutation is bound to a built PSO
+
+        job->_updateAutoProperties();
+
+        ComputePsoCache key;
+        key.job = job;
+        key.setProperties.swap( job->mSetProperties );
+        ComputePsoCacheVec::const_iterator itor =
+            std::find( mComputeShaderCache.begin(), mComputeShaderCache.end(), key );
+        key.setProperties.swap( job->mSetProperties );
+        if( itor != mComputeShaderCache.end() )
+            return AsyncReady;
+
+        HlmsAsyncCompiler *compiler = mHlmsManager ? mHlmsManager->getAsyncCompiler() : 0;
+        if( !compiler || !compiler->isRunning() )
+            return AsyncReady;  // no service: dispatch() compiles in the frame, as upstream
+
+        const size_t idx = findAsyncComputeEntry( job, job->mSetProperties );
+        if( idx < mAsyncComputeEntries.size() )
+            return mAsyncComputeEntries[idx].inFlight ? AsyncPending : AsyncFailed;
+
+        // ---- the snapshot (main thread) ----
+        AsyncComputeJob *request = OGRE_NEW AsyncComputeJob( this, job );
+        try
+        {
+            ResourceGroupManager &resourceGroupMgr = ResourceGroupManager::getSingleton();
+            request->mJobProperties = job->mSetProperties;
+            request->mPieces = job->mPieces;
+            request->mSourceFilename = job->mSourceFilename;
+            request->mJobName = job->getNameStr();
+            request->mSource =
+                resourceGroupMgr.openResource( job->mSourceFilename + mShaderFileExt )->getAsString();
+            for( const String &file : job->mIncludedPieceFiles )
+            {
+                String filename = file;
+                // processPieces' extension rule, verbatim.
+                String::size_type pos = filename.find_last_of( '.' );
+                if( pos == String::npos ||
+                    ( filename.compare( pos + 1, String::npos, mShaderFileExt ) != 0 &&
+                      filename.compare( pos + 1, String::npos, "any" ) != 0 &&
+                      filename.compare( pos + 1, String::npos, "metal" ) != 0 &&
+                      filename.compare( pos + 1, String::npos, "glsl" ) != 0 &&
+                      filename.compare( pos + 1, String::npos, "hlsl" ) != 0 ) )
+                {
+                    filename += mShaderFileExt;
+                }
+                request->mPieceTexts.push_back(
+                    resourceGroupMgr.openResource( filename )->getAsString() );
+            }
+            request->mRootLayout.mCompute = true;
+            job->setupRootLayout( request->mRootLayout );
+            request->mIndirect = job->mIndirectDispatchBuffer != 0;
+        }
+        catch( Exception &e )
+        {
+            OGRE_DELETE request;
+            LogManager::getSingleton().logMessage(
+                "[async] compute job '" + job->getNameStr() +
+                    "' cannot be requested: " + e.getFullDescription(),
+                LML_CRITICAL );
+            AsyncComputeEntry entry = { job, job->mSetProperties, 0 };
+            mAsyncComputeEntries.push_back( entry );
+            return AsyncFailed;
+        }
+
+        AsyncComputeEntry entry = { job, job->mSetProperties, request };
+        mAsyncComputeEntries.push_back( entry );
+        compiler->submit( request );
+        return AsyncPending;
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::processPieceTexts( const StringVector &pieceTexts, const size_t tid )
+    {
+        for( const String &text : pieceTexts )
+        {
+            String inString = text;
+            String outString;
+            this->parseMath( inString, outString, tid );
+            while( outString.find( "@foreach" ) != String::npos )
+            {
+                this->parseForEach( outString, inString, tid );
+                inString.swap( outString );
+            }
+            this->parseProperties( outString, inString, tid );
+            this->parseUndefPieces( inString, outString, tid );
+            this->collectPieces( outString, inString, tid );
+            this->parseCounter( inString, outString, tid );
+        }
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::compileAsync( AsyncComputeJob &request, const size_t tid )
+    {
+        // compileShader, step for step, on slot `tid` and from the request's snapshot.
+        mT[tid].setProperties = request.mJobProperties;
+        for( const IdString &ext : mRsSpecificExtensions )
+            setProperty( tid, ext, 1 );
+
+        mT[tid].pieces = request.mPieces;
+
+        if( mShaderProfile == "glsl" || mShaderProfile == "glslvk" )
+            setProperty( tid, HlmsBaseProp::GL3Plus, mRenderSystem->getNativeShadingLanguageVersion() );
+        setProperty( tid, HlmsBaseProp::Syntax, static_cast<int32>( mShaderSyntax.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Hlsl, static_cast<int32>( HlmsBaseProp::Hlsl.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Glsl, static_cast<int32>( HlmsBaseProp::Glsl.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Glslvk,
+                     static_cast<int32>( HlmsBaseProp::Glslvk.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Hlslvk,
+                     static_cast<int32>( HlmsBaseProp::Hlslvk.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Metal, static_cast<int32>( HlmsBaseProp::Metal.getU32Value() ) );
+#if OGRE_PLATFORM == OGRE_PLATFORM_APPLE_IOS
+        setProperty( tid, HlmsBaseProp::iOS, 1 );
+#endif
+#if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
+        setProperty( tid, HlmsBaseProp::macOS, 1 );
+#endif
+        setProperty( tid, HlmsBaseProp::Full32,
+                     static_cast<int32>( HlmsBaseProp::Full32.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Midf16,
+                     static_cast<int32>( HlmsBaseProp::Midf16.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Relaxed,
+                     static_cast<int32>( HlmsBaseProp::Relaxed.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::PrecisionMode, getSupportedPrecisionModeHash() );
+        if( mFastShaderBuildHack )
+            setProperty( tid, HlmsBaseProp::FastShaderBuildHack, 1 );
+
+        processPieceTexts( request.mPieceTexts, tid );
+
+        String inString = request.mSource;
+        String outString;
+        bool syntaxError = false;
+        syntaxError |= this->parseMath( inString, outString, tid );
+        while( !syntaxError && outString.find( "@foreach" ) != String::npos )
+        {
+            syntaxError |= this->parseForEach( outString, inString, tid );
+            inString.swap( outString );
+        }
+        syntaxError |= this->parseProperties( outString, inString, tid );
+        syntaxError |= this->parseUndefPieces( inString, outString, tid );
+        while( !syntaxError && ( outString.find( "@piece" ) != String::npos ||
+                                 outString.find( "@insertpiece" ) != String::npos ) )
+        {
+            syntaxError |= this->collectPieces( outString, inString, tid );
+            syntaxError |= this->insertPieces( inString, outString, tid );
+        }
+        syntaxError |= this->parseCounter( outString, inString, tid );
+        outString.swap( inString );
+
+        if( syntaxError )
+        {
+            LogManager::getSingleton().logMessage( "There were HLMS syntax errors while parsing "
+                                                   "(async) " +
+                                                   request.mSourceFilename + mShaderFileExt );
+        }
+
+        if( getProperty( tid, HlmsBaseProp::DisableStage ) )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALID_STATE,
+                         request.mJobName + ": the template disabled the compute stage",
+                         "HlmsCompute::compileAsync" );
+        }
+
+        Hash hashVal;
+        OGRE_HASH128_FUNC( outString.c_str(), static_cast<int>( outString.size() ), IdString::Seed,
+                           &hashVal );
+        if( mRenderSystem->getCapabilities()->hasCapability( RSC_EXPLICIT_API ) )
+        {
+            Hash hashValTmp[2] = { hashVal, Hash() };
+            OGRE_HASH128_FUNC( &request.mRootLayout, sizeof( request.mRootLayout ), IdString::Seed,
+                               &hashValTmp[1] );
+            OGRE_HASH128_FUNC( hashValTmp, sizeof( hashValTmp ), IdString::Seed, &hashVal );
+        }
+
+        {
+            ScopedLock lock( mMutex );
+            CompiledShaderMap::const_iterator itor = mCompiledShaderCache.find( hashVal );
+            if( itor != mCompiledShaderCache.end() )
+                request.mShader = itor->second;
+        }
+        if( !request.mShader )
+        {
+            HighLevelGpuProgramManager *gpuProgramManager = HighLevelGpuProgramManager::getSingletonPtr();
+            uint32 counter;
+            {
+                ScopedLock lock( mMutex );
+                counter = mAsyncProgramCounter++;
+            }
+            HighLevelGpuProgramPtr gp = gpuProgramManager->createProgramDetached(
+                "AsyncCompute" + StringConverter::toString( counter ) + request.mSourceFilename,
+                ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME, mShaderProfile,
+                GPT_COMPUTE_PROGRAM );
+            gp->setSource( outString, "" );
+            {
+                RootLayout rootLayout = request.mRootLayout;
+                gp->setRootLayout( gp->getType(), rootLayout );
+                if( getProperty( tid, "uses_array_bindings" ) )
+                    gp->setAutoReflectArrayBindingsInRootLayout( true );
+            }
+            if( mComputeShaderTarget )
+            {
+                gp->setParameter( "target", *mComputeShaderTarget );
+                gp->setParameter( "entry_point", "main" );
+            }
+            gp->setSkeletalAnimationIncluded( getProperty( tid, HlmsBaseProp::Skeleton ) != 0 );
+            gp->setMorphAnimationIncluded( false );
+            gp->setPoseAnimationIncluded( getProperty( tid, HlmsBaseProp::Pose ) != 0 );
+            gp->setVertexTextureFetchRequired( false );
+            gp->load();
+            request.mPrograms.push_back( gp );
+
+            ScopedLock lock( mMutex );
+            CompiledShaderMap::const_iterator itor = mCompiledShaderCache.find( hashVal );
+            if( itor != mCompiledShaderCache.end() )
+                request.mShader = itor->second;  // another thread got there first: share it
+            else
+            {
+                request.mShader = gp;
+                mCompiledShaderCache[hashVal] = gp;
+            }
+        }
+
+        HlmsComputePso &pso = request.mPso;
+        pso.computeShader = request.mShader;
+        pso.computeParams = request.mShader->createParameters();
+        pso.mThreadsPerGroup[0] = (uint32)( getProperty( tid, ComputeProperty::ThreadsPerGroupX ) );
+        pso.mThreadsPerGroup[1] = (uint32)( getProperty( tid, ComputeProperty::ThreadsPerGroupY ) );
+        pso.mThreadsPerGroup[2] = (uint32)( getProperty( tid, ComputeProperty::ThreadsPerGroupZ ) );
+        pso.mNumThreadGroups[0] = (uint32)( getProperty( tid, ComputeProperty::NumThreadGroupsX ) );
+        pso.mNumThreadGroups[1] = (uint32)( getProperty( tid, ComputeProperty::NumThreadGroupsY ) );
+        pso.mNumThreadGroups[2] = (uint32)( getProperty( tid, ComputeProperty::NumThreadGroupsZ ) );
+        if( pso.mThreadsPerGroup[0] * pso.mThreadsPerGroup[1] * pso.mThreadsPerGroup[2] == 0u ||
+            ( !request.mIndirect &&
+              pso.mNumThreadGroups[0] * pso.mNumThreadGroups[1] * pso.mNumThreadGroups[2] == 0u ) )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                         request.mJobName + ": threads_per_group / num_thread_groups not set",
+                         "HlmsCompute::compileAsync" );
+        }
+
+        mRenderSystem->_hlmsComputePipelineStateObjectCreated( &pso );
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::asyncComputePublished( AsyncComputeJob &request )
+    {
+        HighLevelGpuProgramManager &mgr = HighLevelGpuProgramManager::getSingleton();
+        for( const HighLevelGpuProgramPtr &gp : request.mPrograms )
+            mgr._registerDetachedProgram( gp );
+        request.mPrograms.clear();
+
+        const size_t idx = findAsyncComputeEntry( request.mJob, request.mJobProperties );
+        if( request.mFailed )
+        {
+            if( request.mPso.rsData )
+                mRenderSystem->_hlmsComputePipelineStateObjectDestroyed( &request.mPso );
+            if( idx < mAsyncComputeEntries.size() )
+                mAsyncComputeEntries[idx].inFlight = 0;  // remembered: AsyncFailed
+            return;
+        }
+        if( idx < mAsyncComputeEntries.size() )
+        {
+            mAsyncComputeEntries[idx] = mAsyncComputeEntries.back();
+            mAsyncComputeEntries.pop_back();
+        }
+
+        // dispatch()'s filing of a freshly compiled PSO, with the job's shader params applied
+        // now (the job may have changed them since the request).
+        HlmsComputeJob *job = request.mJob;
+        ShaderParams *shaderParams = job->_getShaderParams( "default" );
+        if( shaderParams )
+            shaderParams->updateParameters( request.mPso.computeParams, true );
+        ShaderParams *profileParams = job->_getShaderParams( mShaderProfile );
+        if( profileParams )
+            profileParams->updateParameters( request.mPso.computeParams, true );
+
+        ComputePsoCache psoCache( job, request.mJobProperties );
+        psoCache.pso = request.mPso;
+        if( shaderParams )
+            psoCache.paramsUpdateCounter = shaderParams->getUpdateCounter();
+        if( profileParams )
+            psoCache.paramsProfileUpdateCounter = profileParams->getUpdateCounter();
+
+        if( mFreeShaderCacheEntries.empty() )
+            mComputeShaderCache.push_back( psoCache );
+        else
+        {
+            const size_t freeIdx = mFreeShaderCacheEntries.back();
+            mFreeShaderCacheEntries.pop_back();
+            mComputeShaderCache[freeIdx] = psoCache;
+        }
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::asyncComputeDiscarded( AsyncComputeJob &request )
+    {
+        if( request.mPso.rsData )
+            mRenderSystem->_hlmsComputePipelineStateObjectDestroyed( &request.mPso );
+        request.mPrograms.clear();
+        const size_t idx = findAsyncComputeEntry( request.mJob, request.mJobProperties );
+        if( idx < mAsyncComputeEntries.size() && mAsyncComputeEntries[idx].inFlight == &request )
+        {
+            mAsyncComputeEntries[idx] = mAsyncComputeEntries.back();
+            mAsyncComputeEntries.pop_back();
+        }
+    }
+    //-----------------------------------------------------------------------------------
     void HlmsCompute::dispatch( HlmsComputeJob *job, SceneManager *sceneManager, Camera *camera )
     {
         job->_calculateNumThreadGroupsBasedOnSetting();
@@ -472,6 +882,19 @@ namespace Ogre
             psoCache.setProperties.swap( job->mSetProperties );
             ComputePsoCacheVec::const_iterator itor =
                 std::find( mComputeShaderCache.begin(), mComputeShaderCache.end(), psoCache );
+            if( itor == mComputeShaderCache.end() )
+            {
+                // ASYNC-SHADERS-1: the asynchronous compiler may be building exactly this
+                // permutation; take its result instead of building it a second time.
+                psoCache.setProperties.swap( job->mSetProperties );
+                const bool bWaited = waitForAsyncPermutation( job );
+                psoCache.setProperties.swap( job->mSetProperties );
+                if( bWaited )
+                {
+                    itor = std::find( mComputeShaderCache.begin(), mComputeShaderCache.end(),
+                                      psoCache );
+                }
+            }
             if( itor == mComputeShaderCache.end() )
             {
                 // Needs to recompile.
