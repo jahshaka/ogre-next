@@ -807,19 +807,23 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void HlmsCompute::asyncComputePublished( AsyncComputeJob &request )
     {
-        HighLevelGpuProgramManager &mgr = HighLevelGpuProgramManager::getSingleton();
-        for( const HighLevelGpuProgramPtr &gp : request.mPrograms )
-            mgr._registerDetachedProgram( gp );
-        request.mPrograms.clear();
-
         const size_t idx = findAsyncComputeEntry( request.mJob, request.mJobProperties );
         if( request.mFailed )
         {
+            request.mPrograms.clear();  // a failed build's programs are dropped, never registered
             if( request.mPso.rsData )
                 mRenderSystem->_hlmsComputePipelineStateObjectDestroyed( &request.mPso );
             if( idx < mAsyncComputeEntries.size() )
                 mAsyncComputeEntries[idx].inFlight = 0;  // remembered: AsyncFailed
             return;
+        }
+        {
+            // Under msGlobalMutex: see Hlms::AsyncPsoJob::registerPrograms.
+            ScopedLock lock( msGlobalMutex );
+            HighLevelGpuProgramManager &mgr = HighLevelGpuProgramManager::getSingleton();
+            for( const HighLevelGpuProgramPtr &gp : request.mPrograms )
+                mgr._registerDetachedProgram( gp );
+            request.mPrograms.clear();
         }
         if( idx < mAsyncComputeEntries.size() )
         {

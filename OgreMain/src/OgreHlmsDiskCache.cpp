@@ -244,6 +244,19 @@ namespace Ogre
                 // dereferences both. Saving the disk cache then crashed the
                 // process over a shader that had merely failed: skip the entry
                 // and say so, once per cache copy.
+                // (ASYNC-SHADERS-1) An entry the asynchronous compiler is still building has no
+                // PSO YET: it is skipped too, and said for what it is (it is saved next time).
+                if( bCacheable && ( ( *itor )->flags & ( HLMS_CACHE_FLAGS_ASYNC_PENDING |
+                                                          HLMS_CACHE_FLAGS_COMPILATION_REQUESTED |
+                                                          HLMS_CACHE_FLAGS_COMPILATION_REQUIRED ) ) )
+                {
+                    bCacheable = false;
+                    LogManager::getSingleton().logMessage(
+                        "HlmsDiskCache: shader cache entry " +
+                        StringConverter::toString( ( *itor )->hash ) +
+                        " is still being built (pending) - skipped this save",
+                        LML_TRIVIAL );
+                }
                 if( bCacheable && ( !( *itor )->pso.macroblock || !( *itor )->pso.blendblock ) )
                 {
                     bCacheable = false;
@@ -354,8 +367,11 @@ namespace Ogre
         }
     }
     //-----------------------------------------------------------------------------------
-    void HlmsDiskCache::applyTo( Hlms *hlms, const size_t numThreads )
+    void HlmsDiskCache::applyTo( Hlms *hlms, const size_t requestedThreads )
     {
+        // (ASYNC-SHADERS-1) The Hlms' thread slots above kAsyncTidBase belong to the
+        // asynchronous compiler: a bigger pool is clamped, never an error (a 128-thread machine).
+        const size_t numThreads = std::min<size_t>( requestedThreads, Hlms::kAsyncTidBase );
         LogManager::getSingleton().logMessage( "Applying HlmsDiskCache " +
                                                StringConverter::toString( hlms->getType() ) );
 

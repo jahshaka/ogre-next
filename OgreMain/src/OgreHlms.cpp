@@ -2002,14 +2002,11 @@ namespace Ogre
         // asynchronous compiler's threads hold slots in it across frames). A SceneManager
         // with more workers than the slots below kAsyncTidBase is refused here, loudly,
         // instead of corrupting a service thread's slot.
-        if( numThreads > kAsyncTidBase )
-        {
-            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
-                         "Hlms supports at most " + StringConverter::toString( kAsyncTidBase ) +
-                             " shader compile threads per SceneManager; asked for " +
-                             StringConverter::toString( numThreads ),
-                         "Hlms::_setNumThreads" );
-        }
+        // A caller above the slots below kAsyncTidBase must CLAMP its own thread count (the
+        // slots it would index are the service's): RenderQueue serialises a SceneManager with
+        // more workers, HlmsDiskCache::applyTo clamps its pool. Never a throw: a 128-thread
+        // machine must start.
+        (void)numThreads;
     }
     //-----------------------------------------------------------------------------------
     void Hlms::_setShadersGenerated( uint32 shadersGenerated ) { mShadersGenerated = shadersGenerated; }
@@ -4223,8 +4220,12 @@ namespace Ogre
                 mFailed = true;  // no deadline was given: the backend refused it
         }
 
+        /// Main thread. UNDER msGlobalMutex: a blocking render with several workers runs Ogre's
+        /// in-frame compile queue, whose workers register programs under that lock — and a
+        /// publish can happen right then (waitFor publishes the job it waited for at once).
         void registerPrograms()
         {
+            ScopedLock lock( Hlms::msGlobalMutex );
             HighLevelGpuProgramManager &mgr = HighLevelGpuProgramManager::getSingleton();
             for( const HighLevelGpuProgramPtr &gp : mPrograms )
                 mgr._registerDetachedProgram( gp );
@@ -4233,9 +4234,10 @@ namespace Ogre
 
         void publish() override
         {
-            registerPrograms();
             if( mFailed )
             {
+                // A failed build's programs are dropped, never registered.
+                mPrograms.clear();
                 if( mPso.rsData )
                     mHlms->mRenderSystem->_hlmsPipelineStateObjectDestroyed( &mPso );
                 releaseStrongBlocks();
@@ -4243,6 +4245,7 @@ namespace Ogre
             }
             else
             {
+                registerPrograms();
                 mStub->pso = mPso;
                 mStub->flags = HLMS_CACHE_FLAGS_NONE;
                 mHlms->asyncShaderCacheEntryCreated( mStub, mPassCache,

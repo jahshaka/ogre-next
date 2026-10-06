@@ -353,7 +353,8 @@ namespace Ogre
         const size_t numWorkerThreads = mSceneManager->getNumWorkerThreads();
         const bool bUseMultithreadedShaderCompliation =
             mRoot->getRenderSystem()->supportsMultithreadedShaderCompilation() &&
-            mSceneManager->getNumWorkerThreads() > 1u;
+            mSceneManager->getNumWorkerThreads() > 1u &&
+            mSceneManager->getNumWorkerThreads() <= Hlms::kAsyncTidBase;
 
         for( size_t i = 0; i < HLMS_MAX; ++i )
         {
@@ -417,7 +418,8 @@ namespace Ogre
         mRenderingAsync = mAsyncShaderCompile && mHlmsManager->getAsyncCompiler()->isRunning();
 
         if( !mRenderingAsync && rs->supportsMultithreadedShaderCompilation() &&
-            mSceneManager->getNumWorkerThreads() > 1u )
+            mSceneManager->getNumWorkerThreads() > 1u &&
+            mSceneManager->getNumWorkerThreads() <= Hlms::kAsyncTidBase )
         {
             parallelCompileQueue = &mParallelHlmsCompileQueue;
             mParallelHlmsCompileQueue.start( mRoot, mSceneManager, casterPass );
@@ -618,7 +620,8 @@ namespace Ogre
     {
         OgreProfileBeginGroup( "RenderQueue::warmUpShadersTrigger", OGREPROF_RENDERING );
 
-        if( rs->supportsMultithreadedShaderCompilation() && mSceneManager->getNumWorkerThreads() > 1u )
+        if( rs->supportsMultithreadedShaderCompilation() && mSceneManager->getNumWorkerThreads() > 1u &&
+            mSceneManager->getNumWorkerThreads() <= Hlms::kAsyncTidBase )
             mParallelHlmsCompileQueue.fireWarmUpParallel( mRoot, mSceneManager, casterPass );
         else
             mParallelHlmsCompileQueue.warmUpSerial( mHlmsManager, mPendingPassCaches.data() );
@@ -1291,7 +1294,8 @@ namespace Ogre
         // are resent into the parallel queue, which does not exist.
         // In theory, single threaded could support them, but it's not implemented.
         const bool bUseDeadlines = root.getRenderSystem()->supportsMultithreadedShaderCompilation() &&
-                                   sceneManager.getNumWorkerThreads() > 1u && !casterPass;
+                                   sceneManager.getNumWorkerThreads() > 1u &&
+                                   sceneManager.getNumWorkerThreads() <= Hlms::kAsyncTidBase && !casterPass;
 
         if( !mDeadlineSet && bUseDeadlines )
         {

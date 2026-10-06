@@ -29,9 +29,18 @@ THE SOFTWARE.
 
 #include "OgreStringInterface.h"
 
+#include <mutex>
+
 namespace Ogre
 {
-    OGRE_STATIC_MUTEX( g_DictionaryMutex );
+    // (Jahshaka fork, ASYNC-SHADERS-1) A REAL lock, whatever OGRE_THREAD_SUPPORT says: at 0
+    // OGRE_STATIC_MUTEX / OGRE_LOCK_MUTEX compile to nothing, and the HlmsAsyncCompiler builds
+    // GPU programs (whose constructors call createParamDictionary) on its own threads while the
+    // main thread may construct the first object of some other class — two writers into one
+    // std::map. (A class's dictionary is FILLED by its first constructor, outside this lock;
+    // every class the service constructs had its first object built on the main thread at
+    // startup, before the service runs.)
+    static std::mutex g_DictionaryMutex;
 
     typedef map<String, ParamDictionary>::type ParamDictionaryMap;
     /// Dictionary of parameters
@@ -52,7 +61,7 @@ namespace Ogre
 
     bool StringInterface::createParamDictionary( const String &className )
     {
-        OGRE_LOCK_MUTEX( g_DictionaryMutex );
+        std::lock_guard<std::mutex> lock( g_DictionaryMutex );
 
         ParamDictionaryMap::iterator it = msDictionary.find( className );
 
@@ -101,7 +110,7 @@ namespace Ogre
     //-----------------------------------------------------------------------
     void StringInterface::cleanupDictionary()
     {
-        OGRE_LOCK_MUTEX( g_DictionaryMutex );
+        std::lock_guard<std::mutex> lock( g_DictionaryMutex );
 
         msDictionary.clear();
     }

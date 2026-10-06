@@ -60,6 +60,7 @@ namespace Ogre
         mEnabled( bEnabled ),
         mAmalgamatedProfiling( false ),
         mAsyncShaderCompile( false ),
+        mSuppressSwap( false ),
         mDefaultCamera( defaultCam ),
         mSceneManager( sceneManager ),
         mRenderSys( renderSys ),
@@ -953,6 +954,8 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void CompositorWorkspace::_swapFinalTarget( vector<TextureGpu *>::type &swappedTargets )
     {
+        if( mSuppressSwap )
+            return;  // ASYNC-SHADERS-1: the host holds the last presented picture this frame
         CompositorChannelVec::const_iterator itor = mExternalRenderTargets.begin();
         CompositorChannelVec::const_iterator endt = mExternalRenderTargets.end();
 

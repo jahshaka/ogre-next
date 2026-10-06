@@ -92,6 +92,8 @@ namespace Ogre
         bool mAmalgamatedProfiling;
         /// (Jahshaka fork, ASYNC-SHADERS-1) See setAsyncShaderCompile.
         bool mAsyncShaderCompile;
+        /// (ASYNC-SHADERS-1) See setSuppressSwap.
+        bool mSuppressSwap;
 
         CompositorWorkspaceListenerVec mListeners;
 
@@ -344,6 +346,17 @@ namespace Ogre
         */
         void setAsyncShaderCompile( bool bAsync ) { mAsyncShaderCompile = bAsync; }
         bool getAsyncShaderCompile() const { return mAsyncShaderCompile; }
+
+        /** (Jahshaka fork, ASYNC-SHADERS-1) True: this frame's _swapFinalTarget does not
+            present this workspace's external targets — the window keeps showing the last
+            frame it presented, and the image rendered this frame stays acquired (a later
+            frame renders over it and presents). For a frame that drew a HOLE (an object whose
+            shader is still building and has no placeholder yet, e.g. right after a pass
+            change): the host holds the last complete picture instead. Every workspace that
+            renders into the same window must say the same, or the next one presents it.
+        */
+        void setSuppressSwap( bool bSuppress ) { mSuppressSwap = bSuppress; }
+        bool getSuppressSwap() const { return mSuppressSwap; }
 
         /// Usually by convention the RenderTarget[0] is the one we're rendering to. May be empty.
         const CompositorChannelVec &getExternalRenderTargets() const { return mExternalRenderTargets; }
