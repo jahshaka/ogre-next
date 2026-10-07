@@ -1101,6 +1101,13 @@ namespace Ogre
                                            const QueuedRenderable &queuedRenderable, bool casterPass,
                                            bool allowPlaceholder, bool &outPlaceholder );
 
+        /** (ASYNC-SHADERS-1) Whether this renderable may stand in with the placeholder while its
+            own permutation builds. A derived Hlms whose placeholder only means something for some
+            of its renderables (HlmsAtom: a decode twin's bucket, never its classifier) says no
+            for the rest: they skip the draw while pending, the frame's hole the caller holds.
+        */
+        virtual bool allowsAsyncPlaceholder( const Renderable * ) const { return true; }
+
         /** (ASYNC-SHADERS-1) The datablock an asynchronous pass draws a pending object with
             (one of THIS Hlms' datablocks; e.g. a neutral grey for PBS). Null (the default):
             a pending object is not drawn. Changing it cancels nothing; the placeholder hashes

@@ -4528,22 +4528,26 @@ namespace Ogre
             else if( entry->flags == HLMS_CACHE_FLAGS_COMPILATION_REQUIRED )
                 ownRequest = const_cast<HlmsCache *>( entry );
         }
-        const auto requestOwn = [&]()
+        // placeholdersOnly: the placeholders-only warm-up skips the object's own build — except
+        // for an object that can have no placeholder (its own permutation is its only picture).
+        const auto requestOwn = [&]( bool hasPlaceholderPath )
         {
-            if( ownRequest && !mHlmsManager->getAsyncCompiler()->getPlaceholdersOnly() )
+            if( ownRequest &&
+                ( !hasPlaceholderPath || !mHlmsManager->getAsyncCompiler()->getPlaceholdersOnly() ) )
                 requestAsyncEntry( hash[0], passCache, finalHash, queuedRenderable, ownRequest );
         };
 
-        if( !allowPlaceholder || !mAsyncPlaceholderDatablock )
+        if( !allowPlaceholder || !mAsyncPlaceholderDatablock ||
+            !allowsAsyncPlaceholder( queuedRenderable.renderable ) )
         {
-            requestOwn();
+            requestOwn( false );
             return entry;
         }
 
         Renderable *renderable = queuedRenderable.renderable;
         if( renderable->getDatablock() == mAsyncPlaceholderDatablock )
         {
-            requestOwn();
+            requestOwn( false );
             return entry;  // it IS the placeholder: nothing to stand in for it
         }
 
@@ -4595,7 +4599,7 @@ namespace Ogre
                 LogManager::getSingleton().logMessage(
                     "[async] no placeholder for this renderable: " + e.getFullDescription(),
                     LML_CRITICAL );
-                requestOwn();
+                requestOwn( false );
                 return entry;
             }
             renderable->_mHlmsPlaceholderHash[0] = phHash;
@@ -4622,7 +4626,7 @@ namespace Ogre
             placeholder = stub;
         }
         renderable->_mHlmsPlaceholderPrewarmed[passIdx] = hash[1];
-        requestOwn();
+        requestOwn( true );
 
         // ...and READ AGAIN: the request may have built it on the spot (the warm fast path —
         // a PSO the pipeline cache already holds is created at once), and a built object is
