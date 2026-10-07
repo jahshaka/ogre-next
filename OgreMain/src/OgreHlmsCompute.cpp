@@ -906,6 +906,14 @@ namespace Ogre
                 // Return back the borrowed properties and make
                 // a hard copy for starting the compilation.
                 psoCache.setProperties.swap( job->mSetProperties );
+
+                // (ASYNC-SHADERS-1) Named, like Hlms::createShaderCacheEntry's: a compute
+                // permutation built in the frame while the background compiler runs.
+                if( mHlmsManager && mHlmsManager->getAsyncCompiler()->isRunning() )
+                {
+                    LogManager::getSingleton().logMessage( "HlmsCompute: job '" + job->getNameStr() +
+                                                           "' compiles a permutation in the frame" );
+                }
                 this->mT[kNoTid].setProperties = job->mSetProperties;
 
                 // Uset the HlmsComputePso, as the ptr may be cached by the
