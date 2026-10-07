@@ -4624,7 +4624,10 @@ namespace Ogre
         renderable->_mHlmsPlaceholderPrewarmed[passIdx] = hash[1];
         requestOwn();
 
-        if( ready || placeholder->flags != HLMS_CACHE_FLAGS_NONE )
+        // ...and READ AGAIN: the request may have built it on the spot (the warm fast path —
+        // a PSO the pipeline cache already holds is created at once), and a built object is
+        // drawn, never its placeholder (measured: a warm launch drew 3-7 placeholders without).
+        if( entry->flags == HLMS_CACHE_FLAGS_NONE || placeholder->flags != HLMS_CACHE_FLAGS_NONE )
             return entry;  // ready: draw it; else not even the placeholder: no draw (a stub)
 
         outPlaceholder = true;
