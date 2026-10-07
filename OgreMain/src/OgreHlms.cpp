@@ -320,6 +320,7 @@ namespace Ogre
         mPrecisionMode( PrecisionFull32 ),
         mFastShaderBuildHack( false ),
         mAsyncPlaceholderDatablock( 0 ),
+        mAsyncPlaceholderFillFor( 0 ),
         mHashingForPlaceholder( false ),
         mDefaultDatablock( 0 ),
         mType( type ),
@@ -4511,29 +4512,40 @@ namespace Ogre
                          "The renderable and pass halves of the shader hash overlap" );
         const uint32 finalHash = hash[0] | hash[1];
 
+        // THE OBJECT'S OWN PERMUTATION IS REQUESTED LAST (after its placeholder, below). With
+        // N service threads the first N jobs of a frame start at once and run to the end; after
+        // a pass change (a tier) every object requests its own build and its placeholder in the
+        // same frame, and the object-first order put the few urgent placeholders behind
+        // permutations as long as themselves (measured: the Atom decode's placeholder landed
+        // ~315 frames after a change to Low, every one of them held).
+        HlmsCache *ownRequest = 0;
         const HlmsCache *entry = lastReturnedValue;
         if( entry->hash != finalHash )
         {
             entry = this->getShaderCache( finalHash );
             if( !entry )
-            {
-                HlmsCache *stub = addStubShaderCache( finalHash );
-                requestAsyncEntry( hash[0], passCache, finalHash, queuedRenderable, stub );
-                entry = stub;
-            }
+                entry = ownRequest = addStubShaderCache( finalHash );
             else if( entry->flags == HLMS_CACHE_FLAGS_COMPILATION_REQUIRED )
-            {
-                requestAsyncEntry( hash[0], passCache, finalHash, queuedRenderable,
-                                   const_cast<HlmsCache *>( entry ) );
-            }
+                ownRequest = const_cast<HlmsCache *>( entry );
         }
+        const auto requestOwn = [&]()
+        {
+            if( ownRequest && !mHlmsManager->getAsyncCompiler()->getPlaceholdersOnly() )
+                requestAsyncEntry( hash[0], passCache, finalHash, queuedRenderable, ownRequest );
+        };
 
         if( !allowPlaceholder || !mAsyncPlaceholderDatablock )
+        {
+            requestOwn();
             return entry;
+        }
 
         Renderable *renderable = queuedRenderable.renderable;
         if( renderable->getDatablock() == mAsyncPlaceholderDatablock )
+        {
+            requestOwn();
             return entry;  // it IS the placeholder: nothing to stand in for it
+        }
 
         const bool ready = entry->flags == HLMS_CACHE_FLAGS_NONE;
         const uint8 passIdx = casterPass ? 1u : 0u;
@@ -4569,9 +4581,9 @@ namespace Ogre
             try
             {
                 // A PURE hash: no component may react to it as if the renderable's material had
-                // changed (HlmsPbs flags a planar-tracked renderable FlushPending, and the
-                // mirrors then re-derive its hashes — measured: the scene switch after it drew
-                // image-layout validation errors). See mHashingForPlaceholder.
+                // changed (HlmsPbs would flag a planar-tracked renderable FlushPending, and the
+                // mirrors would then re-derive its hashes for a material it never took). See
+                // mHashingForPlaceholder.
                 DatablockSwap swap( renderable, mAsyncPlaceholderDatablock );
                 mHashingForPlaceholder = true;
                 calculateHashFor( renderable, phHash, phCasterHash );
@@ -4583,6 +4595,7 @@ namespace Ogre
                 LogManager::getSingleton().logMessage(
                     "[async] no placeholder for this renderable: " + e.getFullDescription(),
                     LML_CRITICAL );
+                requestOwn();
                 return entry;
             }
             renderable->_mHlmsPlaceholderHash[0] = phHash;
@@ -4609,6 +4622,7 @@ namespace Ogre
             placeholder = stub;
         }
         renderable->_mHlmsPlaceholderPrewarmed[passIdx] = hash[1];
+        requestOwn();
 
         if( ready || placeholder->flags != HLMS_CACHE_FLAGS_NONE )
             return entry;  // ready: draw it; else not even the placeholder: no draw (a stub)

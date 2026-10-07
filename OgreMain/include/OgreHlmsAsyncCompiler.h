@@ -121,6 +121,7 @@ namespace Ogre
         std::atomic<uint64> mNumCompleted;    ///< jobs that ran to the end (success or failure)
         std::atomic<uint64> mNumFailed;
         int                 mThreadNice;
+        bool                mPlaceholdersOnly;  ///< main thread only
 
         void threadMain( uint32 threadIdx );
         void stopThreads();
@@ -170,6 +171,15 @@ namespace Ogre
         /// Main thread. Drops every job with this key (see cancel): what a job points at is
         /// about to die (a compute job being destroyed).
         void cancelKey( const void *key );
+
+        /** Main thread. While set, Hlms::getMaterialAsync requests only PLACEHOLDERS: an object
+            whose own permutation is not built requests the placeholder for the pass it is drawn
+            in and leaves its own stub unrequested (COMPILATION_REQUIRED, requested by the next
+            draw that finds it so). For a warm-up that must leave every pass's placeholders
+            built without paying for every object's permutation in every pass.
+        */
+        void setPlaceholdersOnly( bool only ) { mPlaceholdersOnly = only; }
+        bool getPlaceholdersOnly() const { return mPlaceholdersOnly; }
 
         /// Jobs submitted and not yet published or discarded.
         uint32 getNumOutstanding() const { return mNumOutstanding.load( std::memory_order_relaxed ); }

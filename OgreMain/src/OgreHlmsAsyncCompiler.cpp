@@ -90,7 +90,8 @@ namespace Ogre
         mNumOutstanding( 0u ),
         mNumCompleted( 0u ),
         mNumFailed( 0u ),
-        mThreadNice( 0 )
+        mThreadNice( 0 ),
+        mPlaceholdersOnly( false )
     {
     }
     //-----------------------------------------------------------------------------------
