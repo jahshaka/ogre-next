@@ -321,6 +321,7 @@ namespace Ogre
         mFastShaderBuildHack( false ),
         mAsyncPlaceholderDatablock( 0 ),
         mAsyncPlaceholderFillFor( 0 ),
+        mHashingForPlaceholder( false ),
         mDefaultDatablock( 0 ),
         mType( type ),
         mTypeName( typeName ),
@@ -2857,6 +2858,20 @@ namespace Ogre
     {
         OgreProfileExhaustive( "Hlms::createShaderCacheEntry" );
 
+        // (ASYNC-SHADERS-1) A permutation built on the MAIN thread while the background compiler
+        // runs is a frame that waited for a compile: name the pass, so the host's live-compile
+        // sentry has a culprit to point at.
+        if( tid == kNoTid && mHlmsManager && mHlmsManager->getAsyncCompiler()->isRunning() )
+        {
+            const SceneManager *sm =
+                queuedRenderable.movableObject ? queuedRenderable.movableObject->_getManager() : 0;
+            const Camera *cam = sm ? sm->getCamerasInProgress().renderingCamera : 0;
+            LogManager::getSingleton().logMessage(
+                "Hlms: permutation " + StringConverter::toString( finalHash ) +
+                " built in the frame (blocking pass, camera '" + ( cam ? cam->getName() : String( "?" ) ) +
+                "')" );
+        }
+
         // Set the properties by merging the cache from the pass, with the cache from renderable
         mT[tid].setProperties.clear();
         // If retVal is null, we did something wrong earlier
@@ -4554,11 +4569,18 @@ namespace Ogre
             uint32 phHash = 0u, phCasterHash = 0u;
             try
             {
+                // A PURE hash: no component may react to it as if the renderable's material had
+                // changed (HlmsPbs flags a planar-tracked renderable FlushPending, and the
+                // mirrors then re-derive its hashes — measured: the scene switch after it drew
+                // image-layout validation errors). See mHashingForPlaceholder.
                 DatablockSwap swap( renderable, mAsyncPlaceholderDatablock );
+                mHashingForPlaceholder = true;
                 calculateHashFor( renderable, phHash, phCasterHash );
+                mHashingForPlaceholder = false;
             }
             catch( Exception &e )
             {
+                mHashingForPlaceholder = false;
                 LogManager::getSingleton().logMessage(
                     "[async] no placeholder for this renderable: " + e.getFullDescription(),
                     LML_CRITICAL );

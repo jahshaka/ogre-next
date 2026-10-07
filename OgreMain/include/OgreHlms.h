@@ -372,6 +372,10 @@ namespace Ogre
         HlmsDatablock *mAsyncPlaceholderDatablock;
         /// See _getAsyncPlaceholderFillFor.
         const HlmsDatablock *mAsyncPlaceholderFillFor;
+        /// (ASYNC-SHADERS-1) True while getMaterialAsync hashes a renderable against the
+        /// placeholder: a derived Hlms' calculateHashForPreCreate must have NO side effect then
+        /// (it is not the renderable's material changing).
+        bool mHashingForPlaceholder;
 
         class AsyncPsoJob;
         friend class AsyncPsoJob;

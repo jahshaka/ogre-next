@@ -1087,7 +1087,10 @@ namespace Ogre
         }
 
 #ifdef OGRE_BUILD_COMPONENT_PLANAR_REFLECTIONS
-        if( mPlanarReflections && mPlanarReflections->hasPlanarReflections( renderable ) )
+        // (Jahshaka, ASYNC-SHADERS-1) Not for a placeholder hash: the renderable's material did
+        // not change, and a FlushPending here makes the mirrors re-derive its real hashes.
+        if( mPlanarReflections && !mHashingForPlaceholder &&
+            mPlanarReflections->hasPlanarReflections( renderable ) )
         {
             if( !mPlanarReflections->_isUpdatingRenderablesHlms() )
                 mPlanarReflections->_notifyRenderableFlushedHlmsDatablock( renderable );

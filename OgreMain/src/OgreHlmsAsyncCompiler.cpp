@@ -250,6 +250,9 @@ namespace Ogre
                 HlmsAsyncJob *job = *it;
                 mQueue.erase( it );
                 lock.unlock();
+                LogManager::getSingleton().logMessage(
+                    "HlmsAsyncCompiler: a blocking pass needed a queued permutation; the main thread "
+                    "builds it itself" );
                 runJob( job, Hlms::kAsyncTidBase + kMaxThreads );
                 mNumCompleted.fetch_add( 1u, std::memory_order_relaxed );
                 if( job->mFailed )
