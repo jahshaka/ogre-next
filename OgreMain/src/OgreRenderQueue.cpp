@@ -969,7 +969,6 @@ namespace Ogre
                 Renderable *renderable = queuedRenderable.renderable;
                 HlmsDatablock *own =
                     renderable->_swapDatablockForPlaceholder( hlms->getAsyncPlaceholderDatablock() );
-                hlms->_setAsyncPlaceholderFillFor( own );
                 try
                 {
                     baseInstance = hlms->fillBuffersForV2( hlmsCache, queuedRenderable, casterPass,
@@ -977,11 +976,9 @@ namespace Ogre
                 }
                 catch( ... )
                 {
-                    hlms->_setAsyncPlaceholderFillFor( 0 );
                     renderable->_swapDatablockForPlaceholder( own );
                     throw;
                 }
-                hlms->_setAsyncPlaceholderFillFor( 0 );
                 renderable->_swapDatablockForPlaceholder( own );
             }
             else

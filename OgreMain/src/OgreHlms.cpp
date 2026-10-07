@@ -320,7 +320,6 @@ namespace Ogre
         mPrecisionMode( PrecisionFull32 ),
         mFastShaderBuildHack( false ),
         mAsyncPlaceholderDatablock( 0 ),
-        mAsyncPlaceholderFillFor( 0 ),
         mHashingForPlaceholder( false ),
         mDefaultDatablock( 0 ),
         mType( type ),

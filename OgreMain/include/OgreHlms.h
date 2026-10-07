@@ -370,8 +370,6 @@ namespace Ogre
         /// permutation is being built. Null: the object is not drawn until it lands
         /// (upstream's behaviour for a stub). See setAsyncPlaceholderDatablock.
         HlmsDatablock *mAsyncPlaceholderDatablock;
-        /// See _getAsyncPlaceholderFillFor.
-        const HlmsDatablock *mAsyncPlaceholderFillFor;
         /// (ASYNC-SHADERS-1) True while getMaterialAsync hashes a renderable against the
         /// placeholder: a derived Hlms' calculateHashForPreCreate must have NO side effect then
         /// (it is not the renderable's material changing).
@@ -1108,15 +1106,6 @@ namespace Ogre
         */
         void           setAsyncPlaceholderDatablock( HlmsDatablock *datablock );
         HlmsDatablock *getAsyncPlaceholderDatablock() const { return mAsyncPlaceholderDatablock; }
-
-        /** (ASYNC-SHADERS-1) Non-null only while RenderQueue fills buffers for a PLACEHOLDER
-            draw: the renderable's OWN datablock, which the fill cannot see (the renderable
-            holds the placeholder for the length of the call). A derived Hlms whose per-draw
-            data depends on the real material beyond its constants reads it here (HlmsAtom's
-            decode draws: which pixels the draw covers is the real material's bucket).
-        */
-        const HlmsDatablock *_getAsyncPlaceholderFillFor() const { return mAsyncPlaceholderFillFor; }
-        void _setAsyncPlaceholderFillFor( const HlmsDatablock *own ) { mAsyncPlaceholderFillFor = own; }
 
         /** (ASYNC-SHADERS-1) A blocking path met an entry the asynchronous compiler is
             building: wait for exactly that one and publish it. No-op for any other entry.
