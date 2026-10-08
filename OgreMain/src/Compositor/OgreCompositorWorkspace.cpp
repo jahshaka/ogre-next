@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include "OgreStableHeaders.h"
 
 #include "Compositor/OgreCompositorWorkspace.h"
+#include "OgreHlmsCompute.h"
 
 #include "Compositor/OgreCompositorManager2.h"
 #include "Compositor/OgreCompositorShadowNode.h"
@@ -824,17 +825,21 @@ namespace Ogre
         {
             RenderQueue *rq;
             bool         previous;
+            bool         previousCompute;
             AsyncScope( RenderQueue *_rq, bool bAsync ) :
                 rq( _rq ),
-                previous( _rq ? _rq->getAsyncShaderCompile() : false )
+                previous( _rq ? _rq->getAsyncShaderCompile() : false ),
+                previousCompute( HlmsCompute::_getInAsyncWorkspace() )
             {
                 if( rq )
                     rq->setAsyncShaderCompile( bAsync );
+                HlmsCompute::_setInAsyncWorkspace( bAsync );
             }
             ~AsyncScope()
             {
                 if( rq )
                     rq->setAsyncShaderCompile( previous );
+                HlmsCompute::_setInAsyncWorkspace( previousCompute );
             }
         } asyncScope( mSceneManager ? mSceneManager->getRenderQueue() : 0, mAsyncShaderCompile );
 

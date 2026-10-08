@@ -238,28 +238,54 @@ namespace Ogre
         return done.size();
     }
     //-----------------------------------------------------------------------------------
-    bool HlmsAsyncCompiler::waitFor( const void *key )
+    bool HlmsAsyncCompiler::waitFor( const void *key, const char *caller )
     {
         std::unique_lock<std::mutex> lock( mMutex );
 
-        // Still queued: nobody has started it, so the main thread builds it itself on its own
-        // slot rather than wait behind the queue.
+        // STILL QUEUED (the worker is late: every thread busy, or starved by load). The main
+        // thread NEVER builds it itself while the service runs — that was a UI-thread compile
+        // exactly when the service fell behind (shader.sample_opens_quiet, 2 of 7 gate runs
+        // under load). It goes to the FRONT of the queue and the caller waits for a service
+        // thread like any running job. Only with no service thread left (stopped under the
+        // caller) does the main thread build it, on its own slot.
         for( std::deque<HlmsAsyncJob *>::iterator it = mQueue.begin(); it != mQueue.end(); ++it )
         {
             if( ( *it )->mKey == key )
             {
                 HlmsAsyncJob *job = *it;
                 mQueue.erase( it );
-                lock.unlock();
+                if( mThreads.empty() )
+                {
+                    lock.unlock();
+                    LogManager::getSingleton().logMessage(
+                        String( "HlmsAsyncCompiler: MAIN-THREAD BUILD of a queued permutation (" ) +
+                        caller + ", no service thread): " + job->mWhat );
+                    runJob( job, Hlms::kAsyncTidBase + kMaxThreads );
+                    mNumCompleted.fetch_add( 1u, std::memory_order_relaxed );
+                    if( job->mFailed )
+                        mNumFailed.fetch_add( 1u, std::memory_order_relaxed );
+                    finish( job, true );
+                    return true;
+                }
+                mQueue.push_front( job );
+                mWorkCv.notify_one();
                 LogManager::getSingleton().logMessage(
-                    "HlmsAsyncCompiler: a blocking pass needed a queued permutation; the main thread "
-                    "builds it itself" );
-                runJob( job, Hlms::kAsyncTidBase + kMaxThreads );
-                mNumCompleted.fetch_add( 1u, std::memory_order_relaxed );
-                if( job->mFailed )
-                    mNumFailed.fetch_add( 1u, std::memory_order_relaxed );
-                finish( job, true );
-                return true;
+                    String( "HlmsAsyncCompiler: a queued permutation moved to the front (" ) + caller +
+                    " waits for the service): " + job->mWhat );
+                mDoneCv.wait( lock, [this, key] {
+                    for( HlmsAsyncJob *q : mQueue )
+                    {
+                        if( q->mKey == key )
+                            return mThreads.empty();
+                    }
+                    for( HlmsAsyncJob *r : mRunning )
+                    {
+                        if( r && r->mKey == key )
+                            return false;
+                    }
+                    return true;
+                } );
+                break;
             }
         }
 

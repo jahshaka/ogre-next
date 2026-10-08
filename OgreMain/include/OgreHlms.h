@@ -1128,7 +1128,7 @@ namespace Ogre
         /** (ASYNC-SHADERS-1) A blocking path met an entry the asynchronous compiler is
             building: wait for exactly that one and publish it. No-op for any other entry.
         */
-        void waitForAsyncEntry( const HlmsCache *entry );
+        void waitForAsyncEntry( const HlmsCache *entry, const char *caller );
 
         /** Called by ParallelHlmsCompileQueue to finish the job started in getMaterial()
         @param passCache

@@ -29,6 +29,7 @@ THE SOFTWARE.
 #define _OgreHlmsCompute_H_
 
 #include "OgreHlms.h"
+#include <set>
 
 #include "OgreHeaderPrefix.h"
 
@@ -139,6 +140,16 @@ namespace Ogre
         };
         typedef vector<AsyncComputeEntry>::type AsyncComputeEntryVec;
         AsyncComputeEntryVec mAsyncComputeEntries;
+        static bool msInAsyncWorkspace;
+        bool   mDeferredDispatch;      ///< setDeferredDispatch
+        uint64 mNumDeferredDispatches;
+        /// (ASYNC-SHADERS-1) Every permutation this Hlms has built, by source + properties: a
+        /// job CLONE (the voxeliser's per-cascade, per-mip jobs) is a new PSO over code already
+        /// compiled, built in the frame from the code cache; only a permutation never built
+        /// defers (setDeferredDispatch).
+        std::set<uint64> mBuiltPermutations;
+        static uint64 permutationKey( const HlmsComputeJob *job );
+        static uint64 permutationKey( const HlmsComputeJob *job, const HlmsPropertyVec &properties );
         uint32               mAsyncProgramCounter;
 
         /// Index into mAsyncComputeEntries, or size() when none.
@@ -231,6 +242,26 @@ namespace Ogre
             AsyncReady: dispatch() compiles inside the frame, as it always did.
         */
         AsyncReadiness requestAsync( HlmsComputeJob *job );
+
+        /** (ASYNC-SHADERS-1) DEFERRED DISPATCH. While set (main thread, scoped by the caller) — and
+            for every dispatch a pass of an ASYNCHRONOUS workspace makes (its SceneManager's render
+            queue says so for the length of the workspace's update) — a
+            dispatch() whose permutation is not built never compiles it in the frame and never
+            waits for it: the permutation goes to the background compiler (requestAsync) and the
+            dispatch is SKIPPED, counted in getNumDeferredDispatches. A caller that sets it must
+            treat a moved count as "this work did not happen" and redo it later (the scene's IBL
+            convolution keeps its previous result and retries the next frame).
+        */
+        void setDeferredDispatch( bool on ) { mDeferredDispatch = on; }
+        /// Main thread: CompositorWorkspace::_update says an ASYNCHRONOUS workspace is updating,
+        /// so a dispatch made from inside it with no SceneManager (a pass listener's own compute,
+        /// a GPU cull) defers like the workspace's passes do.
+        static void _setInAsyncWorkspace( bool on ) { msInAsyncWorkspace = on; }
+        static bool _getInAsyncWorkspace() { return msInAsyncWorkspace; }
+        bool getDeferredDispatch() const { return mDeferredDispatch; }
+        uint64 getNumDeferredDispatches() const { return mNumDeferredDispatches; }
+        /// Permutations the background compiler is building for this Hlms (requestAsync).
+        size_t getNumAsyncInFlight() const;
 
         void _changeRenderSystem( RenderSystem *newRs ) override;
 

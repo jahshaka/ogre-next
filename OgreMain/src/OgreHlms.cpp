@@ -2861,15 +2861,23 @@ namespace Ogre
         // (ASYNC-SHADERS-1) A permutation built on the MAIN thread while the background compiler
         // runs is a frame that waited for a compile: name the pass, so the host's live-compile
         // sentry has a culprit to point at.
-        if( tid == kNoTid && mHlmsManager && mHlmsManager->getAsyncCompiler()->isRunning() )
+        // The SceneManager's compile workers (a blocking pass's ParallelHlmsCompileQueue) are the
+        // frame waiting too, and are named the same way; only the service's own slots are not.
+        if( ( tid == kNoTid || tid < kAsyncTidBase ) && mHlmsManager &&
+            mHlmsManager->getAsyncCompiler()->isRunning() )
         {
             const SceneManager *sm =
                 queuedRenderable.movableObject ? queuedRenderable.movableObject->_getManager() : 0;
             const Camera *cam = sm ? sm->getCamerasInProgress().renderingCamera : 0;
+            const HlmsDatablock *db =
+                queuedRenderable.renderable ? queuedRenderable.renderable->getDatablock() : 0;
             LogManager::getSingleton().logMessage(
-                "Hlms: permutation " + StringConverter::toString( finalHash ) +
-                " built in the frame (blocking pass, camera '" + ( cam ? cam->getName() : String( "?" ) ) +
-                "')" );
+                "Hlms: permutation " + StringConverter::toString( finalHash ) + " ('" + mTypeNameStr +
+                "', datablock '" + ( db && db->getNameStr() ? *db->getNameStr() : String( "?" ) ) +
+                "') built in the frame (blocking pass, " +
+                ( tid == kNoTid ? String( "main thread" )
+                                : "compile worker " + StringConverter::toString( tid ) ) +
+                ", camera '" + ( cam ? cam->getName() : String( "?" ) ) + "')" );
         }
 
         // Set the properties by merging the cache from the pass, with the cache from renderable
@@ -4107,7 +4115,7 @@ namespace Ogre
                 // ASYNC-SHADERS-1: a BLOCKING pass never draws a hole for an entry the
                 // asynchronous compiler is building: it waits for that one request.
                 if( lastReturnedValue->flags == HLMS_CACHE_FLAGS_ASYNC_PENDING )
-                    waitForAsyncEntry( lastReturnedValue );
+                    waitForAsyncEntry( lastReturnedValue, "a blocking pass (Hlms::getMaterial)" );
 
                 if( lastReturnedValue->flags == HLMS_CACHE_FLAGS_COMPILATION_REQUIRED )
                 {
@@ -4310,6 +4318,12 @@ namespace Ogre
             setProperty( tid, ext, 1 );
 
         AsyncPsoJob *job = OGRE_NEW AsyncPsoJob( this, stub, renderableCache.pieces );
+        {
+            const HlmsDatablock *db = queuedRenderable.renderable->getDatablock();
+            job->mWhat = "Hlms '" + mTypeNameStr + "' hash " + StringConverter::toString( finalHash ) +
+                         " datablock '" + ( db && db->getNameStr() ? *db->getNameStr() : String( "?" ) ) + "' mesh '" +
+                         SceneManager::deduceMovableObjectName( queuedRenderable.movableObject ) + "'";
+        }
         try
         {
             const PropertiesMergeStatus status =
@@ -4475,12 +4489,12 @@ namespace Ogre
         mAsyncPlaceholderDatablock = datablock;
     }
     //-----------------------------------------------------------------------------------
-    void Hlms::waitForAsyncEntry( const HlmsCache *entry )
+    void Hlms::waitForAsyncEntry( const HlmsCache *entry, const char *caller )
     {
         if( entry->flags != HLMS_CACHE_FLAGS_ASYNC_PENDING )
             return;
         HlmsAsyncCompiler *compiler = mHlmsManager ? mHlmsManager->getAsyncCompiler() : 0;
-        if( !compiler || !compiler->waitFor( entry ) )
+        if( !compiler || !compiler->waitFor( entry, caller ) )
         {
             // No job builds it any more (the service stopped under it): a blocking pass
             // builds it itself.
@@ -4683,7 +4697,7 @@ namespace Ogre
             {
                 // ASYNC-SHADERS-1: a warm-up promises the permutation is built when it returns.
                 if( shaderCache->flags == HLMS_CACHE_FLAGS_ASYNC_PENDING )
-                    waitForAsyncEntry( shaderCache );
+                    waitForAsyncEntry( shaderCache, "a shader warm-up (Hlms::getMaterialSerial01)" );
             }
 
             if( shaderCache && shaderCache->flags == HLMS_CACHE_FLAGS_COMPILATION_REQUIRED )

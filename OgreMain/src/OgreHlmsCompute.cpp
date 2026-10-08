@@ -42,6 +42,7 @@ THE SOFTWARE.
 #include "OgreLogManager.h"
 #include "OgreRootLayout.h"
 #include "OgreSceneManager.h"
+#include "OgreRenderQueue.h"
 #include "Vao/OgreConstBufferPacked.h"
 #include "Vao/OgreTexBufferPacked.h"
 #include "Vao/OgreUavBufferPacked.h"
@@ -76,11 +77,15 @@ namespace Ogre
     // Must be sorted from best to worst
     const String BestD3DComputeShaderTargets[3] = { "cs_5_0", "cs_4_1", "cs_4_0" };
 
+    bool HlmsCompute::msInAsyncWorkspace = false;
+    //-----------------------------------------------------------------------------------
     HlmsCompute::HlmsCompute( AutoParamDataSource *autoParamDataSource ) :
         Hlms( HLMS_COMPUTE, "compute", 0, 0 ),
         mAutoParamDataSource( autoParamDataSource ),
         mComputeShaderTarget( 0 ),
-        mAsyncProgramCounter( 0u )
+        mAsyncProgramCounter( 0u ),
+        mDeferredDispatch( false ),
+        mNumDeferredDispatches( 0u )
     {
     }
     //-----------------------------------------------------------------------------------
@@ -462,6 +467,7 @@ namespace Ogre
         if( mHlmsManager && mHlmsManager->getAsyncCompiler() )
             mHlmsManager->getAsyncCompiler()->cancel( this );
         mAsyncComputeEntries.clear();
+        mBuiltPermutations.clear();   // the code cache goes with it
 
         if( mRenderSystem )
             mRenderSystem->_setComputePso( 0 );
@@ -550,12 +556,45 @@ namespace Ogre
         while( idx < mAsyncComputeEntries.size() && mAsyncComputeEntries[idx].inFlight )
         {
             // The key is the job: this lands SOME permutation of it; loop until ours has.
-            if( !compiler->waitFor( job ) )
+            if( !compiler->waitFor( job, "a compute dispatch (HlmsCompute::dispatch)" ) )
                 break;
             bWaited = true;
             idx = findAsyncComputeEntry( job, job->mSetProperties );
         }
         return bWaited;
+    }
+    //-----------------------------------------------------------------------------------
+    uint64 HlmsCompute::permutationKey( const HlmsComputeJob *job )
+    {
+        return permutationKey( job, job->mSetProperties );
+    }
+    //-----------------------------------------------------------------------------------
+    uint64 HlmsCompute::permutationKey( const HlmsComputeJob *job, const HlmsPropertyVec &properties )
+    {
+        uint64 h = 1469598103934665603ull;
+        const auto mix = [&h]( uint64 v ) { h = ( h ^ v ) * 1099511628211ull; };
+        for( const char c : job->mSourceFilename )
+            mix( (unsigned char)c );
+        for( const String &piece : job->mIncludedPieceFiles )
+        {
+            mix( 0x1fu );
+            for( const char c : piece )
+                mix( (unsigned char)c );
+        }
+        for( const HlmsProperty &p : properties )
+        {
+            mix( p.keyName.mHash );
+            mix( (uint32)p.value );
+        }
+        return h;
+    }
+    //-----------------------------------------------------------------------------------
+    size_t HlmsCompute::getNumAsyncInFlight() const
+    {
+        size_t n = 0u;
+        for( const AsyncComputeEntry &e : mAsyncComputeEntries )
+            n += e.inFlight ? 1u : 0u;
+        return n;
     }
     //-----------------------------------------------------------------------------------
     HlmsCompute::AsyncReadiness HlmsCompute::requestAsync( HlmsComputeJob *job )
@@ -587,6 +626,7 @@ namespace Ogre
 
         // ---- the snapshot (main thread) ----
         AsyncComputeJob *request = OGRE_NEW AsyncComputeJob( this, job );
+        request->mWhat = "compute job '" + job->getNameStr() + "'";
         try
         {
             ResourceGroupManager &resourceGroupMgr = ResourceGroupManager::getSingleton();
@@ -841,6 +881,7 @@ namespace Ogre
         if( profileParams )
             profileParams->updateParameters( request.mPso.computeParams, true );
 
+        mBuiltPermutations.insert( permutationKey( job, request.mJobProperties ) );
         ComputePsoCache psoCache( job, request.mJobProperties );
         psoCache.pso = request.mPso;
         if( shaderParams )
@@ -888,6 +929,35 @@ namespace Ogre
                 std::find( mComputeShaderCache.begin(), mComputeShaderCache.end(), psoCache );
             if( itor == mComputeShaderCache.end() )
             {
+                // DEFERRED DISPATCH (setDeferredDispatch): not built, so not dispatched — handed
+                // to the background compiler (or already in flight) and counted; never a
+                // compile in the frame, never a wait.
+                // A permutation that FAILED is not deferred for ever: it falls through and
+                // throws as upstream does.
+                // ...and a dispatch from a pass of an ASYNCHRONOUS workspace defers too: its
+                // SceneManager's render queue carries the workspace's mode for exactly the
+                // length of that workspace's update (CompositorWorkspace::_update).
+                const bool bDefer =
+                    mDeferredDispatch || msInAsyncWorkspace ||
+                    ( sceneManager && sceneManager->getRenderQueue()->getAsyncShaderCompile() );
+                if( bDefer && mHlmsManager && mHlmsManager->getAsyncCompiler()->isRunning() )
+                {
+                    psoCache.setProperties.swap( job->mSetProperties );
+                    // A permutation already built under another job (a clone) needs no shader
+                    // compile: it is built in the frame below, from the code cache.
+                    const bool bKnown = mBuiltPermutations.count( permutationKey( job ) ) != 0u;
+                    const AsyncReadiness readiness = bKnown ? AsyncReady : requestAsync( job );
+                    psoCache.setProperties.swap( job->mSetProperties );
+                    if( readiness == AsyncPending )
+                    {
+                        psoCache.setProperties.swap( job->mSetProperties );
+                        ++mNumDeferredDispatches;
+                        LogManager::getSingleton().logMessage(
+                            "HlmsCompute: job '" + job->getNameStr() +
+                            "' deferred: its permutation builds in the background" );
+                        return;
+                    }
+                }
                 // ASYNC-SHADERS-1: the asynchronous compiler may be building exactly this
                 // permutation; take its result instead of building it a second time.
                 psoCache.setProperties.swap( job->mSetProperties );
@@ -911,8 +981,13 @@ namespace Ogre
                 // permutation built in the frame while the background compiler runs.
                 if( mHlmsManager && mHlmsManager->getAsyncCompiler()->isRunning() )
                 {
-                    LogManager::getSingleton().logMessage( "HlmsCompute: job '" + job->getNameStr() +
-                                                           "' compiles a permutation in the frame" );
+                    // A clone of a built permutation only builds its pipeline (the code is cached);
+                    // a NEW one compiles its shader here, on the frame's thread.
+                    const bool bKnown = mBuiltPermutations.count( permutationKey( job ) ) != 0u;
+                    LogManager::getSingleton().logMessage(
+                        "HlmsCompute: job '" + job->getNameStr() +
+                        ( bKnown ? "' builds a pipeline in the frame (its code is compiled)"
+                                 : "' compiles a permutation in the frame" ) );
                 }
                 this->mT[kNoTid].setProperties = job->mSetProperties;
 
@@ -931,6 +1006,7 @@ namespace Ogre
 
                 // Compile and add the PSO to the cache.
                 psoCache.pso = compileShader( job, (uint32)newCacheEntryIdx );
+                mBuiltPermutations.insert( permutationKey( job ) );
 
                 ShaderParams *shaderParams = job->_getShaderParams( "default" );
                 if( shaderParams )

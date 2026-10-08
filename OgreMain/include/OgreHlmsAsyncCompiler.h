@@ -70,6 +70,9 @@ namespace Ogre
         const void *mKey;
         /// Set by run() when the permutation could not be built (the log says why).
         bool mFailed;
+        /// What the job builds, for the log (the Hlms, the hash, the datablock / the compute
+        /// job's name). Set on the main thread when the job is made.
+        String mWhat;
 
         HlmsAsyncJob( Hlms *owner, const void *key ) : mOwner( owner ), mKey( key ), mFailed( false )
         {
@@ -154,7 +157,7 @@ namespace Ogre
         @return
             False if no job with that key is pending.
         */
-        bool waitFor( const void *key );
+        bool waitFor( const void *key, const char *caller = "a blocking pass" );
 
         /// Main thread. Blocks until nothing is pending, publishing as jobs finish.
         void waitForAll();
