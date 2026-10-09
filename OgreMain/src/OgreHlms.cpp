@@ -3984,7 +3984,14 @@ namespace Ogre
         passPso.adapterId = 1;  // TODO: Ask RenderSystem current adapter ID.
         passPso.numViews = renderPassDesc->mNumViews > 1u ? renderPassDesc->mNumViews : 0u;
 
-        if( sceneManager->getCurrentPrePassMode() == PrePassUse )
+        // JAHSHAKA (REFLECT-FIX-1): no depth write into a READ-ONLY depth attachment,
+        // whatever the datablock asks. The PrePassUse rule above is one case of it (that
+        // pass loads the prepass depth read-only); a pass declared mReadOnlyDepth, or an
+        // RTV with depthReadOnly, is the general one — and a depth-writing datablock drawn
+        // there is VUID-vkCmdDrawIndexed-None-06886 (the layout is
+        // DEPTH_STENCIL_READ_ONLY_OPTIMAL), an undefined write on every draw.
+        if( sceneManager->getCurrentPrePassMode() == PrePassUse ||
+            ( renderPassDesc->mDepth.texture && renderPassDesc->mDepth.readOnly ) )
             strongMacroblockBits |= HlmsMacroblock::DepthWriteDisabled;
 
         if( sceneManager->getCamerasInProgress().renderingCamera->getNeedsDepthClamp() )
