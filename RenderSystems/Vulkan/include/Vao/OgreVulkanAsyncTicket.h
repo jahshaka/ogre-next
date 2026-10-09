@@ -40,12 +40,19 @@ namespace Ogre
     protected:
         VkFence mFenceName;
         VulkanQueue *mQueue;
+        /// Jahshaka: the INACCURATE ticket (accurateTracking = false) has no fence: it is
+        /// done once the frame it was recorded in has finished (the AsyncTextureTicket shape).
+        VulkanVaoManager *mVaoManager;
+        uint32 mDownloadFrame;
+        bool mAccurateTracking;
+        bool mFrameDone;
 
         const void *mapImpl() override;
 
     public:
         VulkanAsyncTicket( BufferPacked *creator, StagingBuffer *stagingBuffer, size_t elementStart,
-                           size_t elementCount, VulkanQueue *queue );
+                           size_t elementCount, VulkanQueue *queue, VulkanVaoManager *vaoManager,
+                           bool accurateTracking );
         ~VulkanAsyncTicket() override;
 
         bool queryIsTransferDone() override;

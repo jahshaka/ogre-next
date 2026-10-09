@@ -2036,10 +2036,12 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     AsyncTicketPtr VulkanVaoManager::createAsyncTicket( BufferPacked *creator,
                                                         StagingBuffer *stagingBuffer,
-                                                        size_t elementStart, size_t elementCount )
+                                                        size_t elementStart, size_t elementCount,
+                                                        bool accurateTracking )
     {
         return AsyncTicketPtr( OGRE_NEW VulkanAsyncTicket( creator, stagingBuffer, elementStart,
-                                                           elementCount, &mDevice->mGraphicsQueue ) );
+                                                           elementCount, &mDevice->mGraphicsQueue,
+                                                           this, accurateTracking ) );
     }
     //-----------------------------------------------------------------------------------
     VulkanDescriptorPool *VulkanVaoManager::getDescriptorPool( const VulkanRootLayout *rootLayout,

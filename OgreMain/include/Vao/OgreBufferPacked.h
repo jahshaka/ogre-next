@@ -277,9 +277,22 @@ namespace Ogre
         /// returns the original version, otherwise returns 'this'
         virtual BufferPacked *getOriginalBufferType();
 
-        /// Async data read request. A ticket will be returned. Once the async transfer finishes,
-        /// you can use the ticket to read the data from CPU. @see AsyncTicket
-        AsyncTicketPtr readRequest( size_t elementStart, size_t elementCount );
+        /** Async data read request. A ticket will be returned. Once the async transfer finishes,
+            you can use the ticket to read the data from CPU. @see AsyncTicket
+        @param accurateTracking
+            The same contract as AsyncTextureTicket::download's.
+            True (the default): the ticket gets its own fence and the command buffer is
+            flushed now, so queryIsTransferDone turns true as soon as the GPU has done the copy.
+            On Vulkan that flush makes the CPU wait for ALL work submitted so far (the fence
+            lands on the frame slot being recorded, which newCommandBuffer then waits on), i.e.
+            a full queue drain: never request this way from inside a frame.
+            False: the copy is only recorded into the current command buffer: no fence, no
+            flush, no wait. The transfer is done once the frame it was recorded in has finished
+            (VaoManager::isFrameFinished), i.e. a few frames later; mapping earlier waits for that
+            frame. The way to read GPU results back from inside a running frame loop.
+        */
+        AsyncTicketPtr readRequest( size_t elementStart, size_t elementCount,
+                                    bool accurateTracking = true );
 
         /** Sends the provided data to the GPU
         @param data

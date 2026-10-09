@@ -488,8 +488,10 @@ namespace Ogre
         */
         StagingBuffer *getStagingBuffer( size_t minSizeBytes, bool forUpload );
 
+        /// See BufferPacked::readRequest for accurateTracking.
         virtual AsyncTicketPtr createAsyncTicket( BufferPacked *creator, StagingBuffer *stagingBuffer,
-                                                  size_t elementStart, size_t elementCount ) = 0;
+                                                  size_t elementStart, size_t elementCount,
+                                                  bool accurateTracking ) = 0;
 
         virtual void _beginFrame() {}
         virtual void _update();

@@ -38,13 +38,26 @@ namespace Ogre
 {
     VulkanAsyncTicket::VulkanAsyncTicket( BufferPacked *creator, StagingBuffer *stagingBuffer,
                                           size_t elementStart, size_t elementCount,
-                                          VulkanQueue *queue ) :
+                                          VulkanQueue *queue, VulkanVaoManager *vaoManager,
+                                          bool accurateTracking ) :
         AsyncTicket( creator, stagingBuffer, elementStart, elementCount ),
-        mQueue( queue )
+        mFenceName( 0 ),
+        mQueue( queue ),
+        mVaoManager( vaoManager ),
+        mDownloadFrame( vaoManager->getFrameCount() ),
+        mAccurateTracking( accurateTracking ),
+        mFrameDone( false )
     {
-        mFenceName = queue->acquireCurrentFence();
-        // Flush now for accuracy with downloads.
-        mQueue->commitAndNextCommandBuffer();
+        // The copy is already recorded (AsyncTicket's ctor -> _asyncDownload).
+        if( accurateTracking )
+        {
+            mFenceName = queue->acquireCurrentFence();
+            // Flush now for accuracy with downloads. NOTE (Jahshaka): this flush parks the fence
+            // on the frame slot being recorded and newCommandBuffer() then waits on that slot,
+            // i.e. the CPU waits for everything submitted so far: a full queue drain.
+            mQueue->commitAndNextCommandBuffer();
+        }
+        // else: nothing flushed, nothing fenced: the frame's own submission carries the copy.
     }
     //-----------------------------------------------------------------------------------
     VulkanAsyncTicket::~VulkanAsyncTicket()
@@ -57,6 +70,13 @@ namespace Ogre
     {
         if( mFenceName )
             mFenceName = VulkanVaoManager::waitFor( mFenceName, mQueue );
+        else if( !mAccurateTracking && !mFrameDone )
+        {
+            // Mapping before the recording frame finished waits for exactly that frame (a full
+            // stall only if it is still the frame being recorded).
+            mVaoManager->waitForSpecificFrameToFinish( mDownloadFrame );
+            mFrameDone = true;
+        }
 
         return mStagingBuffer->_mapForRead( mStagingBufferMapOffset,
                                             mElementCount * mCreator->getBytesPerElement() );
@@ -77,6 +97,12 @@ namespace Ogre
 
                 checkVkResult( mQueue->mOwnerDevice, result, "vkWaitForFences" );
             }
+        }
+        else if( !mAccurateTracking && !mFrameDone )
+        {
+            // Never waits: true once the frame the copy was recorded in has finished.
+            mFrameDone = mVaoManager->isFrameFinished( mDownloadFrame );
+            retVal = mFrameDone;
         }
         else
         {

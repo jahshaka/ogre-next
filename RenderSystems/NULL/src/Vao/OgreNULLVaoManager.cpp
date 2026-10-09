@@ -332,8 +332,12 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     AsyncTicketPtr NULLVaoManager::createAsyncTicket( BufferPacked *creator,
                                                       StagingBuffer *stagingBuffer, size_t elementStart,
-                                                      size_t elementCount )
+                                                      size_t elementCount,
+                                                      bool accurateTracking )
     {
+        // Jahshaka: accurateTracking is honoured by the Vulkan ticket only (the render system
+        // we ship); this ticket keeps its own fence either way.
+        (void)accurateTracking;
         return AsyncTicketPtr(
             OGRE_NEW NULLAsyncTicket( creator, stagingBuffer, elementStart, elementCount ) );
     }

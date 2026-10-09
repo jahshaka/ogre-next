@@ -1805,8 +1805,12 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     AsyncTicketPtr D3D11VaoManager::createAsyncTicket( BufferPacked *creator,
                                                        StagingBuffer *stagingBuffer, size_t elementStart,
-                                                       size_t elementCount )
+                                                       size_t elementCount,
+                                                       bool accurateTracking )
     {
+        // Jahshaka: accurateTracking is honoured by the Vulkan ticket only (the render system
+        // we ship); this ticket keeps its own fence either way.
+        (void)accurateTracking;
         if( creator->getBufferType() == BT_IMMUTABLE )
             _forceCreateDelayedImmutableBuffers();
 

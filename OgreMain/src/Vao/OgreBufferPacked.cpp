@@ -121,12 +121,14 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     BufferPacked *BufferPacked::getOriginalBufferType() { return mBufferInterface->getBufferPacked(); }
     //-----------------------------------------------------------------------------------
-    AsyncTicketPtr BufferPacked::readRequest( size_t elementStart, size_t elementCount )
+    AsyncTicketPtr BufferPacked::readRequest( size_t elementStart, size_t elementCount,
+                                              bool accurateTracking )
     {
         StagingBuffer *stagingBuffer =
             mVaoManager->getStagingBuffer( elementCount * mBytesPerElement, false );
 
-        return mVaoManager->createAsyncTicket( this, stagingBuffer, elementStart, elementCount );
+        return mVaoManager->createAsyncTicket( this, stagingBuffer, elementStart, elementCount,
+                                               accurateTracking );
     }
     //-----------------------------------------------------------------------------------
     void BufferPacked::upload( const void *data, size_t elementStart, size_t elementCount )

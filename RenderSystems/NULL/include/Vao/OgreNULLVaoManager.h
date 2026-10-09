@@ -208,7 +208,8 @@ namespace Ogre
         StagingBuffer *createStagingBuffer( size_t sizeBytes, bool forUpload ) override;
 
         AsyncTicketPtr createAsyncTicket( BufferPacked *creator, StagingBuffer *stagingBuffer,
-                                          size_t elementStart, size_t elementCount ) override;
+                                          size_t elementStart, size_t elementCount,
+                                          bool accurateTracking ) override;
 
         void _update() override;
 
