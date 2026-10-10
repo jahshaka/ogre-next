@@ -119,6 +119,9 @@ namespace Ogre
                 NodeArrayMemoryManager( (uint16)mMemoryManagers.size(), 100, mDummyNode, 100,
                                         ArrayMemoryManager::MAX_MEMORY_SLOTS, this ) );
             mMemoryManagers.back().initialize();
+            // A level's slot order means nothing (updateAllTransforms reads parents from the
+            // level above, never a neighbour), so a cleanup moves only the nodes it must.
+            mMemoryManagers.back().setCompactByRelocation( true );
         }
     }
     //-----------------------------------------------------------------------------------
@@ -339,5 +342,19 @@ namespace Ogre
 
             transform.advancePack();
         }
+    }
+    //---------------------------------------------------------------------
+    void NodeMemoryManager::performRelocation( uint16 level, const MemoryPoolVec &basePtrs,
+                                               size_t const *elementsMemSizes, size_t instance )
+    {
+        Transform transform;
+        this->getFirstNode( transform, level );
+        transform.advancePack( instance / ARRAY_PACKED_REALS );
+        const size_t j = instance % ARRAY_PACKED_REALS;
+        Node *owner = transform.mOwner[j];
+        assert( owner && "performRelocation: the relocated slot holds no node" );
+        transform.mIndex = (uint8)j;
+        owner->_getTransform() = transform;
+        owner->_callMemoryChangeListeners();
     }
 }  // namespace Ogre

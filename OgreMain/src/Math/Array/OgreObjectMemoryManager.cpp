@@ -123,6 +123,9 @@ namespace Ogre
                 (uint16)mMemoryManagers.size(), 100, mDummyNode, mDummyObject, 100,
                 ArrayMemoryManager::MAX_MEMORY_SLOTS, this ) );
             mMemoryManagers.back().initialize();
+            // A render queue's slot order means nothing (culling visits every slot, the render
+            // queue sorts what it gets), so a cleanup moves only the objects it must.
+            mMemoryManagers.back().setCompactByRelocation( true );
         }
     }
     //-----------------------------------------------------------------------------------
@@ -299,5 +302,18 @@ namespace Ogre
 
             objectData.advancePack();
         }
+    }
+    //-----------------------------------------------------------------------------------
+    void ObjectMemoryManager::performRelocation( uint16 level, const MemoryPoolVec &basePtrs,
+                                                 size_t const *elementsMemSizes, size_t instance )
+    {
+        ObjectData objectData;
+        this->getFirstObjectData( objectData, level );
+        objectData.advancePack( instance / ARRAY_PACKED_REALS );
+        const size_t j = instance % ARRAY_PACKED_REALS;
+        MovableObject *owner = objectData.mOwner[j];
+        assert( owner && "performRelocation: the relocated slot holds no object" );
+        objectData.mIndex = (uint8)j;
+        owner->_getObjectData() = objectData;
     }
 }  // namespace Ogre

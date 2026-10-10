@@ -137,6 +137,26 @@ namespace Ogre
             virtual void performCleanup( uint16 level, const MemoryPoolVec &basePtrs,
                                          size_t const *elementsMemSizes, size_t startInstance,
                                          size_t diffInstances ) = 0;
+
+            /** Called by a manager that compacts by RELOCATION (see setCompactByRelocation) after
+                it moved the live instance that sat in the last used slot into the free slot
+                'instance'. Only that one instance's pointers changed.
+            @remarks
+                The default re-points everything from 'instance' upwards through performCleanup:
+                correct for any listener, but O(used slots). A listener whose owners can be found
+                from the slot (nodes, objects) overrides it with an O(1) fix-up.
+            @param level
+                The hierarchy depth level
+            @param basePtrs
+                The base ptrs.
+            @param instance
+                The slot the live instance now occupies.
+            */
+            virtual void performRelocation( uint16 level, const MemoryPoolVec &basePtrs,
+                                            size_t const *elementsMemSizes, size_t instance )
+            {
+                performCleanup( level, basePtrs, elementsMemSizes, instance, 0u );
+            }
         };
 
     protected:
@@ -155,6 +175,8 @@ namespace Ogre
         typedef std::vector<size_t> SlotsVec;  // TODO: Modify for Ogre
         SlotsVec                    mAvailableSlots;
         RebaseListener             *mRebaseListener;
+        /// See setCompactByRelocation. False: the cleanup SHIFTS (keeps the slot order).
+        bool mCompactByRelocation;
 
         /// The hierarchy depth level. This value is not used by the manager,
         /// just passed to the listeners so they can know to which level it
@@ -233,6 +255,25 @@ namespace Ogre
         ///  Prevent defragmentation from ever happening.
         void neverDefragment();
 
+        /** How a cleanup (defragment) closes the free slots.
+        @remarks
+            False (the default): every run of free slots is closed by SHIFTING everything above
+            it down, keeping the relative order of the slots, and the listener re-points every
+            shifted instance (performCleanup). That is O(used slots) per run of free slots, so
+            a cleanup after N scattered removals costs ~N x the whole pool — a periodic spike
+            on the calling thread that grows with the scene (100 removals x 50,000 nodes).
+            @par
+            True: each free slot is filled by MOVING the instance in the last used slot into
+            it, and the listener re-points that one instance (performRelocation). A cleanup
+            then costs O(free slots), whatever the size of the pool — the same order as the
+            removals that caused it. The slot order is NOT kept, which is only valid for a
+            pool whose order means nothing: createNewSlot already hands out freed slots in
+            arbitrary order (nodes, movable objects). A pool that relies on contiguous runs
+            (a skeleton's bones) keeps the shift.
+        */
+        void setCompactByRelocation( bool bRelocate ) { mCompactByRelocation = bRelocate; }
+        bool getCompactByRelocation() const { return mCompactByRelocation; }
+
         /// Defragments memory, then reallocates a smaller pool that tightly fits
         /// the current number of objects. Useful when you know you won't be creating
         /// more slots and you need to reclaim memory.
@@ -272,6 +313,10 @@ namespace Ogre
                 The index, typically mIndex (range [0; ARRAY_PACKED_REALS) )
         */
         void destroySlot( const char *ptrToFirstElement, uint8 index );
+
+        /// defragment() when mCompactByRelocation: fills every free slot from the top of the
+        /// used range. O(free slots).
+        void defragmentByRelocation();
 
         /** Called when mMemoryPools changes, to give a chance derived class to initialize
             new memory to default values

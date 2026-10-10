@@ -221,6 +221,9 @@ namespace Ogre
                           const ArrayMemoryManager::PtrdiffVec &diffsList ) override;
         void performCleanup( uint16 level, const MemoryPoolVec &basePtrs, size_t const *elementsMemSizes,
                              size_t startInstance, size_t diffInstances ) override;
+        /// @copydoc ArrayMemoryManager::RebaseListener::performRelocation
+        void performRelocation( uint16 level, const MemoryPoolVec &basePtrs,
+                                size_t const *elementsMemSizes, size_t instance ) override;
     };
 
     /** @} */
