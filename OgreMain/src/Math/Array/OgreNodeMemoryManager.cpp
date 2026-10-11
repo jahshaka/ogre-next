@@ -291,6 +291,11 @@ namespace Ogre
         return mMemoryManagers[depth].getFirstNode( outTransform );
     }
     //-----------------------------------------------------------------------------------
+    size_t NodeMemoryManager::getNumLiveNodes( size_t depth ) const
+    {
+        return mMemoryManagers[depth].getNumLiveSlots();
+    }
+    //-----------------------------------------------------------------------------------
     void NodeMemoryManager::buildDiffList( uint16 level, const MemoryPoolVec &basePtrs,
                                            ArrayMemoryManager::PtrdiffVec &outDiffsList )
     {
