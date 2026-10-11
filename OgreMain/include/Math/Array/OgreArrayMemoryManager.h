@@ -295,6 +295,12 @@ namespace Ogre
         /// will still return 4 until the 4th object is removed or a cleanup is performed
         size_t getNumUsedSlotsIncludingFragmented() const;
 
+        /// The number of LIVE instances: the used slots minus the holes a non-LIFO removal left
+        /// (mAvailableSlots) until the next cleanup. getNumUsedSlotsIncludingFragmented counts
+        /// those holes, so a sum of it rises and falls with the order of past removals; this
+        /// one moves only when an instance is created or destroyed.
+        size_t getNumLiveSlots() const;
+
         /// Gets available memory in bytes
         size_t getFreeMemory() const;
         /// Gets used memory in bytes (not including waste)

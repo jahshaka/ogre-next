@@ -234,6 +234,11 @@ namespace Ogre
         */
         size_t getFirstNode( Transform &outTransform, size_t depth );
 
+        /// The number of LIVE nodes in the given depth level (getFirstNode's count includes the
+        /// holes of non-LIFO removals until the level's next cleanup; see
+        /// ArrayMemoryManager::getNumLiveSlots).
+        size_t getNumLiveNodes( size_t depth ) const;
+
         // Derived from ArrayMemoryManager::RebaseListener
         void buildDiffList( uint16 level, const MemoryPoolVec &basePtrs,
                             ArrayMemoryManager::PtrdiffVec &outDiffsList ) override;
