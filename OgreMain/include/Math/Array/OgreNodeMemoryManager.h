@@ -67,6 +67,12 @@ namespace Ogre
         */
         SceneMemoryMgrTypes mMemoryManagerType;
         NodeMemoryManager  *mTwinMemoryManager;
+        /// See setReserveWithTwin.
+        bool mReserveWithTwin;
+
+        /// After a slot was taken on `depth`: if the level grew past `capacityBefore`, the
+        /// twin's level reserves the same capacity (setReserveWithTwin).
+        void reserveTwinLevel( size_t depth, size_t capacityBefore );
 
         /** Makes mMemoryManagers big enough to be able to fulfill mMemoryManagers[newDepth]
         @param newDepth
@@ -82,6 +88,20 @@ namespace Ogre
         void _setTwin( SceneMemoryMgrTypes memoryManagerType, NodeMemoryManager *twinMemoryManager );
 
         SceneNode *_getDummyNode() const { return mDummyNode; }
+
+        /** THE TWIN RESERVES WITH ITS SIBLING (fork; default true). When a level here grows
+            (a reallocation: every pool copied, every live instance re-pointed, O(used) on the
+            calling thread), the twin's level of the same depth is grown to the same capacity
+            then and there. Content is born in one twin and MIGRATES to the other (setStatic),
+            so without this the twin's level grows by 50% steps WHILE the content migrates —
+            an O(used) spike on whatever frame a migration crosses the capacity (an editor's
+            static re-classification of a 50,000-node scene: one migration of 1.7 ms among
+            ones of ~4 us). With it the reallocation happens where the population is CREATED,
+            which already pays O(n). The price is memory: both twins hold the peak capacity of
+            either (a level of a never-static scene reserves as many static slots).
+        */
+        void setReserveWithTwin( bool bReserve ) { mReserveWithTwin = bReserve; }
+        bool getReserveWithTwin() const { return mReserveWithTwin; }
 
         /// Note the return value can be null
         NodeMemoryManager  *getTwin() const { return mTwinMemoryManager; }
@@ -221,6 +241,9 @@ namespace Ogre
                           const ArrayMemoryManager::PtrdiffVec &diffsList ) override;
         void performCleanup( uint16 level, const MemoryPoolVec &basePtrs, size_t const *elementsMemSizes,
                              size_t startInstance, size_t diffInstances ) override;
+        /// @copydoc ArrayMemoryManager::RebaseListener::performRelocation
+        void performRelocation( uint16 level, const MemoryPoolVec &basePtrs,
+                                size_t const *elementsMemSizes, size_t instance ) override;
     };
 
     /** @} */

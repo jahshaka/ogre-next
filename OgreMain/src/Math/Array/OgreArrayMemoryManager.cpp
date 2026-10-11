@@ -59,6 +59,7 @@ namespace Ogre
         mMaxHardLimit( maxHardLimit ),
         mCleanupThreshold( cleanupThreshold ),
         mRebaseListener( rebaseListener ),
+        mCompactByRelocation( false ),
         mLevel( depthLevel )
     {
         // If the assert triggers, their values will overflow to 0 when
@@ -174,54 +175,75 @@ namespace Ogre
                              "ArrayMemoryManager::createNewNode" );
             }
 
-            // Build the diff list for rebase later.
-            PtrdiffVec diffsList;
-            diffsList.reserve( usedMemory );
-            mRebaseListener->buildDiffList( mLevel, mMemoryPools, diffsList );
-
             // Reallocate, grow by 50% increments, rounding up to next multiple of ARRAY_PACKED_REALS
             size_t newMemory =
                 std::min( std::max( mMaxMemory + ( mMaxMemory >> 1 ), usedMemory ), mMaxHardLimit );
             newMemory += ( ARRAY_PACKED_REALS - newMemory % ARRAY_PACKED_REALS ) % ARRAY_PACKED_REALS;
             newMemory = std::min( newMemory, mMaxHardLimit );
 
-            size_t i = 0;
-            MemoryPoolVec::iterator itor = mMemoryPools.begin();
-            MemoryPoolVec::iterator endt = mMemoryPools.end();
-
-            while( itor != endt )
-            {
-                // Reallocate
-                char *tmp = (char *)OGRE_MALLOC_SIMD( newMemory * mElementsMemSizes[i],
-                                                      MEMCATEGORY_SCENE_OBJECTS );
-                memcpy( tmp, *itor, mMaxMemory * mElementsMemSizes[i] );
-                if( mInitRoutines && mInitRoutines[i] )
-                {
-                    mInitRoutines[i]( tmp + mMaxMemory * mElementsMemSizes[i], 0, 0, 0, 0,
-                                      newMemory - mMaxMemory, mElementsMemSizes[i] );
-                }
-                else
-                {
-                    memset( tmp + mMaxMemory * mElementsMemSizes[i], 0,
-                            ( newMemory - mMaxMemory ) * mElementsMemSizes[i] );
-                }
-                OGRE_FREE_SIMD( *itor, MEMCATEGORY_SCENE_OBJECTS );
-                *itor = tmp;
-                ++i;
-                ++itor;
-            }
-
-            const size_t prevNumSlots = mMaxMemory;
-            mMaxMemory = newMemory;
-            initializeEmptySlots( prevNumSlots );
-
-            // Rebase all ptrs
-            mRebaseListener->applyRebase( mLevel, mMemoryPools, diffsList );
+            reallocTo( newMemory, usedMemory );
         }
 
         mUsedMemory = usedMemory;
 
         return nextSlot;
+    }
+    //-----------------------------------------------------------------------------------
+    void ArrayMemoryManager::reallocTo( size_t newMemory, size_t usedMemory )
+    {
+        // Build the diff list for rebase later.
+        PtrdiffVec diffsList;
+        diffsList.reserve( usedMemory );
+        mRebaseListener->buildDiffList( mLevel, mMemoryPools, diffsList );
+
+        size_t i = 0;
+        MemoryPoolVec::iterator itor = mMemoryPools.begin();
+        MemoryPoolVec::iterator endt = mMemoryPools.end();
+
+        while( itor != endt )
+        {
+            // Reallocate
+            char *tmp = (char *)OGRE_MALLOC_SIMD( newMemory * mElementsMemSizes[i],
+                                                  MEMCATEGORY_SCENE_OBJECTS );
+            memcpy( tmp, *itor, mMaxMemory * mElementsMemSizes[i] );
+            if( mInitRoutines && mInitRoutines[i] )
+            {
+                mInitRoutines[i]( tmp + mMaxMemory * mElementsMemSizes[i], 0, 0, 0, 0,
+                                  newMemory - mMaxMemory, mElementsMemSizes[i] );
+            }
+            else
+            {
+                memset( tmp + mMaxMemory * mElementsMemSizes[i], 0,
+                        ( newMemory - mMaxMemory ) * mElementsMemSizes[i] );
+            }
+            OGRE_FREE_SIMD( *itor, MEMCATEGORY_SCENE_OBJECTS );
+            *itor = tmp;
+            ++i;
+            ++itor;
+        }
+
+        const size_t prevNumSlots = mMaxMemory;
+        mMaxMemory = newMemory;
+        initializeEmptySlots( prevNumSlots );
+
+        // Rebase all ptrs
+        mRebaseListener->applyRebase( mLevel, mMemoryPools, diffsList );
+    }
+    //-----------------------------------------------------------------------------------
+    void ArrayMemoryManager::reserve( size_t numSlots )
+    {
+        // createNewSlot grows once usedMemory > mMaxMemory - OGRE_PREFETCH_SLOT_DISTANCE.
+        size_t newMemory = numSlots + OGRE_PREFETCH_SLOT_DISTANCE;
+        newMemory += ( ARRAY_PACKED_REALS - newMemory % ARRAY_PACKED_REALS ) % ARRAY_PACKED_REALS;
+        newMemory = std::min( newMemory, mMaxHardLimit );
+        if( newMemory <= mMaxMemory )
+            return;
+        reallocTo( newMemory, mUsedMemory );
+    }
+    //-----------------------------------------------------------------------------------
+    size_t ArrayMemoryManager::getCapacity() const
+    {
+        return mMaxMemory > OGRE_PREFETCH_SLOT_DISTANCE ? mMaxMemory - OGRE_PREFETCH_SLOT_DISTANCE : 0;
     }
     //-----------------------------------------------------------------------------------
     void ArrayMemoryManager::destroySlot( const char *ptrToFirstElement, uint8 index )
@@ -257,6 +279,12 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void ArrayMemoryManager::defragment()
     {
+        if( mCompactByRelocation )
+        {
+            defragmentByRelocation();
+            return;
+        }
+
         // Sort, last values first. This may improve performance in some
         // scenarios by reducing the amount of data to be shifted
         std::sort( mAvailableSlots.begin(), mAvailableSlots.end(), std::greater<size_t>() );
@@ -304,6 +332,61 @@ namespace Ogre
         }
 
         mAvailableSlots.clear();
+    }
+    //-----------------------------------------------------------------------------------
+    void ArrayMemoryManager::defragmentByRelocation()
+    {
+        // Highest first: the FRONT of the list is consumed by the trim (a free slot at the top
+        // of the used range just shrinks it), the BACK by the fills (the lowest free slot takes
+        // the instance in the last used slot). Every move shortens the used range by one, so
+        // the loop ends with [0; mUsedMemory) dense after at most mAvailableSlots.size() moves.
+        std::sort( mAvailableSlots.begin(), mAvailableSlots.end(), std::greater<size_t>() );
+        const size_t prevUsedMemory = mUsedMemory;
+        size_t hi = 0u;
+        size_t lo = mAvailableSlots.size();
+        const size_t numPools = mMemoryPools.size();
+
+        while( hi < lo )
+        {
+            if( mAvailableSlots[hi] + 1u == mUsedMemory )
+            {
+                --mUsedMemory;
+                ++hi;
+                continue;
+            }
+
+            // Every free slot left is below mUsedMemory - 1, so the last used slot is live and
+            // dstSlot < srcSlot.
+            const size_t dstSlot = mAvailableSlots[--lo];
+            const size_t srcSlot = mUsedMemory - 1u;
+            for( size_t i = 0; i < numPools; ++i )
+            {
+                char *pool = mMemoryPools[i];
+                const size_t elemSize = mElementsMemSizes[i];
+                mCleanupRoutines[i]( pool + dstSlot * elemSize, dstSlot % ARRAY_PACKED_REALS,
+                                     pool + srcSlot * elemSize, srcSlot % ARRAY_PACKED_REALS, 1u, 0u,
+                                     elemSize );
+            }
+            --mUsedMemory;
+            mRebaseListener->performRelocation( mLevel, mMemoryPools, mElementsMemSizes, dstSlot );
+        }
+
+        mAvailableSlots.clear();
+
+        if( mUsedMemory != prevUsedMemory )
+        {
+            // The vacated tail [mUsedMemory; prevUsedMemory) back to the defaults, as the shift
+            // leaves it (numSlots = 0: nothing moves, numFreeSlots are default-initialised).
+            const size_t numFreed = prevUsedMemory - mUsedMemory;
+            for( size_t i = 0; i < numPools; ++i )
+            {
+                char *tail = mMemoryPools[i] + mUsedMemory * mElementsMemSizes[i];
+                mCleanupRoutines[i]( tail, mUsedMemory % ARRAY_PACKED_REALS, tail,
+                                     mUsedMemory % ARRAY_PACKED_REALS, 0u, numFreed,
+                                     mElementsMemSizes[i] );
+            }
+            initializeEmptySlots( mUsedMemory );
+        }
     }
     //-----------------------------------------------------------------------------------
     void ArrayMemoryManager::shrinkToFit()
