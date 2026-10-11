@@ -37,7 +37,8 @@ namespace Ogre
     NodeMemoryManager::NodeMemoryManager() :
         mDummyNode( 0 ),
         mMemoryManagerType( SCENE_DYNAMIC ),
-        mTwinMemoryManager( 0 )
+        mTwinMemoryManager( 0 ),
+        mReserveWithTwin( true )
     {
         // Manually allocate the memory for the dummy scene nodes (since we can't pass ourselves
         // or yet another object) We only allocate what's needed to prevent access violations.
@@ -125,12 +126,25 @@ namespace Ogre
         }
     }
     //-----------------------------------------------------------------------------------
+    void NodeMemoryManager::reserveTwinLevel( size_t depth, size_t capacityBefore )
+    {
+        const size_t capacity = mMemoryManagers[depth].getCapacity();
+        if( !mReserveWithTwin || !mTwinMemoryManager || capacity == capacityBefore )
+            return;
+        // The twin's reallocation re-points ITS live instances in place (applyRebase writes
+        // each owner's own Transform), so a migration in flight from the twin stays valid.
+        mTwinMemoryManager->growToDepth( depth );
+        mTwinMemoryManager->mMemoryManagers[depth].reserve( capacity );
+    }
+    //-----------------------------------------------------------------------------------
     void NodeMemoryManager::nodeCreated( Transform &outTransform, size_t depth )
     {
         growToDepth( depth );
 
         NodeArrayMemoryManager &mgr = mMemoryManagers[depth];
+        const size_t capacityBefore = mgr.getCapacity();
         mgr.createNewNode( outTransform );
+        reserveTwinLevel( depth, capacityBefore );
     }
     //-----------------------------------------------------------------------------------
     void NodeMemoryManager::nodeAttached( Transform &outTransform, size_t depth )
@@ -141,7 +155,9 @@ namespace Ogre
     void NodeMemoryManager::nodeDettached( Transform &outTransform, size_t depth )
     {
         Transform tmp;
+        const size_t capacityBefore = mMemoryManagers[0].getCapacity();
         mMemoryManagers[0].createNewNode( tmp );
+        reserveTwinLevel( 0, capacityBefore );
 
         tmp.copy( outTransform );
         tmp.mParents[tmp.mIndex] = mDummyNode;
@@ -163,7 +179,9 @@ namespace Ogre
         growToDepth( newDepth );
 
         Transform tmp;
+        const size_t capacityBefore = mMemoryManagers[newDepth].getCapacity();
         mMemoryManagers[newDepth].createNewNode( tmp );
+        reserveTwinLevel( newDepth, capacityBefore );
 
         tmp.copy( inOutTransform );
 

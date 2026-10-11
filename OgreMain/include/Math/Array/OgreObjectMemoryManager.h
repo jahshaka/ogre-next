@@ -73,6 +73,12 @@ namespace Ogre
         */
         SceneMemoryMgrTypes  mMemoryManagerType;
         ObjectMemoryManager *mTwinMemoryManager;
+        /// See setReserveWithTwin.
+        bool mReserveWithTwin;
+
+        /// After a slot was taken on `renderQueue`: if the level grew past `capacityBefore`,
+        /// the twin's level reserves the same capacity (setReserveWithTwin).
+        void reserveTwinLevel( size_t renderQueue, size_t capacityBefore );
 
         /** Makes mMemoryManagers big enough to be able to fulfill mMemoryManagers[newDepth]
         @param newDepth
@@ -89,6 +95,20 @@ namespace Ogre
 
         /// Note the return value can be null
         ObjectMemoryManager *getTwin() const { return mTwinMemoryManager; }
+
+        /** THE TWIN RESERVES WITH ITS SIBLING (fork; default true). When a level here grows
+            (a reallocation: every pool copied, every live instance re-pointed, O(used) on the
+            calling thread), the twin's level of the same render queue is grown to the same capacity
+            then and there. Content is born in one twin and MIGRATES to the other (setStatic),
+            so without this the twin's level grows by 50% steps WHILE the content migrates —
+            an O(used) spike on whatever frame a migration crosses the capacity (an editor's
+            static re-classification of a 50,000-node scene: one migration of 1.7 ms among
+            ones of ~4 us). With it the reallocation happens where the population is CREATED,
+            which already pays O(n). The price is memory: both twins hold the peak capacity of
+            either (a render queue of a never-static scene reserves as many static slots).
+        */
+        void setReserveWithTwin( bool bReserve ) { mReserveWithTwin = bReserve; }
+        bool getReserveWithTwin() const { return mReserveWithTwin; }
         SceneMemoryMgrTypes  getMemoryManagerType() const { return mMemoryManagerType; }
 
         /** Requests memory for the given ObjectData, initializing values.

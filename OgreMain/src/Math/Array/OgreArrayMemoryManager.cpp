@@ -175,54 +175,75 @@ namespace Ogre
                              "ArrayMemoryManager::createNewNode" );
             }
 
-            // Build the diff list for rebase later.
-            PtrdiffVec diffsList;
-            diffsList.reserve( usedMemory );
-            mRebaseListener->buildDiffList( mLevel, mMemoryPools, diffsList );
-
             // Reallocate, grow by 50% increments, rounding up to next multiple of ARRAY_PACKED_REALS
             size_t newMemory =
                 std::min( std::max( mMaxMemory + ( mMaxMemory >> 1 ), usedMemory ), mMaxHardLimit );
             newMemory += ( ARRAY_PACKED_REALS - newMemory % ARRAY_PACKED_REALS ) % ARRAY_PACKED_REALS;
             newMemory = std::min( newMemory, mMaxHardLimit );
 
-            size_t i = 0;
-            MemoryPoolVec::iterator itor = mMemoryPools.begin();
-            MemoryPoolVec::iterator endt = mMemoryPools.end();
-
-            while( itor != endt )
-            {
-                // Reallocate
-                char *tmp = (char *)OGRE_MALLOC_SIMD( newMemory * mElementsMemSizes[i],
-                                                      MEMCATEGORY_SCENE_OBJECTS );
-                memcpy( tmp, *itor, mMaxMemory * mElementsMemSizes[i] );
-                if( mInitRoutines && mInitRoutines[i] )
-                {
-                    mInitRoutines[i]( tmp + mMaxMemory * mElementsMemSizes[i], 0, 0, 0, 0,
-                                      newMemory - mMaxMemory, mElementsMemSizes[i] );
-                }
-                else
-                {
-                    memset( tmp + mMaxMemory * mElementsMemSizes[i], 0,
-                            ( newMemory - mMaxMemory ) * mElementsMemSizes[i] );
-                }
-                OGRE_FREE_SIMD( *itor, MEMCATEGORY_SCENE_OBJECTS );
-                *itor = tmp;
-                ++i;
-                ++itor;
-            }
-
-            const size_t prevNumSlots = mMaxMemory;
-            mMaxMemory = newMemory;
-            initializeEmptySlots( prevNumSlots );
-
-            // Rebase all ptrs
-            mRebaseListener->applyRebase( mLevel, mMemoryPools, diffsList );
+            reallocTo( newMemory, usedMemory );
         }
 
         mUsedMemory = usedMemory;
 
         return nextSlot;
+    }
+    //-----------------------------------------------------------------------------------
+    void ArrayMemoryManager::reallocTo( size_t newMemory, size_t usedMemory )
+    {
+        // Build the diff list for rebase later.
+        PtrdiffVec diffsList;
+        diffsList.reserve( usedMemory );
+        mRebaseListener->buildDiffList( mLevel, mMemoryPools, diffsList );
+
+        size_t i = 0;
+        MemoryPoolVec::iterator itor = mMemoryPools.begin();
+        MemoryPoolVec::iterator endt = mMemoryPools.end();
+
+        while( itor != endt )
+        {
+            // Reallocate
+            char *tmp = (char *)OGRE_MALLOC_SIMD( newMemory * mElementsMemSizes[i],
+                                                  MEMCATEGORY_SCENE_OBJECTS );
+            memcpy( tmp, *itor, mMaxMemory * mElementsMemSizes[i] );
+            if( mInitRoutines && mInitRoutines[i] )
+            {
+                mInitRoutines[i]( tmp + mMaxMemory * mElementsMemSizes[i], 0, 0, 0, 0,
+                                  newMemory - mMaxMemory, mElementsMemSizes[i] );
+            }
+            else
+            {
+                memset( tmp + mMaxMemory * mElementsMemSizes[i], 0,
+                        ( newMemory - mMaxMemory ) * mElementsMemSizes[i] );
+            }
+            OGRE_FREE_SIMD( *itor, MEMCATEGORY_SCENE_OBJECTS );
+            *itor = tmp;
+            ++i;
+            ++itor;
+        }
+
+        const size_t prevNumSlots = mMaxMemory;
+        mMaxMemory = newMemory;
+        initializeEmptySlots( prevNumSlots );
+
+        // Rebase all ptrs
+        mRebaseListener->applyRebase( mLevel, mMemoryPools, diffsList );
+    }
+    //-----------------------------------------------------------------------------------
+    void ArrayMemoryManager::reserve( size_t numSlots )
+    {
+        // createNewSlot grows once usedMemory > mMaxMemory - OGRE_PREFETCH_SLOT_DISTANCE.
+        size_t newMemory = numSlots + OGRE_PREFETCH_SLOT_DISTANCE;
+        newMemory += ( ARRAY_PACKED_REALS - newMemory % ARRAY_PACKED_REALS ) % ARRAY_PACKED_REALS;
+        newMemory = std::min( newMemory, mMaxHardLimit );
+        if( newMemory <= mMaxMemory )
+            return;
+        reallocTo( newMemory, mUsedMemory );
+    }
+    //-----------------------------------------------------------------------------------
+    size_t ArrayMemoryManager::getCapacity() const
+    {
+        return mMaxMemory > OGRE_PREFETCH_SLOT_DISTANCE ? mMaxMemory - OGRE_PREFETCH_SLOT_DISTANCE : 0;
     }
     //-----------------------------------------------------------------------------------
     void ArrayMemoryManager::destroySlot( const char *ptrToFirstElement, uint8 index )

@@ -274,6 +274,17 @@ namespace Ogre
         void setCompactByRelocation( bool bRelocate ) { mCompactByRelocation = bRelocate; }
         bool getCompactByRelocation() const { return mCompactByRelocation; }
 
+        /** Grows the pool, now, so that it holds `numSlots` instances without another
+            reallocation (a no-op when it already does). A reallocation copies every pool and
+            re-points every live instance — O(used slots), on the calling thread — so a caller
+            that knows a population is coming (a static twin, see
+            NodeMemoryManager::setReserveWithTwin) pays it where it already pays O(n), never on
+            the frame a slot happens to cross the capacity.
+        */
+        void reserve( size_t numSlots );
+        /// The number of instances the pool holds before its next reallocation.
+        size_t getCapacity() const;
+
         /// Defragments memory, then reallocates a smaller pool that tightly fits
         /// the current number of objects. Useful when you know you won't be creating
         /// more slots and you need to reclaim memory.
@@ -294,6 +305,10 @@ namespace Ogre
         size_t getAllMemory() const;
 
     protected:
+        /// The reallocation createNewSlot and reserve share: every pool to `newMemory`
+        /// instances, the listener re-pointing the `usedMemory` live ones.
+        void reallocTo( size_t newMemory, size_t usedMemory );
+
         /** Requests memory for a new slot (could be used for SceneNode, Entities, etc.)
             @remarks
                 Try to create everything static first, then dynamic content.

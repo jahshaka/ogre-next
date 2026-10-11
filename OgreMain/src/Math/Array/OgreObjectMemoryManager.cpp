@@ -39,7 +39,8 @@ namespace Ogre
         mDummyNode( 0 ),
         mDummyObject( 0 ),
         mMemoryManagerType( SCENE_DYNAMIC ),
-        mTwinMemoryManager( 0 )
+        mTwinMemoryManager( 0 ),
+        mReserveWithTwin( true )
     {
         // Manually allocate the memory for the dummy scene nodes (since we can't pass ourselves
         // or yet another object) We only allocate what's needed to prevent access violations.
@@ -129,12 +130,25 @@ namespace Ogre
         }
     }
     //-----------------------------------------------------------------------------------
+    void ObjectMemoryManager::reserveTwinLevel( size_t renderQueue, size_t capacityBefore )
+    {
+        const size_t capacity = mMemoryManagers[renderQueue].getCapacity();
+        if( !mReserveWithTwin || !mTwinMemoryManager || capacity == capacityBefore )
+            return;
+        // The twin's reallocation re-points ITS live instances in place (applyRebase writes
+        // each owner's own ObjectData), so a migration in flight from the twin stays valid.
+        mTwinMemoryManager->growToDepth( renderQueue );
+        mTwinMemoryManager->mMemoryManagers[renderQueue].reserve( capacity );
+    }
+    //-----------------------------------------------------------------------------------
     void ObjectMemoryManager::objectCreated( ObjectData &outObjectData, size_t renderQueue )
     {
         growToDepth( renderQueue );
 
         ObjectDataArrayMemoryManager &mgr = mMemoryManagers[renderQueue];
+        const size_t capacityBefore = mgr.getCapacity();
         mgr.createNewNode( outObjectData );
+        reserveTwinLevel( renderQueue, capacityBefore );
 
         ++mTotalObjects;
     }
@@ -145,7 +159,9 @@ namespace Ogre
         growToDepth( newRenderQueue );
 
         ObjectData tmp;
+        const size_t capacityBefore = mMemoryManagers[newRenderQueue].getCapacity();
         mMemoryManagers[newRenderQueue].createNewNode( tmp );
+        reserveTwinLevel( newRenderQueue, capacityBefore );
 
         tmp.copy( inOutObjectData );
 
