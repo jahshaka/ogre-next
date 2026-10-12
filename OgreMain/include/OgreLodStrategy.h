@@ -79,13 +79,20 @@ namespace Ogre
             a planar reflector's mirrored camera, a picture-in-picture inset, a
             probe cube face and a thumbnail all run this function on the same
             objects in the same frame, and only the pass a person watches over
-            time wants a band. @see lodSet. */
+            time wants a band. @see lodSet.
+
+            JAHSHAKA (LOD-RACE-1): `padding` is the object memory manager's dummy
+            (ObjectMemoryManager::_getDummyObject), the owner of every unused slot in `t`'s
+            packs; it is passed through to lodSet, which never writes it. Upstream wrote the
+            one shared dummy from every worker thread whose range held a padding slot. */
         virtual void lodUpdateImpl( const size_t numNodes, ObjectData t, const Camera *camera,
-                                    Real bias, Real hysteresis ) const = 0;
+                                    Real bias, Real hysteresis,
+                                    const MovableObject *padding ) const = 0;
 
         // Include OgreLodStrategyPrivate.inl in the CPP files that use this function.
+        // JAHSHAKA (LOD-RACE-1): a slot whose owner is `padding` is skipped.
         inline static void lodSet( ObjectData &t, Real lodValues[ARRAY_PACKED_REALS],
-                                   Real hysteresis );
+                                   Real hysteresis, const MovableObject *padding );
 
         /** Transform user supplied value to internal value.
         @remarks

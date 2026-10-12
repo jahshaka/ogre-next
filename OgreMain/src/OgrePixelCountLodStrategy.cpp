@@ -130,7 +130,8 @@ namespace Ogre
     //-----------------------------------------------------------------------
     void AbsolutePixelCountLodStrategy::lodUpdateImpl( const size_t numNodes, ObjectData objData,
                                                        const Camera *camera, Real bias,
-                                                       Real hysteresis ) const
+                                                       Real hysteresis,
+                                                       const MovableObject *padding ) const
     {
         const Viewport *viewport = camera->getLastViewport();
         const Real viewportHeight = static_cast<Real>( viewport->getActualHeight() );
@@ -164,7 +165,7 @@ namespace Ogre
 
                 CastArrayToReal( lodValues, arrayLodValue );
 
-                lodSet( objData, lodValues, hysteresis );
+                lodSet( objData, lodValues, hysteresis, padding );
 
                 objData.advanceLodPack();
             }
@@ -191,7 +192,7 @@ namespace Ogre
                     ( *worldRadius * *worldRadius ) * PiDotVpAreaDivOrhtoArea * lodBias;
                 CastArrayToReal( lodValues, arrayLodValue );
 
-                lodSet( objData, lodValues, hysteresis );
+                lodSet( objData, lodValues, hysteresis, padding );
 
                 objData.advanceLodPack();
             }
@@ -239,7 +240,8 @@ namespace Ogre
     //-----------------------------------------------------------------------
     void ScreenRatioPixelCountLodStrategy::lodUpdateImpl( const size_t numNodes, ObjectData objData,
                                                           const Camera *camera, Real bias,
-                                                          Real hysteresis ) const
+                                                          Real hysteresis,
+                                                          const MovableObject *padding ) const
     {
         ArrayVector3 cameraPos;
         cameraPos.setAll( camera->_getCachedDerivedPosition() );
@@ -303,7 +305,7 @@ namespace Ogre
 
                 CastArrayToReal( lodValues, arrayLodValue );
 
-                lodSet( objData, lodValues, hysteresis );
+                lodSet( objData, lodValues, hysteresis, padding );
 
                 objData.advanceLodPack();
             }
@@ -329,7 +331,7 @@ namespace Ogre
                     ( *worldRadius * *worldRadius ) * PiDotVpAreaDivOrhtoArea * lodBias;
                 CastArrayToReal( lodValues, arrayLodValue );
 
-                lodSet( objData, lodValues, hysteresis );
+                lodSet( objData, lodValues, hysteresis, padding );
 
                 objData.advanceLodPack();
             }

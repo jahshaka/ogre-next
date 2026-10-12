@@ -86,7 +86,7 @@ namespace Ogre
                                       const Ogre::Camera  *camera ) const = 0;
 
         void lodUpdateImpl( const size_t numNodes, ObjectData t, const Camera *camera, Real bias,
-                            Real hysteresis ) const override;
+                            Real hysteresis, const MovableObject *padding ) const override;
 
         /** Sets the reference view upon which the distances were based.
         @note

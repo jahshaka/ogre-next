@@ -2133,8 +2133,11 @@ namespace Ogre
                 numObjs = std::min( numObjs, totalObjs - toAdvance );
                 objData.advancePack( toAdvance / ARRAY_PACKED_REALS );
 
+                // JAHSHAKA (LOD-RACE-1): this manager's dummy owns every padding slot of
+                // the range (lodSet skips it: the one object all workers would share).
                 lodStrategy->lodUpdateImpl( numObjs, objData, lodCamera, request.lodBias,
-                                            request.lodHysteresis );
+                                            request.lodHysteresis,
+                                            memoryManager->_getDummyObject() );
             }
 
             ++it;

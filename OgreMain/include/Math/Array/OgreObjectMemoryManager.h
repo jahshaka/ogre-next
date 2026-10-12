@@ -192,6 +192,14 @@ namespace Ogre
         /// Returns the pointer to the dummy node (useful when detaching)
         SceneNode *_getDummyNode() const { return mDummyNode; }
 
+        /** JAHSHAKA (LOD-RACE-1): the ONE object every unused slot of this manager names as
+            its owner — the tail of a render queue's last pack (initializeEmptySlots) and
+            every hole a destroyed or moved object leaves (destroyNode). It is shared by
+            every pack of every render queue, so a SoA walk that WRITES through
+            ObjectData::mOwner must skip it: two worker threads holding a padding slot each
+            write the same bytes (LodStrategy::lodSet, which receives this pointer). */
+        NullEntity *_getDummyObject() const { return mDummyObject; }
+
         /** Retrieves a ObjectData pointing to the first MovableObject in the given render queue
         @param outObjectData
             [out] ObjectData with filled pointers to the first MovableObject in this depth

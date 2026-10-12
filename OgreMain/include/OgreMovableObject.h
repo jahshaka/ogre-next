@@ -383,9 +383,10 @@ namespace Ogre
 
         friend void LodStrategy::lodUpdateImpl( const size_t numNodes, ObjectData t,
                                                 const Camera *camera, Real bias,
-                                                Real hysteresis ) const;
+                                                Real hysteresis,
+                                                const MovableObject *padding ) const;
         friend void LodStrategy::lodSet( ObjectData &t, Real lodValues[ARRAY_PACKED_REALS],
-                                         Real hysteresis );
+                                         Real hysteresis, const MovableObject *padding );
 
         /** Tells this object whether to be visible or not, if it has a renderable component.
         @note An alternative approach of making an object invisible is to detach it

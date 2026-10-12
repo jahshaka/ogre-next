@@ -29,11 +29,24 @@ THE SOFTWARE.
 namespace Ogre
 {
     inline void LodStrategy::lodSet( ObjectData &objData, Real lodValues[ARRAY_PACKED_REALS],
-                                     Real hysteresis )
+                                     Real hysteresis, const MovableObject *padding )
     {
         for( size_t j = 0; j < ARRAY_PACKED_REALS; ++j )
         {
             MovableObject *owner = objData.mOwner[j];
+
+            // JAHSHAKA (LOD-RACE-1): A PADDING SLOT IS NOT AN OBJECT. Every unused slot of a
+            // pack — the tail of a render queue's last pack, a hole a destroyed or moved
+            // object left — names the memory manager's ONE shared dummy as its owner (the
+            // mark ObjectDataArrayMemoryManager puts there), and SceneManager hands each
+            // worker a pack-aligned range, so every worker whose range held such a slot
+            // wrote the same dummy's mCurrentMeshLod (and the band's mHysteresisLod) with
+            // no lock: a data race, harmless in effect only because the dummy never
+            // renders. The identity test skips exactly the padding and no real object (a
+            // hidden object's zeroed visibility mask, Ogre's other padding mark, would
+            // freeze a real object's level), at one predictable branch per slot.
+            if( owner == padding )
+                continue;
 
             // This may look like a lot of ugly indirections, but mLodMerged is a pointer that allows
             // sharing with many MovableObjects (it should perfectly fit even in small caches).
