@@ -41,6 +41,7 @@ THE SOFTWARE.
 #    include "iOS/macUtils.h"
 #endif
 
+#include <algorithm>
 #include <atomic>
 
 namespace Ogre
@@ -440,6 +441,16 @@ namespace Ogre
 
         hlms->clearShaderCache();
 
+        // (Jahshaka) A MISSING PIECE COSTS ITS OWN ENTRIES, NEVER THE CACHE. Upstream aborted the
+        // whole Hlms cache on the first custom piece file it could not open ("We could in theory
+        // recover from this error if we iterate through all the cache entries and remove the ones
+        // using this piece file"). A piece's file lives where the host registered it when a
+        // material set it — a project's folder, a shader graph's emitted piece — so the next
+        // session's boot, which loads the cache before any material exists, routinely cannot
+        // open it, and one such entry threw away every other shader. Here the entries that name a
+        // missing piece (by the filename hash the merged properties carry, one per stage) are
+        // removed and the rest load; the piece's entries are rebuilt if a material sets it again.
+        std::vector<int32> missingPieces;
         for( const DatablockCustomPiecesCache &datablockPiece : mCache.datablockCustomPieceFiles )
         {
             Hlms::CachedCustomPieceFileStatus status = hlms->_addDatablockCustomPieceFile(
@@ -458,17 +469,43 @@ namespace Ogre
                     "compiler errors, delete the cache." );
                 break;
             case Hlms::CCPFS_CriticalError:
-                // We could in theory recover from this error if we iterate through all the cache
-                // entries and remove the ones using this piece file. However we encountered that
-                // a file is missing. It's likely the cache has been invalidated too much.
+                missingPieces.push_back(
+                    static_cast<int32>( IdString( datablockPiece.filename ).getU32Value() ) );
                 LogManager::getSingleton().logMessage(
-                    "ERROR: Datablock's custom piece file '" + datablockPiece.filename +
-                        "' in resource group '" + datablockPiece.resourceGroup +
-                        "' not found! Aborting the loading of the HlmsDiskCache.",
-                    LML_CRITICAL );
-                hlms->clearShaderCache();
-                return;  // ABORT! THIS IS A RETURN!
+                    "WARNING: Datablock's custom piece file '" + datablockPiece.filename +
+                    "' in resource group '" + datablockPiece.resourceGroup +
+                    "' not found. The cache entries that use it are dropped; the rest load." );
+                break;
             }
+        }
+
+        if( !missingPieces.empty() )
+        {
+            const size_t before = mCache.sourceCode.size();
+            SourceCodeVec::iterator newEnd = std::remove_if(
+                mCache.sourceCode.begin(), mCache.sourceCode.end(),
+                [hlms, &missingPieces]( const SourceCode &entry )
+                {
+                    for( size_t i = 0u; i < CustomPieceStage::NumCustomPieceStages; ++i )
+                    {
+                        const int32 customPieceName =
+                            hlms->getProperty( entry.mergedCache.setProperties,
+                                               HlmsBaseProp::_DatablockCustomPieceShaderName[i] );
+                        if( customPieceName &&
+                            std::find( missingPieces.begin(), missingPieces.end(),
+                                       customPieceName ) != missingPieces.end() )
+                        {
+                            return true;
+                        }
+                    }
+                    return false;
+                } );
+            mCache.sourceCode.erase( newEnd, mCache.sourceCode.end() );
+            LogManager::getSingleton().logMessage(
+                "HlmsDiskCache: dropped " +
+                StringConverter::toString( before - mCache.sourceCode.size() ) +
+                " entries that use a missing custom piece file; " +
+                StringConverter::toString( mCache.sourceCode.size() ) + " load." );
         }
 
         {

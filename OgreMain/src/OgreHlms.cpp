@@ -4792,7 +4792,10 @@ namespace Ogre
 
             uint64 currentChecksum[2];
             entry.getCodeChecksum( currentChecksum );
-            if( currentChecksum[0] != sourceCodeHash[0] && currentChecksum[1] != sourceCodeHash[1] )
+            // (Jahshaka) EITHER half differing is a different file: the 128-bit hash is two words,
+            // and `&&` here called a piece edited in one word only "up to date" (the cache then
+            // replayed a shader built from the old piece's code).
+            if( currentChecksum[0] != sourceCodeHash[0] || currentChecksum[1] != sourceCodeHash[1] )
                 retVal = CCPFS_OutOfDate;
 
             if( itor == mDatablockCustomPieceFiles.end() )
@@ -4816,6 +4819,18 @@ namespace Ogre
         }
         catch( FileNotFoundException &e )
         {
+            LogManager::getSingleton().logMessage( e.getFullDescription(), LML_CRITICAL );
+            return CCPFS_CriticalError;
+        }
+        catch( ItemIdentityException &e )
+        {
+            // (Jahshaka) A piece whose RESOURCE GROUP does not exist (yet) is as missing as a
+            // piece whose file does not: openResource throws ERR_ITEM_NOT_FOUND for the group,
+            // which escaped the catch above and out of HlmsDiskCache::applyTo — one cached
+            // entry of a material with a custom piece then cost the host the whole cache.
+            // A duplicate item is a different error and still propagates.
+            if( e.getNumber() != Exception::ERR_ITEM_NOT_FOUND )
+                throw;
             LogManager::getSingleton().logMessage( e.getFullDescription(), LML_CRITICAL );
             return CCPFS_CriticalError;
         }
