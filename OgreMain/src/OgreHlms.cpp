@@ -4779,6 +4779,13 @@ namespace Ogre
         DatablockCustomPieceFileMap::const_iterator itor =
             mDatablockCustomPieceFiles.find( filenameHash );
 
+        // (Jahshaka) ASK FIRST, QUIETLY: a piece whose group or file is not registered (yet) is the expected
+        // case for a cache written by a session that used it — not an exception to log per piece.
+        {
+            ResourceGroupManager &rgm = ResourceGroupManager::getSingleton();
+            if( !rgm.resourceGroupExists( resourceGroup ) || !rgm.resourceExists( resourceGroup, filename ) )
+                return CCPFS_CriticalError;
+        }
         try
         {
             Hlms::CachedCustomPieceFileStatus retVal = CCPFS_Success;

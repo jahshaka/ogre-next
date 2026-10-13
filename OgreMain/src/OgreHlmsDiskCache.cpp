@@ -159,6 +159,46 @@ namespace Ogre
                 }
                 ++itor;
             }
+
+            // (Jahshaka) THE ENTRIES applyTo KEPT ASIDE (Hlms::mDiskCacheDeferred), written back while their
+            // piece is still unknown to this session: a piece this session registered was recompiled live from
+            // its current content, so its old entries — and its old checksum — are not saved beside the new.
+            for( const Hlms::DiskCacheDeferredPiece &kept : hlms->mDiskCacheDeferredPieces )
+            {
+                const int32 nameHash = static_cast<int32>( IdString( kept.filename ).getU32Value() );
+                if( hlms->mDatablockCustomPieceFiles.find( nameHash ) !=
+                    hlms->mDatablockCustomPieceFiles.end() )
+                {
+                    continue;
+                }
+                DatablockCustomPiecesCache cacheEntry;
+                cacheEntry.filename = kept.filename;
+                cacheEntry.resourceGroup = kept.resourceGroup;
+                cacheEntry.sourceCodeHash[0] = kept.sourceCodeHash[0];
+                cacheEntry.sourceCodeHash[1] = kept.sourceCodeHash[1];
+                mCache.datablockCustomPieceFiles.push_back( cacheEntry );
+            }
+            for( const Hlms::DiskCacheDeferredEntry &kept : hlms->mDiskCacheDeferred )
+            {
+                bool allUnknown = true;
+                for( size_t i = 0u; i < CustomPieceStage::NumCustomPieceStages && allUnknown; ++i )
+                {
+                    const int32 customPieceName = hlms->getProperty(
+                        kept.mergedCache.setProperties, HlmsBaseProp::_DatablockCustomPieceShaderName[i] );
+                    if( customPieceName && hlms->mDatablockCustomPieceFiles.find( customPieceName ) !=
+                                               hlms->mDatablockCustomPieceFiles.end() )
+                    {
+                        allUnknown = false;
+                    }
+                }
+                if( !allUnknown )
+                    continue;
+                SourceCode sourceCode;
+                sourceCode.mergedCache = kept.mergedCache;
+                for( size_t i = 0u; i < NumShaderTypes; ++i )
+                    sourceCode.sourceFile[i] = kept.sourceFile[i];
+                mCache.sourceCode.push_back( sourceCode );
+            }
         }
 
         {
@@ -451,6 +491,8 @@ namespace Ogre
         // missing piece (by the filename hash the merged properties carry, one per stage) are
         // removed and the rest load; the piece's entries are rebuilt if a material sets it again.
         std::vector<int32> missingPieces;
+        hlms->mDiskCacheDeferred.clear();
+        hlms->mDiskCacheDeferredPieces.clear();
         for( const DatablockCustomPiecesCache &datablockPiece : mCache.datablockCustomPieceFiles )
         {
             Hlms::CachedCustomPieceFileStatus status = hlms->_addDatablockCustomPieceFile(
@@ -471,10 +513,15 @@ namespace Ogre
             case Hlms::CCPFS_CriticalError:
                 missingPieces.push_back(
                     static_cast<int32>( IdString( datablockPiece.filename ).getU32Value() ) );
-                LogManager::getSingleton().logMessage(
-                    "WARNING: Datablock's custom piece file '" + datablockPiece.filename +
-                    "' in resource group '" + datablockPiece.resourceGroup +
-                    "' not found. The cache entries that use it are dropped; the rest load." );
+                if( !mTemplatesOutOfDate )
+                {
+                    Hlms::DiskCacheDeferredPiece kept;
+                    kept.filename = datablockPiece.filename;
+                    kept.resourceGroup = datablockPiece.resourceGroup;
+                    kept.sourceCodeHash[0] = datablockPiece.sourceCodeHash[0];
+                    kept.sourceCodeHash[1] = datablockPiece.sourceCodeHash[1];
+                    hlms->mDiskCacheDeferredPieces.push_back( kept );
+                }
                 break;
             }
         }
@@ -482,7 +529,8 @@ namespace Ogre
         if( !missingPieces.empty() )
         {
             const size_t before = mCache.sourceCode.size();
-            SourceCodeVec::iterator newEnd = std::remove_if(
+            const bool keepAside = !mTemplatesOutOfDate;
+            SourceCodeVec::iterator newEnd = std::stable_partition(
                 mCache.sourceCode.begin(), mCache.sourceCode.end(),
                 [hlms, &missingPieces]( const SourceCode &entry )
                 {
@@ -495,17 +543,32 @@ namespace Ogre
                             std::find( missingPieces.begin(), missingPieces.end(),
                                        customPieceName ) != missingPieces.end() )
                         {
-                            return true;
+                            return false;   // to the tail: kept aside, not compiled
                         }
                     }
-                    return false;
+                    return true;
                 } );
+            if( keepAside )
+            {
+                for( SourceCodeVec::iterator it = newEnd; it != mCache.sourceCode.end(); ++it )
+                {
+                    Hlms::DiskCacheDeferredEntry kept;
+                    kept.mergedCache = it->mergedCache;
+                    for( size_t i = 0u; i < NumShaderTypes; ++i )
+                        kept.sourceFile[i] = it->sourceFile[i];
+                    hlms->mDiskCacheDeferred.push_back( kept );
+                }
+            }
             mCache.sourceCode.erase( newEnd, mCache.sourceCode.end() );
+            // ONE line for the lot (the per-piece exception and warning are gone: a piece not registered yet is
+            // the expected case for a cache a session that used it wrote).
             LogManager::getSingleton().logMessage(
-                "HlmsDiskCache: dropped " +
+                "HlmsDiskCache: " + StringConverter::toString( missingPieces.size() ) +
+                " custom piece file(s) not registered yet; dropped " +
                 StringConverter::toString( before - mCache.sourceCode.size() ) +
                 " entries that use a missing custom piece file; " +
-                StringConverter::toString( mCache.sourceCode.size() ) + " load." );
+                StringConverter::toString( mCache.sourceCode.size() ) + " load." +
+                ( keepAside ? " (kept for the next save)" : "" ) );
         }
 
         {

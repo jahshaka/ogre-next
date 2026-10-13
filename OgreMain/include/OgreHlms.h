@@ -398,6 +398,27 @@ namespace Ogre
         /// See HlmsDatablock::setCustomPieceFile.
         DatablockCustomPieceFileMap mDatablockCustomPieceFiles;
 
+        /// (Jahshaka) THE DISK CACHE'S ENTRIES WHOSE CUSTOM PIECE WAS NOT REGISTERED AT LOAD. HlmsDiskCache::applyTo
+        /// cannot compile them (their piece's file is not reachable yet — a host registers a piece's location
+        /// when a material sets it), so they are kept here, untouched, and HlmsDiskCache::copyFrom writes them
+        /// back into the next save as long as their piece is still unknown to this Hlms. Without this, a session
+        /// that never used a piece dropped its entries from the cache for good, and the next session that did
+        /// recompiled them. Only kept when the templates were current at load (the source is preprocessed).
+        struct DiskCacheDeferredEntry
+        {
+            RenderableCache mergedCache;
+            String          sourceFile[NumShaderTypes];
+            DiskCacheDeferredEntry() : mergedCache( HlmsPropertyVec(), 0 ) {}
+        };
+        struct DiskCacheDeferredPiece
+        {
+            String filename;
+            String resourceGroup;
+            uint64 sourceCodeHash[2];
+        };
+        std::vector<DiskCacheDeferredEntry> mDiskCacheDeferred;
+        std::vector<DiskCacheDeferredPiece> mDiskCacheDeferredPieces;
+
         /// The default datablock occupies the name IdString(); which is not the same as IdString("")
         HlmsDatablock *mDefaultDatablock;
 
