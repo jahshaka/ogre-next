@@ -28,6 +28,8 @@ THE SOFTWARE.
 
 #include "OgreVulkanDevice.h"
 
+#include "OgreVulkanAsyncComputeQueue.h"
+
 #include "OgreVulkanRenderSystem.h"
 #include "OgreVulkanWindow.h"
 #include "Vao/OgreVulkanVaoManager.h"
@@ -597,6 +599,7 @@ namespace Ogre
         mDevice( 0 ),
         mPipelineCache( 0 ),
         mPresentQueue( 0 ),
+        mAsyncCompute( 0 ),
         mVaoManager( 0 ),
         mRenderSystem( renderSystem ),
         mSupportedStages( 0xFFFFFFFF ),
@@ -634,6 +637,14 @@ namespace Ogre
             // lost, so there is nothing to wait for.
             if( !isDeviceLost() )
                 vkDeviceWaitIdle( mDevice );  // intentionally ignore result in destroy()
+
+            // Jahshaka (ENGINE-UPGRADE-ASYNC): the Component's semaphores die with the device.
+            if( mAsyncCompute )
+            {
+                mAsyncCompute->_destroy();
+                delete mAsyncCompute;
+                mAsyncCompute = 0;
+            }
 
             mGraphicsQueue.destroy();
             destroyQueues( mComputeQueues );
@@ -738,7 +749,8 @@ namespace Ogre
         VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
         VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures,
         VkPhysicalDeviceMultiviewFeatures &deviceMultiviewFeatures,
-        RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures )
+        RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures,
+        uint32 instanceApiVersion, VkPhysicalDeviceTimelineSemaphoreFeatures &timelineFeatures )
     {
         // Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): this WAS fillDeviceFeatures2()'s body. It is a
         // static now, over an explicitly given extension list, because the OpenXR route
@@ -829,6 +841,24 @@ namespace Ogre
             lastNext = &rayQueryFeatures.bufferDeviceAddress.pNext;
         }
 
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): TIMELINE SEMAPHORES, core in Vulkan 1.2 -- chained
+        // only when both the instance and the device are 1.2 (no KHR fallback: a device
+        // without them runs the async compute queue's in-order arm).
+        memset( &timelineFeatures, 0, sizeof( timelineFeatures ) );
+        makeVkStruct( timelineFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES );
+        bool bWantTimeline = false;
+        {
+            VkPhysicalDeviceProperties props;
+            vkGetPhysicalDeviceProperties( physicalDevice, &props );
+            bWantTimeline = instanceApiVersion >= VK_API_VERSION_1_2 &&
+                            props.apiVersion >= VK_API_VERSION_1_2;
+        }
+        if( bWantTimeline )
+        {
+            *lastNext = &timelineFeatures;
+            lastNext = &timelineFeatures.pNext;
+        }
+
         GetPhysicalDeviceFeatures2KHR( physicalDevice, &deviceFeatures2 );
         outExtraFeatures.storageInputOutput16 = device16BitStorageFeatures.storageInputOutput16;
         outExtraFeatures.shaderFloat16 = deviceShaderFloat16Int8Features.shaderFloat16;
@@ -840,6 +870,12 @@ namespace Ogre
         // companions are not used by any pass and stay off.
         outExtraFeatures.multiview = deviceMultiviewFeatures.multiview;
         outExtraFeatures.maxMultiviewViewCount = 0u;
+        // The query filled the struct's one bit; left set, the chain ENABLES it.
+        outExtraFeatures.timelineSemaphore = bWantTimeline ? timelineFeatures.timelineSemaphore : VK_FALSE;
+        timelineFeatures.timelineSemaphore = outExtraFeatures.timelineSemaphore;
+        LogManager::getSingleton().logMessage(
+            String( "Vulkan: timeline semaphores " ) +
+            ( outExtraFeatures.timelineSemaphore ? "ENABLED (Vulkan 1.2 core)" : "not available" ) );
         if( outExtraFeatures.multiview )
         {
             PFN_vkGetPhysicalDeviceProperties2KHR GetPhysicalDeviceProperties2KHR =
@@ -932,7 +968,8 @@ namespace Ogre
         return buildFeatureChain( mInstance->mVkInstance, mPhysicalDevice, mDeviceExtensions,
                                   deviceFeatures2, device16BitStorageFeatures,
                                   deviceShaderFloat16Int8Features, deviceCacheControlFeatures,
-                                  deviceMultiviewFeatures, mRayQueryFeatures, mDeviceExtraFeatures );
+                                  deviceMultiviewFeatures, mRayQueryFeatures, mDeviceExtraFeatures,
+                                  mInstance->mApiVersion, mTimelineFeatures );
     }
     //-------------------------------------------------------------------------
     void VulkanDevice::destroyQueues( FastArray<VulkanQueue> &queueArray )
@@ -1017,7 +1054,9 @@ namespace Ogre
 
         if( !externalDevice )
         {
-            createDevice( availableExtensions, 0u, 0u );
+            // Jahshaka (ENGINE-UPGRADE-ASYNC): ONE compute queue, for the async compute
+            // Component (findComputeQueue: a compute-only family first). Upstream asks none.
+            createDevice( availableExtensions, jahAsyncComputeRequested() ? 1u : 0u, 0u );
         }
         else
         {
@@ -1143,18 +1182,39 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanDevice::findComputeQueue( FastArray<uint32> &inOutUsedQueueCount, uint32 maxNumQueues )
     {
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): THE FAMILY PREFERENCE. Pass 0 takes a compute-only
+        // family (COMPUTE without GRAPHICS: the hardware's async compute engine); pass 1 a
+        // further queue of any compute family (the graphics family's second queue). Upstream
+        // took the first compute family with a free slot -- on NVIDIA queue 1 of the graphics
+        // family 0. Every queue made here is the async compute Component's own-slot queue.
         const size_t numQueues = mQueueProps.size();
-        for( size_t i = 0u; i < numQueues && mComputeQueues.size() < maxNumQueues; ++i )
+        for( int pass = 0; pass < 2; ++pass )
         {
-            if( mQueueProps[i].queueFlags & VK_QUEUE_COMPUTE_BIT &&
-                inOutUsedQueueCount[i] < mQueueProps[i].queueCount )
+            for( size_t i = 0u; i < numQueues && mComputeQueues.size() < maxNumQueues; ++i )
             {
+                const VkQueueFlags flags = mQueueProps[i].queueFlags;
+                if( !( flags & VK_QUEUE_COMPUTE_BIT ) ||
+                    inOutUsedQueueCount[i] >= mQueueProps[i].queueCount )
+                    continue;
+                if( pass == 0 && ( flags & VK_QUEUE_GRAPHICS_BIT ) )
+                    continue;
                 mComputeQueues.push_back( VulkanQueue() );
                 mComputeQueues.back().setQueueData( this, VulkanQueue::Compute, static_cast<uint32>( i ),
                                                     inOutUsedQueueCount[i] );
+                mComputeQueues.back()._jahSetOwnSlots( true );
                 ++inOutUsedQueueCount[i];
             }
         }
+    }
+    //-------------------------------------------------------------------------
+    bool VulkanDevice::jahAsyncComputeRequested()
+    {
+        static const bool requested = []()
+        {
+            const char *v = getenv( "JAH_VK_ASYNC_COMPUTE" );
+            return !( v && strcmp( v, "0" ) == 0 );
+        }();
+        return requested;
     }
     //-------------------------------------------------------------------------
     void VulkanDevice::findTransferQueue( FastArray<uint32> &inOutUsedQueueCount, uint32 maxNumQueues )
@@ -1181,6 +1241,26 @@ namespace Ogre
 
         FastArray<uint32> usedQueueCount;
         usedQueueCount.resize( numQueueFamilies, 0u );
+
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): every family, once per device creation.
+        for( size_t i = 0u; i < numQueueFamilies; ++i )
+        {
+            const VkQueueFlags f = mQueueProps[i].queueFlags;
+            String flags;
+            if( f & VK_QUEUE_GRAPHICS_BIT ) flags += "G";
+            if( f & VK_QUEUE_COMPUTE_BIT ) flags += "C";
+            if( f & VK_QUEUE_TRANSFER_BIT ) flags += "T";
+            if( f & VK_QUEUE_SPARSE_BINDING_BIT ) flags += "S";
+            if( f & ~VkQueueFlags( VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT |
+                                   VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT ) )
+                flags += "+other";
+            LogManager::getSingleton().logMessage(
+                "Vulkan: queue family " + StringConverter::toString( i ) + ": flags " + flags +
+                " count " + StringConverter::toString( mQueueProps[i].queueCount ) +
+                " timestampValidBits " + StringConverter::toString( mQueueProps[i].timestampValidBits ) );
+        }
+        if( !jahAsyncComputeRequested() )
+            LogManager::getSingleton().logMessage( "Vulkan: JAH_VK_ASYNC_COMPUTE=0: no compute queue requested" );
 
         findGraphicsQueue( usedQueueCount );
         findComputeQueue( usedQueueCount, maxComputeQueues );
@@ -1496,6 +1576,13 @@ namespace Ogre
             itor->init( mDevice, queue, mRenderSystem );
             ++itor;
         }
+
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): the Component, on the first compute queue (none:
+        // its off arm). An external device enabled its own features: its timelines are not ours.
+        OGRE_ASSERT_LOW( !mAsyncCompute );
+        mAsyncCompute = new VulkanAsyncComputeQueue(
+            this, mComputeQueues.empty() ? 0 : &mComputeQueues[0],
+            !mIsExternal && mDeviceExtraFeatures.timelineSemaphore );
     }
     //-------------------------------------------------------------------------
     void VulkanDevice::commitAndNextCommandBuffer( SubmissionType::SubmissionType submissionType )

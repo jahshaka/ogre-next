@@ -156,6 +156,10 @@ namespace Ogre
             VkBool32 multiview;
             // VkPhysicalDeviceMultiviewProperties::maxMultiviewViewCount (0 without multiview)
             uint32 maxMultiviewViewCount;
+
+            // Jahshaka (ENGINE-UPGRADE-ASYNC): VkPhysicalDeviceTimelineSemaphoreFeatures (core
+            // in Vulkan 1.2; asked only when the instance AND the device are 1.2)
+            VkBool32 timelineSemaphore;
         };
 
         /// Jahshaka (fork d014b064f (was 0038)): the feature structs a hardware ray-query tier
@@ -203,7 +207,18 @@ namespace Ogre
         VkPhysicalDeviceFeatures mDeviceFeatures;
         ExtraVkFeatures mDeviceExtraFeatures;
         RayQueryVkFeatures mRayQueryFeatures;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): a member for the same reason as mRayQueryFeatures
+        /// (the chain must live until vkCreateDevice reads it).
+        VkPhysicalDeviceTimelineSemaphoreFeatures mTimelineFeatures;
         FastArray<VkQueueFamilyProperties> mQueueProps;
+
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): THE ASYNC COMPUTE QUEUE Component, made with the
+        /// queues (never null after initQueues; its off arm when there is no second queue).
+        VulkanAsyncComputeQueue *mAsyncCompute;
+        VulkanAsyncComputeQueue *getAsyncCompute() const { return mAsyncCompute; }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): false when the environment sets JAH_VK_ASYNC_COMPUTE=0
+        /// (no second queue is requested: the off arm a device without one has).
+        static bool jahAsyncComputeRequested();
 
         /// Extensions requested when created. Sorted
         FastArray<IdString> mDeviceExtensions;
@@ -325,7 +340,8 @@ namespace Ogre
             VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
             VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures,
             VkPhysicalDeviceMultiviewFeatures &deviceMultiviewFeatures,
-            RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures );
+            RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures,
+            uint32 instanceApiVersion, VkPhysicalDeviceTimelineSemaphoreFeatures &timelineFeatures );
     };
 
     // Mask away read flags from srcAccessMask

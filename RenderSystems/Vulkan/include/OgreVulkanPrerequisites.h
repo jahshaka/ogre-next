@@ -103,6 +103,7 @@ namespace Ogre
     class VulkanProgram;
     class VulkanProgramFactory;
     class VulkanQueue;
+    class VulkanAsyncComputeQueue;
     class VulkanRenderSystem;
     class VulkanRootLayout;
     class VulkanStagingBuffer;
