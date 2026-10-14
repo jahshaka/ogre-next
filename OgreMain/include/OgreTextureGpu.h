@@ -182,6 +182,12 @@ namespace Ogre
             ///
             /// This flag requires RenderToTexture.
             TilerMemoryless = 1u << 15u,
+            /// Jahshaka (ENGINE-UPGRADE-ASYNC): the texture is written or read by work on a
+            /// second hardware queue (Vulkan's async compute queue, VulkanAsyncComputeQueue), so
+            /// its image is shared CONCURRENTLY between the graphics and the compute queue
+            /// families (no ownership transfers; free on NVIDIA, whose driver ignores the
+            /// sharing mode). Ignored by a render system or a device without such a queue.
+            AsyncComputeShared = 1u << 16u,
             // clang-format on
         };
     }
