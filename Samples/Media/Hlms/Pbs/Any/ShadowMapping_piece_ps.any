@@ -169,9 +169,16 @@
 @piece( DeclShadowSamplingFuncs )
 
 	@property( shadows_receive_on_ps )
+		// Jahshaka (BISTRO-FIXES-3): THE OFFSET FOLLOWS THE FACE THE PIXEL SHADES. A two-sided
+		// material shades a back face with its geometric normal flipped (two_sided_flip_normal,
+		// pixelData.geomNormal); the receiver's normal offset took the UNFLIPPED world normal,
+		// so on a face lit from its back it pushed the lookup INTO the surface and the face
+		// shadowed itself in acne stripes (shadow.two_sided_caster's turned-over plane: 1.94x
+		// the plane's shadow in light). The world normal takes the same flip; a one-sided
+		// material's piece is empty and its offset is unchanged.
 		@foreach( hlms_num_shadow_map_lights, n )
 			@property( !skip_normal_offset_bias_vs )
-				@piece( shadowMapNormalOffsetBias@n )getNormalOffsetBias( inPs.worldNorm, pixelData.geomNormal, shadowMap@nLightDir, passBuf.shadowRcv[@n].invShadowMapSize.x, passBuf.shadowRcv[@n].shadowDepthRange.y, passBuf.shadowRcv[@n].normalOffsetBias hlms_shadowmap@n_uv_param )@end
+				@piece( shadowMapNormalOffsetBias@n )getNormalOffsetBias( inPs.worldNorm @insertpiece( two_sided_flip_normal ), pixelData.geomNormal, shadowMap@nLightDir, passBuf.shadowRcv[@n].invShadowMapSize.x, passBuf.shadowRcv[@n].shadowDepthRange.y, passBuf.shadowRcv[@n].normalOffsetBias hlms_shadowmap@n_uv_param )@end
 			@else
 				@piece( shadowMapNormalOffsetBias@n )float3( 0.0f, 0.0f, 0.0f )@end
 			@end
@@ -185,7 +192,7 @@
 		@end
 		@property( hlms_static_branch_shadow_map_lights )
 			@property( !skip_normal_offset_bias_vs )
-				@piece( shadowMapNormalOffsetBias_cur_shadow_map )getNormalOffsetBias( inPs.worldNorm, pixelData.geomNormal, light0Buf.lights[light_idx].spotDirection.xyz, passBuf.shadowRcv[cur_shadow_map].invShadowMapSize.x, passBuf.shadowRcv[cur_shadow_map].shadowDepthRange.y, passBuf.shadowRcv[cur_shadow_map].normalOffsetBias, shadowmap_uv_min[cur_shadow_map], shadowmap_uv_max[cur_shadow_map] )@end
+				@piece( shadowMapNormalOffsetBias_cur_shadow_map )getNormalOffsetBias( inPs.worldNorm @insertpiece( two_sided_flip_normal ), pixelData.geomNormal, light0Buf.lights[light_idx].spotDirection.xyz, passBuf.shadowRcv[cur_shadow_map].invShadowMapSize.x, passBuf.shadowRcv[cur_shadow_map].shadowDepthRange.y, passBuf.shadowRcv[cur_shadow_map].normalOffsetBias, shadowmap_uv_min[cur_shadow_map], shadowmap_uv_max[cur_shadow_map] )@end
 			@else
 				@piece( shadowMapNormalOffsetBias_cur_shadow_map )float3( 0.0f, 0.0f, 0.0f )@end
 			@end
