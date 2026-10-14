@@ -780,11 +780,18 @@
 	// DOMINANT direction (jahEnvDominantDir, in the JahEnvironment piece), not the
 	// mirror one: the split-sum convolution centres the lobe on R, the true lobe
 	// leans toward the normal. The same fit at every environment reader.
+	// Jahshaka (BISTRO-FIXES-3): THE SKY IS COUNTED ONCE. The cube holds the sky's radiance
+	// with nothing in the way; where a GI piece knows how much of this lobe the scene stops
+	// (the Photon library's rough-lobe occlusion query) it lights the stopped share itself, so
+	// the cube may only light the share let through: the hook jahGlobalEnvVisibility multiplies
+	// the sample by it (specular occlusion, Lagarde and de Rousiers 2014). Empty - the sample
+	// unchanged - wherever no such piece is defined. The clear coat's own lobe is not the query's.
 	pixelData.envColourS += SampleEnvProbe( texEnvProbeMap, samplerState@value(envMapRegSampler),
 											mul( midf3_c( jahEnvDominantDir( float3( pixelData.normal ), float3( pixelData.reflDir ),
 												float( pixelData.perceptualRoughness * pixelData.perceptualRoughness ) ) ),
 												 midf3x3_c( passBuf.invViewMatCubemap ) ),
-											@insertpiece( envSpecularRoughness ) ).xyz @insertpiece( ApplyEnvMapScale );
+											@insertpiece( envSpecularRoughness ) ).xyz @insertpiece( ApplyEnvMapScale )
+											@insertpiece( jahGlobalEnvVisibility );
 	@property( cubemaps_as_diffuse_gi )
 		pixelData.envColourD += SampleEnvProbe( texEnvProbeMap, samplerState@value(envMapRegSampler),
 												mul( pixelData.normal, midf3x3_c( passBuf.invViewMatCubemap ) ),
