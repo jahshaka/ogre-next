@@ -670,6 +670,8 @@ namespace Ogre
         bool isPoolOwner() const;
         bool isDiscardableContent() const;
         bool isTilerMemoryless() const { return ( mTextureFlags & TextureFlags::TilerMemoryless ) != 0; }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): see TextureFlags::AsyncComputeShared.
+        bool isAsyncComputeShared() const { return ( mTextureFlags & TextureFlags::AsyncComputeShared ) != 0; }
 
         /// OpenGL RenderWindows are a bit specific:
         ///     * Their origins are upside down. Which means we need to flip Y.

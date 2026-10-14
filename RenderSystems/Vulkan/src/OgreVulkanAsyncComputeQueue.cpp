@@ -212,7 +212,6 @@ namespace Ogre
             FrameBracket fb;
             fb.recordFrame = mDevice->mVaoManager->getFrameCount();
             fb.value = mComputeValue + 1u;
-            fb.waitedFrame = ~uint64( 0u );
             mFrameBrackets.push_back( fb );
         }
         mOpen = true;
@@ -275,20 +274,9 @@ namespace Ogre
         // async brackets before a setEnabled( false ) are waited by that switch.
         if( !isAsync() || !computeValue )
             return;
-        markWaited( computeValue );
         // Everything recorded so far goes first, unblocked; the wait holds what follows.
         mDevice->commitAndNextCommandBuffer( SubmissionType::FlushOnly );
         mDevice->mGraphicsQueue.addWaitSemaphore( mComputeTimeline, dstStage, computeValue );
-    }
-    //-------------------------------------------------------------------------
-    void VulkanAsyncComputeQueue::markWaited( uint64 computeValue )
-    {
-        const uint64 frame = mDevice->mVaoManager->getFrameCount();
-        for( FrameBracket &fb : mFrameBrackets )
-        {
-            if( fb.value <= computeValue && fb.waitedFrame == ~uint64( 0u ) )
-                fb.waitedFrame = frame;
-        }
     }
     //-------------------------------------------------------------------------
     void VulkanAsyncComputeQueue::_notifySlotReuse( uint64 frameCount )
@@ -302,34 +290,17 @@ namespace Ogre
                mFrameBrackets[retired].recordFrame + ring <= frameCount )
         {
             const FrameBracket &fb = mFrameBrackets[retired];
+            // The bracket's frame data (its descriptor sets, its dynamic and auto-param data) is
+            // read by the COMPUTE queue only: C passing the bracket is the whole rule. (The
+            // graphics frame that waited reads the bracket's OUTPUTS, never its ring data.)
             bool held = false;
-            // 1. the bracket itself (its descriptor sets, its dynamic and auto-param data)
             if( getCompletedComputeValue() < fb.value )
             {
                 held = true;
                 hostWaitCompute( fb.value );
             }
-            // 2. the graphics frame that waited for it (reads of its frame data there); a frame
-            // that is still being recorded cannot be waited -- then only C protects the slot
-            if( fb.waitedFrame != ~uint64( 0u ) && fb.waitedFrame > fb.recordFrame &&
-                fb.waitedFrame < frameCount )
-            {
-                const uint8 slot = static_cast<uint8>( fb.waitedFrame % ring );
-                if( !mDevice->mGraphicsQueue._isFrameFinished( slot ) )
-                {
-                    held = true;
-                    mDevice->mGraphicsQueue._waitOnFrame( slot );
-                }
-            }
-            // the rule, re-read after the waits
-            if( getCompletedComputeValue() < fb.value ||
-                ( fb.waitedFrame != ~uint64( 0u ) && fb.waitedFrame > fb.recordFrame &&
-                  fb.waitedFrame < frameCount &&
-                  !mDevice->mGraphicsQueue._isFrameFinished(
-                      static_cast<uint8>( fb.waitedFrame % ring ) ) ) )
-            {
-                ++mRecycleViolations;
-            }
+            if( getCompletedComputeValue() < fb.value )
+                ++mRecycleViolations;   // only after a device loss
             ++mSlotRecycles;
             if( held )
                 ++mRecyclesHeld;
@@ -337,6 +308,20 @@ namespace Ogre
         }
         if( retired )
             mFrameBrackets.erase( mFrameBrackets.begin(), mFrameBrackets.begin() + retired );
+    }
+    //-------------------------------------------------------------------------
+    bool VulkanAsyncComputeQueue::_isFrameDataConsumed( uint64 frameCount ) const
+    {
+        // The brackets are oldest first and their values increase: the last one recorded at or
+        // before `frameCount` is the one C must have passed.
+        uint64 need = 0u;
+        for( const FrameBracket &fb : mFrameBrackets )
+        {
+            if( fb.recordFrame > frameCount )
+                break;
+            need = fb.value;
+        }
+        return need == 0u || getCompletedComputeValue() >= need;
     }
     //-------------------------------------------------------------------------
     void VulkanAsyncComputeQueue::waitAtFrameEnd( uint64 computeValue )
@@ -350,9 +335,50 @@ namespace Ogre
         }
         if( !isAsync() || !computeValue )
             return;
-        markWaited( computeValue );
         mDevice->mGraphicsQueue.addFrameEndWaitSemaphore(
             mComputeTimeline, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, computeValue );
+    }
+    //-------------------------------------------------------------------------
+    bool VulkanAsyncComputeQueue::_closeLeakedBracket( const char *where )
+    {
+        if( !mOpen )
+            return false;
+        LogManager::getSingleton().logMessage(
+            "Vulkan: WARNING: an async compute bracket ('" + mOpenName +
+                "') was left open by a throw; closed and submitted at " + String( where ),
+            LML_CRITICAL );
+        end();
+        return true;
+    }
+    //-------------------------------------------------------------------------
+    VulkanAsyncComputeBracket::~VulkanAsyncComputeBracket()
+    {
+        if( !mQueue || !mQueue->isOpen() )
+            return;
+        try
+        {
+            mQueue->end();
+        }
+        catch( Exception &e )
+        {
+            // A destructor never throws (it may run while another exception unwinds).
+            LogManager::getSingleton().logMessage(
+                "Vulkan: an async compute bracket closed by its scope failed to submit: " +
+                    e.getFullDescription(),
+                LML_CRITICAL );
+        }
+    }
+    //-------------------------------------------------------------------------
+    uint64 VulkanAsyncComputeBracket::end()
+    {
+        if( !mQueue )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALID_STATE, "the bracket was already ended",
+                         "VulkanAsyncComputeBracket::end" );
+        }
+        VulkanAsyncComputeQueue *queue = mQueue;
+        mQueue = 0;
+        return queue->end();
     }
     //-------------------------------------------------------------------------
     uint64 VulkanAsyncComputeQueue::getCompletedComputeValue() const

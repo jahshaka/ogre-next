@@ -1278,6 +1278,85 @@ namespace Ogre
         newCommandBuffer();
     }
     //-------------------------------------------------------------------------
+    VkPipelineStageFlags VulkanQueue::_jahSupportedStages() const
+    {
+        VkPipelineStageFlags stages = mOwnerDevice->mSupportedStages;
+        if( mFamilyIdx >= mOwnerDevice->mQueueProps.size() )
+            return stages;
+        const VkQueueFlags flags = mOwnerDevice->mQueueProps[mFamilyIdx].queueFlags;
+        if( flags & VK_QUEUE_GRAPHICS_BIT )
+            return stages;
+        VkPipelineStageFlags family = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT |
+                                      VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT | VK_PIPELINE_STAGE_HOST_BIT |
+                                      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+        if( flags & VK_QUEUE_COMPUTE_BIT )
+            family |= VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+        return stages & family;
+    }
+    //-------------------------------------------------------------------------
+    VkAccessFlags VulkanQueue::_jahSupportedAccess( VkPipelineStageFlags stages ) const
+    {
+        if( mFamilyIdx >= mOwnerDevice->mQueueProps.size() ||
+            ( mOwnerDevice->mQueueProps[mFamilyIdx].queueFlags & VK_QUEUE_GRAPHICS_BIT ) )
+        {
+            return ~VkAccessFlags( 0u );
+        }
+        // MEMORY_READ / MEMORY_WRITE are valid with any stage.
+        VkAccessFlags access = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        const bool all = ( stages & VK_PIPELINE_STAGE_ALL_COMMANDS_BIT ) != 0u;
+        if( all || ( stages & VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT ) )
+        {
+            access |= VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+                      VK_ACCESS_UNIFORM_READ_BIT;
+        }
+        if( all || ( stages & VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT ) )
+            access |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        if( all || ( stages & VK_PIPELINE_STAGE_TRANSFER_BIT ) )
+            access |= VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        if( all || ( stages & VK_PIPELINE_STAGE_HOST_BIT ) )
+            access |= VK_ACCESS_HOST_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
+        return access;
+    }
+    //-------------------------------------------------------------------------
+    void VulkanQueue::_jahFitBarrier( VkPipelineStageFlags &srcStage, VkPipelineStageFlags &dstStage,
+                                      VkMemoryBarrier *memBarriers, uint32 numMemBarriers,
+                                      VkImageMemoryBarrier *imageBarriers,
+                                      uint32 numImageBarriers ) const
+    {
+        const VkPipelineStageFlags supported = _jahSupportedStages();
+        const VkPipelineStageFlags srcWanted = srcStage;
+        const VkPipelineStageFlags dstWanted = dstStage;
+        srcStage &= supported;
+        dstStage &= supported;
+        // A side that named only stages this family lacks (a render target's
+        // COLOR_ATTACHMENT_OUTPUT written on the graphics queue before; a fragment reader on the
+        // graphics queue after) is ordered across the queues by the timeline semaphores. The
+        // barrier -- its layout transition above all, a write -- must CHAIN to them: the
+        // source side to the wait that brought the work here, the destination side to the
+        // signal that hands it back. ALL_COMMANDS, never TOP / BOTTOM_OF_PIPE (no stage in the
+        // scope -- measured: SYNC-HAZARD-WRITE-AFTER-WRITE on the next transition otherwise).
+        if( srcStage == 0u && srcWanted != 0u )
+            srcStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        if( dstStage == 0u && dstWanted != 0u )
+            dstStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        if( srcStage == 0u )
+            srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        if( dstStage == 0u )
+            dstStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        const VkAccessFlags srcAccess = _jahSupportedAccess( srcStage );
+        const VkAccessFlags dstAccess = _jahSupportedAccess( dstStage );
+        for( uint32 i = 0u; i < numMemBarriers; ++i )
+        {
+            memBarriers[i].srcAccessMask &= srcAccess;
+            memBarriers[i].dstAccessMask &= dstAccess;
+        }
+        for( uint32 i = 0u; i < numImageBarriers; ++i )
+        {
+            imageBarriers[i].srcAccessMask &= srcAccess;
+            imageBarriers[i].dstAccessMask &= dstAccess;
+        }
+    }
+    //-------------------------------------------------------------------------
     size_t VulkanQueue::_jahNumAllocatedCmdBuffers() const
     {
         size_t n = 0u;

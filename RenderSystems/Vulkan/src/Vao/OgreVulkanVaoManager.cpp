@@ -501,7 +501,11 @@ namespace Ogre
     {
         if( bIssueBarrier && !mDevice->isDeviceLost() )
         {
-            if( mDevice->mGraphicsQueue.getEncoderState() == VulkanQueue::EncoderGraphicsOpen )
+            // Jahshaka (ENGINE-UPGRADE-ASYNC, the stage-2 read's W4): nor inside an async
+            // compute bracket -- the flush's barrier records on the graphics queue, which the
+            // bracket blocks; the next allocation outside it flushes.
+            if( mDevice->mGraphicsQueue.getEncoderState() == VulkanQueue::EncoderGraphicsOpen ||
+                mDevice->mJahInBracket )
             {
                 // We can't flush right now
                 return false;
@@ -2462,10 +2466,18 @@ namespace Ogre
                                mDynamicBufferMultiplier;
 
             retVal = mDevice->mGraphicsQueue._isFrameFinished( static_cast<uint8>( idx ) );
+            // Jahshaka (ENGINE-UPGRADE-ASYNC, the stage-2 read's W2): what the frame allocated
+            // is also read by the async compute brackets it recorded (descriptor sets: a pool
+            // reset under a running bracket is VUID-vkResetDescriptorPool-descriptorPool-00313).
+            // The graphics fence alone does not prove C passed them -- a bracket recorded before
+            // the frame's VaoManager::_update is waited by no graphics submission of it.
+            if( retVal && mDevice->mAsyncCompute )
+                retVal = mDevice->mAsyncCompute->_isFrameDataConsumed( frameCount );
         }
         else
         {
-            // No stall
+            // No stall (the brackets recorded that far back were retired by
+            // waitForTailFrameToFinish, which waited C for them)
             retVal = true;
         }
 

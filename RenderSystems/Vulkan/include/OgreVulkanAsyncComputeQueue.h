@@ -71,12 +71,14 @@ namespace Ogre
         every VBO pool but the readback one): no ownership transfers, the timelines carry the
         memory dependency, each queue records its own barriers through the one BarrierSolver.
 
-        THE FRAME THAT WAITS OWNS THE BRACKET'S FRAME DATA: what a bracket allocates from the
-        graphics frame ring (dynamic buffers, auto-param buffers, descriptor sets) lives in the
-        slot of the frame that RECORDED it, but it is consumed until C passes the bracket and
-        read by the graphics frame that WAITED for it. So that slot is recycled only after C has
-        passed every bracket recorded in it AND the graphics frame that waited each one has
-        finished (_notifySlotReuse, from VulkanVaoManager::waitForTailFrameToFinish).
+        THE BRACKET'S FRAME DATA IS FREED BY C: what a bracket allocates from the graphics frame
+        ring (dynamic buffers, auto-param buffers, descriptor sets) lives in the slot of the
+        frame that RECORDED it and is read by the COMPUTE queue until C passes the bracket (the
+        graphics frame that waits reads the bracket's outputs, never its ring data). So the ring
+        slot is recycled only after C has passed every bracket recorded in it (_notifySlotReuse,
+        from VulkanVaoManager::waitForTailFrameToFinish), and VulkanVaoManager::isFrameFinished
+        -- which frees the descriptor pools and the download tickets -- answers true for a frame
+        only once C has passed every bracket recorded at or before it (_isFrameDataConsumed).
 
         LIFETIME: the bracket's command buffers come from a ring of the compute queue's own
         slots (as many as the graphics ring has frames); begin() reuses a slot only after C
@@ -135,6 +137,13 @@ namespace Ogre
         /// Called by VulkanDevice before the semaphores' device dies.
         void _destroy();
 
+        /// A bracket a throw left open (begin without its end: the engine catches the exception
+        /// and goes on to the next frame) would block the graphics queue for every later frame.
+        /// The render system calls this at the top of each frame (jahGpuFrameBegin,
+        /// _beginFrameOnce): an open bracket is closed and submitted with what it recorded,
+        /// and a warning names it and `where`. Returns true when one was open.
+        bool _closeLeakedBracket( const char *where );
+
         /// True when the compute family writes timestamps (timestampValidBits != 0): the
         /// render system's GPU samples inside a bracket are then timed on the compute queue.
         bool hasTimestamps() const { return mTimestamps; }
@@ -143,9 +152,12 @@ namespace Ogre
         /// ring's length (VulkanVaoManager::waitForTailFrameToFinish, its graphics fences
         /// already waited): holds it until the brackets recorded in it are consumed.
         void _notifySlotReuse( uint64 frameCount );
+        /// True once C has passed every bracket recorded at or before VaoManager frame
+        /// `frameCount` (VulkanVaoManager::isFrameFinished ANDs it with the graphics fence).
+        bool _isFrameDataConsumed( uint64 frameCount ) const;
         /// THE COUNTS of the frame-data rule: brackets whose recording slot was recycled, how
-        /// many of those recycles had to wait for C or for the waiting graphics frame, and
-        /// recycles that found the rule broken after the waits (must be 0).
+        /// many of those recycles had to wait for C, and recycles that found the rule broken
+        /// after the wait (must be 0; non-zero only after a device loss).
         uint64 getNumSlotRecycles() const { return mSlotRecycles; }
         uint64 getNumRecyclesHeld() const { return mRecyclesHeld; }
         uint64 getNumRecycleViolations() const { return mRecycleViolations; }
@@ -153,7 +165,6 @@ namespace Ogre
     protected:
         VkSemaphore createTimeline();
         void hostWaitCompute( uint64 value );
-        void markWaited( uint64 computeValue );
 
         VulkanDevice *mDevice;
         VulkanQueue *mQueue;  ///< null = the off arm for good
@@ -176,12 +187,42 @@ namespace Ogre
         {
             uint64 recordFrame;  ///< VaoManager frame count while it recorded
             uint64 value;        ///< its C value
-            uint64 waitedFrame;  ///< the graphics frame whose waitAt covered it (~0 = none yet)
         };
         FastArray<FrameBracket> mFrameBrackets;  ///< oldest first
         uint64 mSlotRecycles;
         uint64 mRecyclesHeld;
         uint64 mRecycleViolations;
+    };
+
+    /** Jahshaka (ENGINE-UPGRADE-ASYNC): THE BRACKET AS A SCOPE -- begin at construction, end at
+        end() or, if a throw leaves the scope first, at destruction (so the graphics queue is
+        never left blocked by a caller's exception). The value end() returns is what the caller
+        waits for; a bracket closed by the destructor is submitted and its value is only on
+        the Component (getLastComputeValue).
+
+            {
+                VulkanAsyncComputeBracket bracket( acq, acq->signalPoint( "tail" ), "gi" );
+                ...record the compute work...
+                pending = bracket.end();
+            }
+    */
+    class _OgreVulkanExport VulkanAsyncComputeBracket
+    {
+    public:
+        VulkanAsyncComputeBracket( VulkanAsyncComputeQueue *queue, uint64 afterGraphicsPoint,
+                                   const char *name = 0 ) :
+            mQueue( queue )
+        {
+            mQueue->begin( afterGraphicsPoint, name );
+        }
+        ~VulkanAsyncComputeBracket();
+        /// Closes and submits the bracket (once); C = the returned value when its work is done.
+        uint64 end();
+
+    private:
+        VulkanAsyncComputeBracket( const VulkanAsyncComputeBracket & );
+        VulkanAsyncComputeBracket &operator=( const VulkanAsyncComputeBracket & );
+        VulkanAsyncComputeQueue *mQueue;  ///< null once ended
     };
 }  // namespace Ogre
 

@@ -362,6 +362,26 @@ namespace Ogre
         size_t _jahNumAllocatedCmdBuffers() const;
         size_t _jahNumFences() const;
 
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC, the stage-2 read's W1): the pipeline stages a
+        /// barrier recorded on THIS queue may name -- the device's (mSupportedStages) ANDed with
+        /// what the queue's family supports. A compute-only family has no vertex, fragment,
+        /// attachment or early/late test stages (VUID-vkCmdPipelineBarrier-srcStageMask-06461 /
+        /// -dstStageMask-06462); the graphics family keeps the device's mask unchanged.
+        VkPipelineStageFlags _jahSupportedStages() const;
+        /// The access bits a barrier on this queue may keep on a side whose (already fitted)
+        /// stage mask is `stages` (VUID-vkCmdPipelineBarrier-srcAccessMask-02815 / -02816).
+        /// The graphics family: every bit (upstream's behaviour).
+        VkAccessFlags _jahSupportedAccess( VkPipelineStageFlags stages ) const;
+        /// Fits a barrier to this queue: both stage masks ANDed with _jahSupportedStages()
+        /// (a source side emptied by the fit becomes ALL_COMMANDS so it chains to the timeline
+        /// wait; an empty side otherwise TOP_OF_PIPE / BOTTOM_OF_PIPE) and, on a family without
+        /// graphics, every access mask to what its fitted side's stages can access. What a
+        /// dropped graphics stage ordered on the other queue is ordered by the timeline wait
+        /// that brought the work here (its signal makes every write available and visible).
+        void _jahFitBarrier( VkPipelineStageFlags &srcStage, VkPipelineStageFlags &dstStage,
+                             VkMemoryBarrier *memBarriers, uint32 numMemBarriers,
+                             VkImageMemoryBarrier *imageBarriers, uint32 numImageBarriers ) const;
+
         VulkanVaoManager *getVaoManager() { return mVaoManager; }
     };
 

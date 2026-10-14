@@ -2106,6 +2106,10 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_beginFrameOnce()
     {
+        // Jahshaka (ENGINE-UPGRADE-ASYNC, the stage-2 read's W3): a bracket a throw left open
+        // would block the graphics queue for this frame and every later one.
+        if( mDevice->mAsyncCompute )
+            mDevice->mAsyncCompute->_closeLeakedBracket( "the frame's begin" );
         RenderSystem::_beginFrameOnce();
         // Jahshaka (ENGINE-UPGRADE-ASYNC stage 0): THE CAPTURE SPLIT. Under the pass-label
         // switch the frame's head -- everything recorded since the previous frame's swap: the
@@ -2326,8 +2330,9 @@ namespace Ogre
 
             const VkPipelineStageFlags srcStage =
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
-            vkCmdPipelineBarrier( cmdBuffer, srcStage & mDevice->mSupportedStages,
-                                  VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT & mDevice->mSupportedStages, 0,
+            const VkPipelineStageFlags queueStages = mDevice->_jahRecordQueue()._jahSupportedStages();
+            vkCmdPipelineBarrier( cmdBuffer, srcStage & queueStages,
+                                  VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT & queueStages, 0,
                                   0u, 0, 1u, &bufferBarrier, 0u, 0 );
         }
 
@@ -3064,6 +3069,10 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::jahGpuFrameBegin()
     {
+        // Jahshaka (ENGINE-UPGRADE-ASYNC, W3): the frame top, before anything records -- a
+        // bracket a throw left open is closed here (see _closeLeakedBracket).
+        if( mDevice->mAsyncCompute )
+            mDevice->mAsyncCompute->_closeLeakedBracket( "the frame's top (jahGpuFrameBegin)" );
         if( !mJahGpuProfiling )
             return;
         // Any sample left open by a frame that threw would corrupt the next
@@ -3763,6 +3772,21 @@ namespace Ogre
                     if( itor->oldStageMask != 0u )
                         srcStage |= ogreToVkStageFlags( itor->oldStageMask );
                 }
+                else if( itor->oldLayout != ResourceLayout::Undefined &&
+                         texture->isAsyncComputeShared() &&
+                         mDevice->mAsyncCompute &&
+                         mDevice->mAsyncCompute->hasComputeQueue() )
+                {
+                    // Jahshaka (ENGINE-UPGRADE-ASYNC): A TEXTURE THE OTHER QUEUE TOUCHED. The
+                    // solver forgets every use at the frame's start (RenderSystem::_beginFrame
+                    // resets it), so the first transition of a frame has no source stage -- TOP,
+                    // no execution dependency. On one queue the previous frame is behind the
+                    // ring's fences; across queues the last use (the async bracket's layout
+                    // transition, its writes) is ordered only by the timeline wait, and the
+                    // barrier must CHAIN to that wait: ALL_COMMANDS (measured:
+                    // SYNC-HAZARD-WRITE-AFTER-WRITE on this transition with TOP).
+                    srcStage |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                }
 
                 // Jahshaka: AN ATTACHMENT LAYOUT WAS WRITTEN BY ITS RENDER PASS, WHATEVER THE
                 // PASS'S OWN ACCESS SAID. A render pass writes its attachments at its end - the
@@ -3849,13 +3873,15 @@ namespace Ogre
             numMemBarriers = 1u;
         }
 
-        if( srcStage == 0 )
-            srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        if( dstStage == 0 )
-            dstStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        // Jahshaka (ENGINE-UPGRADE-ASYNC, the stage-2 read's W1): the masks fitted to the queue
+        // that records -- inside an async bracket that is a compute-only family, which has no
+        // attachment or fragment stages (a RenderTarget's COLOR_ATTACHMENT_OUTPUT, a pixel
+        // reader's FRAGMENT_SHADER). The graphics queue: the device mask, as upstream.
+        VulkanQueue &recordQueue = mDevice->_jahRecordQueue();
+        recordQueue._jahFitBarrier( srcStage, dstStage, &memBarrier, numMemBarriers,
+                                    mImageBarriers.begin(), static_cast<uint32>( mImageBarriers.size() ) );
 
-        vkCmdPipelineBarrier( mDevice->_jahRecordQueue().getCurrentCmdBuffer(),
-                              srcStage & mDevice->mSupportedStages, dstStage & mDevice->mSupportedStages,
+        vkCmdPipelineBarrier( recordQueue.getCurrentCmdBuffer(), srcStage, dstStage,
                               0, numMemBarriers, &memBarrier, 0u, 0,
                               static_cast<uint32>( mImageBarriers.size() ), mImageBarriers.begin() );
         mImageBarriers.clear();
