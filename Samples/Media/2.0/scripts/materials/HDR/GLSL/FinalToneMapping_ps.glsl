@@ -22,8 +22,10 @@ in block
 // ACES-based curve Unreal Engine 4.15 shipped (Engine/Shaders/Private/
 // TonemapCommon.ush, FilmToneMap; its RRT glow and red modifier and the AP0/AP1
 // matrices from ACES.ush, after the Academy's ACES 1.0 Reference Rendering
-// Transform). Five parameters with Unreal's defaults: Slope 0.88, Toe 0.55,
-// Shoulder 0.26, Black clip 0, White clip 0.04. The curve is built so an input
+// Transform). Five parameters, Unreal's defaults but the toe: Slope 0.88, Toe 0.3
+// (Unreal's 0.55 took a shaded wall of 0.026 to code 23 on a grey and 8 on the
+// Bistro's dark paint; BISTRO-FIXES-3 measured the sweep - the sky moves 3 codes at
+// 0.3, the sunlit pavement 1), Shoulder 0.26, Black clip 0, White clip 0.04. The curve is built so an input
 // of 0.18 leaves at 0.18, so an 18 percent card at the exposure that puts it
 // at 0.18 displays as code 118 after the sRGB encode below. It replaced Hable's
 // curve with Ogre's sample constants and its contrast and lift tail, which
@@ -213,7 +215,7 @@ vulkan( layout( ogre_P0 ) uniform Params { )
 	// buffer of a frame nobody has pushed renders the default picture.
 	//   jahImage0 = contrast - 1, saturation - 1, shadows (stops), highlights (stops)
 	//   jahImage1.x = vignette (0 none, 1 the full cos^4 falloff)
-	//   jahFilm0 = slope - 0.88, toe - 0.55, shoulder - 0.26, black clip
+	//   jahFilm0 = slope - 0.88, toe - 0.3, shoulder - 0.26, black clip
 	//   jahFilm1.x = white clip - 0.04
 	//   jahWhite0..2 = the white balance's 3x3 (rows, linear sRGB) minus identity
 	uniform vec4 jahImage0;
@@ -269,7 +271,7 @@ void main()
 		w *= exp2( jahImage0.z * shadowWeight + jahImage0.w * highlightWeight );
 	}
 	// 4. THE FILM CURVE, and back to linear sRGB.
-	w = jahFilmToneMap( w, max( 0.88 + jahFilm0.x, 0.01 ), 0.55 + jahFilm0.y, 0.26 + jahFilm0.z,
+	w = jahFilmToneMap( w, max( 0.88 + jahFilm0.x, 0.01 ), 0.3 + jahFilm0.y, 0.26 + jahFilm0.z,
 						jahFilm0.w, 0.04 + jahFilm1.x );
 	vSample.xyz = max( w * jahAp1ToSrgb, vec3( 0.0 ) );
 
