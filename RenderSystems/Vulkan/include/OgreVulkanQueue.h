@@ -104,6 +104,30 @@ namespace Ogre
         VkSemaphoreArray                mGpuSignalSemaphForCurrCmdBuff;
         // clang-format on
 
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): the TIMELINE value of each entry of
+        /// mGpuWaitSemaphForCurrCmdBuff (0 for a binary semaphore -- a swapchain's acquire),
+        /// kept index-aligned with it and with mGpuWaitFlags.
+        FastArray<uint64> mGpuWaitValues;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): semaphores the NEXT submission signals, of ANY
+        /// submission type (the present semaphores above are only signalled at NewFrameIdx and
+        /// later). Not owned. mJahSignalValues is index-aligned (0 = binary).
+        VkSemaphoreArray  mJahSignalSemaph;
+        FastArray<uint64> mJahSignalValues;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): waits held back until the next submission that
+        /// advances the frame (NewFrameIdx / EndFrameAndSwap), so the frame's fence also
+        /// proves what they wait for.
+        VkSemaphoreArray                mJahFrameEndWaitSemaph;
+        FastArray<VkPipelineStageFlags> mJahFrameEndWaitFlags;
+        FastArray<uint64>               mJahFrameEndWaitValues;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): THE OWN-SLOT MODE of the async compute queue. Its
+        /// command buffers come from ITS OWN ring of mPerFrameData slots, chosen by the
+        /// owner (VulkanAsyncComputeQueue::begin) instead of the VaoManager's graphics frame
+        /// index; it records only between _jahBeginSlot and the next commit (no command
+        /// buffer is open in between), never waits the graphics ring and never advances a
+        /// frame. Off (every other queue): upstream's behaviour exactly.
+        bool   mJahOwnSlots;
+        size_t mJahSlot;
+
         typedef map<VkFence, RefCountedFence>::type RefCountedFenceMap;
 
         VkFenceArray mAvailableFences;
@@ -295,6 +319,34 @@ namespace Ogre
 
         void commitAndNextCommandBuffer(
             SubmissionType::SubmissionType submissionType = SubmissionType::FlushOnly );
+
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): a GENERAL wait for the next submission (upstream's
+        /// only wait was addWindowToWaitFor: a binary acquire semaphore at COLOR_ATTACHMENT_OUTPUT).
+        /// timelineValue != 0 waits a TIMELINE semaphore for that value.
+        void addWaitSemaphore( VkSemaphore semaphore, VkPipelineStageFlags dstStage,
+                               uint64 timelineValue = 0u );
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): the next submission (of any type) signals this
+        /// semaphore (timelineValue != 0: a timeline set to that value). A pending signal
+        /// forces the submission even with no command recorded.
+        void addSignalSemaphore( VkSemaphore semaphore, uint64 timelineValue = 0u );
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): a wait attached to the next frame-advancing
+        /// submission only (NewFrameIdx / EndFrameAndSwap).
+        void addFrameEndWaitSemaphore( VkSemaphore semaphore, VkPipelineStageFlags dstStage,
+                                       uint64 timelineValue );
+
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): the own-slot mode (see mJahOwnSlots). Set before init().
+        void _jahSetOwnSlots( bool ownSlots ) { mJahOwnSlots = ownSlots; }
+        bool _jahHasOwnSlots() const { return mJahOwnSlots; }
+        /// Own-slot mode: open a command buffer from `slot`. The slot's command index is
+        /// rewound first, so its pool is RESET -- the caller guarantees the GPU is done with
+        /// everything submitted from that slot.
+        void _jahBeginSlot( size_t slot );
+        bool _jahIsRecording() const { return mCurrentCmdBuffer != 0; }
+        size_t _jahNumSlots() const { return mPerFrameData.size(); }
+        /// Counts for the rows: every command buffer ever allocated (all slots), and every
+        /// fence this queue owns (available + protecting + externally referenced).
+        size_t _jahNumAllocatedCmdBuffers() const;
+        size_t _jahNumFences() const;
 
         VulkanVaoManager *getVaoManager() { return mVaoManager; }
     };

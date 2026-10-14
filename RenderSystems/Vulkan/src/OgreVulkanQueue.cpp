@@ -55,6 +55,8 @@ namespace Ogre
         mQueueIdx( 0u ),
         mQueue( 0 ),
         mOwnerDevice( 0 ),
+        mJahOwnSlots( false ),
+        mJahSlot( 0u ),
         mCurrentCmdBuffer( 0 ),
         mVaoManager( 0 ),
         mRenderSystem( 0 ),
@@ -295,12 +297,17 @@ namespace Ogre
             checkVkResult( mOwnerDevice, result, "vkCreateCommandPool" );
         }
 
-        newCommandBuffer();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): an own-slot queue records only inside its owner's
+        // bracket, so nothing is open between brackets.
+        if( !mJahOwnSlots )
+            newCommandBuffer();
     }
     //-------------------------------------------------------------------------
     void VulkanQueue::newCommandBuffer()
     {
-        const size_t currFrame = mVaoManager->waitForTailFrameToFinish();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): an own-slot queue takes its owner's slot and never
+        // waits the graphics ring (its owner proved the slot free on the queue's own timeline).
+        const size_t currFrame = mJahOwnSlots ? mJahSlot : mVaoManager->waitForTailFrameToFinish();
         mCurrentCmdBuffer = getCmdBuffer( currFrame );
 
         VkCommandBufferBeginInfo beginInfo;
@@ -1202,8 +1209,54 @@ namespace Ogre
     void VulkanQueue::addWindowToWaitFor( VkSemaphore imageAcquisitionSemaph )
     {
         OGRE_ASSERT_MEDIUM( mFamily == Graphics );
-        mGpuWaitFlags.push_back( VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT );
-        mGpuWaitSemaphForCurrCmdBuff.push_back( imageAcquisitionSemaph );
+        addWaitSemaphore( imageAcquisitionSemaph, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0u );
+    }
+    //-------------------------------------------------------------------------
+    void VulkanQueue::addWaitSemaphore( VkSemaphore semaphore, VkPipelineStageFlags dstStage,
+                                        uint64 timelineValue )
+    {
+        mGpuWaitFlags.push_back( dstStage );
+        mGpuWaitSemaphForCurrCmdBuff.push_back( semaphore );
+        mGpuWaitValues.push_back( timelineValue );
+    }
+    //-------------------------------------------------------------------------
+    void VulkanQueue::addSignalSemaphore( VkSemaphore semaphore, uint64 timelineValue )
+    {
+        mJahSignalSemaph.push_back( semaphore );
+        mJahSignalValues.push_back( timelineValue );
+    }
+    //-------------------------------------------------------------------------
+    void VulkanQueue::addFrameEndWaitSemaphore( VkSemaphore semaphore, VkPipelineStageFlags dstStage,
+                                                uint64 timelineValue )
+    {
+        mJahFrameEndWaitSemaph.push_back( semaphore );
+        mJahFrameEndWaitFlags.push_back( dstStage );
+        mJahFrameEndWaitValues.push_back( timelineValue );
+    }
+    //-------------------------------------------------------------------------
+    void VulkanQueue::_jahBeginSlot( size_t slot )
+    {
+        OGRE_ASSERT_LOW( mJahOwnSlots && !mCurrentCmdBuffer && slot < mPerFrameData.size() );
+        mJahSlot = slot;
+        // Rewinding the index makes getCmdBuffer reset the slot's pool before reusing it.
+        mPerFrameData[slot].mCurrentCmdIdx = 0u;
+        newCommandBuffer();
+    }
+    //-------------------------------------------------------------------------
+    size_t VulkanQueue::_jahNumAllocatedCmdBuffers() const
+    {
+        size_t n = 0u;
+        for( const PerFrameData &f : mPerFrameData )
+            n += f.mCommands.size();
+        return n;
+    }
+    //-------------------------------------------------------------------------
+    size_t VulkanQueue::_jahNumFences() const
+    {
+        size_t n = mAvailableFences.size() + mRefCountedFences.size() + ( mCurrentFence ? 1u : 0u );
+        for( const PerFrameData &f : mPerFrameData )
+            n += f.mProtectingFences.size();
+        return n;
     }
     //-------------------------------------------------------------------------
     bool VulkanQueue::isFenceFlushed( VkFence fence ) const
@@ -1258,11 +1311,29 @@ namespace Ogre
         if( submissionType >= SubmissionType::NewFrameIdx )
             mRenderSystem->resetAllBindings();
 
-        if( mPendingCmds.empty() )
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): a pending signal is a promise another queue may
+        // already be waiting on, so it is submitted even with no command buffer.
+        if( mPendingCmds.empty() && mJahSignalSemaph.empty() )
             return;
+
+        OGRE_ASSERT_LOW( !mJahOwnSlots || submissionType == SubmissionType::FlushOnly );
 
         VkSubmitInfo submitInfo;
         makeVkStruct( submitInfo, VK_STRUCTURE_TYPE_SUBMIT_INFO );
+
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): the frame-end waits join this submission when it
+        // advances the frame.
+        if( submissionType >= SubmissionType::NewFrameIdx )
+        {
+            for( size_t i = 0u; i < mJahFrameEndWaitSemaph.size(); ++i )
+            {
+                addWaitSemaphore( mJahFrameEndWaitSemaph[i], mJahFrameEndWaitFlags[i],
+                                  mJahFrameEndWaitValues[i] );
+            }
+            mJahFrameEndWaitSemaph.clear();
+            mJahFrameEndWaitFlags.clear();
+            mJahFrameEndWaitValues.clear();
+        }
 
         if( !mGpuWaitSemaphForCurrCmdBuff.empty() )
         {
@@ -1299,6 +1370,48 @@ namespace Ogre
             }
         }
 
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): the general signals follow the present semaphores
+        // in one array, and every value is carried by a VkTimelineSemaphoreSubmitInfo
+        // (binary entries 0, ignored by the driver) whenever any of them is a timeline.
+        VkSemaphoreArray signalSemaphores;
+        FastArray<uint64> signalValues;
+        VkTimelineSemaphoreSubmitInfo timelineInfo;
+        bool hasTimeline = false;
+        for( size_t i = 0u; i < mGpuWaitValues.size(); ++i )
+            hasTimeline |= mGpuWaitValues[i] != 0u;
+        for( size_t i = 0u; i < mJahSignalValues.size(); ++i )
+            hasTimeline |= mJahSignalValues[i] != 0u;
+        if( !mJahSignalSemaph.empty() )
+        {
+            signalSemaphores.reserve( submitInfo.signalSemaphoreCount + mJahSignalSemaph.size() );
+            signalValues.reserve( submitInfo.signalSemaphoreCount + mJahSignalSemaph.size() );
+            for( uint32 i = 0u; i < submitInfo.signalSemaphoreCount; ++i )
+            {
+                signalSemaphores.push_back( submitInfo.pSignalSemaphores[i] );
+                signalValues.push_back( 0u );
+            }
+            for( size_t i = 0u; i < mJahSignalSemaph.size(); ++i )
+            {
+                signalSemaphores.push_back( mJahSignalSemaph[i] );
+                signalValues.push_back( mJahSignalValues[i] );
+            }
+            submitInfo.signalSemaphoreCount = static_cast<uint32>( signalSemaphores.size() );
+            submitInfo.pSignalSemaphores = signalSemaphores.begin();
+        }
+        if( hasTimeline )
+        {
+            if( signalValues.empty() )
+                signalValues.resize( submitInfo.signalSemaphoreCount, 0u );
+            makeVkStruct( timelineInfo, VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO );
+            timelineInfo.waitSemaphoreValueCount = submitInfo.waitSemaphoreCount;
+            timelineInfo.pWaitSemaphoreValues =
+                submitInfo.waitSemaphoreCount ? mGpuWaitValues.begin() : 0;
+            timelineInfo.signalSemaphoreValueCount = submitInfo.signalSemaphoreCount;
+            timelineInfo.pSignalSemaphoreValues =
+                submitInfo.signalSemaphoreCount ? signalValues.begin() : 0;
+            submitInfo.pNext = &timelineInfo;
+        }
+
         if( submissionType >= SubmissionType::NewFrameIdx )
         {
             // Ensure mCurrentFence is not nullptr.
@@ -1308,16 +1421,26 @@ namespace Ogre
 
         // clang-format off
         submitInfo.commandBufferCount   = static_cast<uint32>( mPendingCmds.size() );
-        submitInfo.pCommandBuffers      = &mPendingCmds[0];
+        submitInfo.pCommandBuffers      = mPendingCmds.begin();
         // clang-format on
 
-        const uint8 dynBufferFrame = mVaoManager->waitForTailFrameToFinish();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): an own-slot queue's protection is its own timeline,
+        // never the graphics ring's fences.
+        const uint8 dynBufferFrame = mJahOwnSlots ? static_cast<uint8>( mJahSlot )
+                                                  : mVaoManager->waitForTailFrameToFinish();
         VkFence fence = mCurrentFence;  // Note: mCurrentFence may be nullptr
 
         VkResult result = vkQueueSubmit( mQueue, 1u, &submitInfo, fence );
         // we need some cleanup before checking result
 
         mGpuWaitSemaphForCurrCmdBuff.clear();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): the flags are cleared WITH their semaphores.
+        // Upstream never cleared mGpuWaitFlags (it grew by one entry per frame; harmless only
+        // because every entry was COLOR_ATTACHMENT_OUTPUT and the stale ones were read first).
+        mGpuWaitFlags.clear();
+        mGpuWaitValues.clear();
+        mJahSignalSemaph.clear();
+        mJahSignalValues.clear();
 
         if( mCurrentFence && mCurrentFenceRefCount > 0 )
         {
@@ -1361,7 +1484,10 @@ namespace Ogre
             mVaoManager->_notifyNewCommandBuffer();
         }
 
-        newCommandBuffer();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC): an own-slot queue opens its next command buffer in
+        // its owner's next bracket.
+        if( !mJahOwnSlots )
+            newCommandBuffer();
 
         if( submissionType >= SubmissionType::EndFrameAndSwap )
         {
