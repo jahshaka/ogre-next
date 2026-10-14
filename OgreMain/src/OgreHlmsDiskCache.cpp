@@ -491,6 +491,7 @@ namespace Ogre
         // missing piece (by the filename hash the merged properties carry, one per stage) are
         // removed and the rest load; the piece's entries are rebuilt if a material sets it again.
         std::vector<int32> missingPieces;
+        std::vector<Hlms::DiskCacheDeferredPiece> missingRecords;
         hlms->mDiskCacheDeferred.clear();
         hlms->mDiskCacheDeferredPieces.clear();
         for( const DatablockCustomPiecesCache &datablockPiece : mCache.datablockCustomPieceFiles )
@@ -513,14 +514,16 @@ namespace Ogre
             case Hlms::CCPFS_CriticalError:
                 missingPieces.push_back(
                     static_cast<int32>( IdString( datablockPiece.filename ).getU32Value() ) );
-                if( !mTemplatesOutOfDate )
                 {
+                    // The RECORD is kept with the entries or not at all: whether they are kept aside is decided
+                    // after the loop (a later piece may find the templates out of date), and a record kept with
+                    // no entry would be a "not registered yet" line on every load for ever.
                     Hlms::DiskCacheDeferredPiece kept;
                     kept.filename = datablockPiece.filename;
                     kept.resourceGroup = datablockPiece.resourceGroup;
                     kept.sourceCodeHash[0] = datablockPiece.sourceCodeHash[0];
                     kept.sourceCodeHash[1] = datablockPiece.sourceCodeHash[1];
-                    hlms->mDiskCacheDeferredPieces.push_back( kept );
+                    missingRecords.push_back( kept );
                 }
                 break;
             }
@@ -548,8 +551,12 @@ namespace Ogre
                     }
                     return true;
                 } );
+            String names;
+            for( const Hlms::DiskCacheDeferredPiece &kept : missingRecords )
+                names += ( names.empty() ? "" : ", " ) + kept.resourceGroup + "/" + kept.filename;
             if( keepAside )
             {
+                hlms->mDiskCacheDeferredPieces = missingRecords;
                 for( SourceCodeVec::iterator it = newEnd; it != mCache.sourceCode.end(); ++it )
                 {
                     Hlms::DiskCacheDeferredEntry kept;
@@ -568,7 +575,7 @@ namespace Ogre
                 StringConverter::toString( before - mCache.sourceCode.size() ) +
                 " entries that use a missing custom piece file; " +
                 StringConverter::toString( mCache.sourceCode.size() ) + " load." +
-                ( keepAside ? " (kept for the next save)" : "" ) );
+                ( keepAside ? " (kept for the next save)" : "" ) + " Pieces: " + names );
         }
 
         {
