@@ -28,6 +28,8 @@ THE SOFTWARE.
 
 #include "Vao/OgreVulkanVaoManager.h"
 
+#include "OgreVulkanAsyncComputeQueue.h"
+
 #include "OgreVulkanDescriptorPool.h"
 #include "OgreVulkanDevice.h"
 #include "OgreVulkanRenderSystem.h"
@@ -1159,6 +1161,20 @@ namespace Ogre
                     if( mDevice->hasRayQuery() )
                         bufferCi.usage |=
                             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+                }
+                // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): THE POOL FLAG. With the async compute
+                // queue in its own family every pool a shader can reach is shared CONCURRENTLY
+                // with it (UAV, const, tex and vertex/index buffers all come out of these pools,
+                // so a per-buffer choice does not exist; NVIDIA ignores the sharing mode). The
+                // readback pool (CPU_READ_WRITE) is copies on the graphics queue only: EXCLUSIVE.
+                uint32 numShareFamilies = 0u;
+                const uint32 *shareFamilies = 0;
+                if( vboFlag != CPU_READ_WRITE &&
+                    mDevice->_jahShareFamilies( numShareFamilies, shareFamilies ) )
+                {
+                    bufferCi.sharingMode = VK_SHARING_MODE_CONCURRENT;
+                    bufferCi.queueFamilyIndexCount = numShareFamilies;
+                    bufferCi.pQueueFamilyIndices = shareFamilies;
                 }
                 VkResult result = vkCreateBuffer( mDevice->mDevice, &bufferCi, 0, &newVbo.vkBuffer );
                 checkVkResult( mDevice, result, "vkCreateBuffer" );
@@ -2398,6 +2414,10 @@ namespace Ogre
     uint8 VulkanVaoManager::waitForTailFrameToFinish()
     {
         mDevice->mGraphicsQueue._waitOnFrame( mDynamicBufferCurrentFrame );
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): the slot also waits for the async compute
+        // brackets recorded in it and for the graphics frames that waited for them.
+        if( mDevice->mAsyncCompute )
+            mDevice->mAsyncCompute->_notifySlotReuse( mFrameCount );
         return mDynamicBufferCurrentFrame;
     }
     //-----------------------------------------------------------------------------------

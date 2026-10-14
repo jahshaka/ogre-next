@@ -32,6 +32,7 @@ THE SOFTWARE.
 #include "OgreVulkanDevice.h"
 #include "OgreVulkanRenderSystem.h"
 #include "OgreVulkanUtils.h"
+#include "Vao/OgreVulkanVaoManager.h"
 
 #include "OgreException.h"
 #include "OgreLogManager.h"
@@ -55,14 +56,25 @@ namespace Ogre
         mOpen( false ),
         mOpenAsync( false ),
         mSlot( 0u ),
-        mNumAsyncBrackets( 0u )
+        mNumAsyncBrackets( 0u ),
+        mTimestamps( false ),
+        mSlotRecycles( 0u ),
+        mRecyclesHeld( 0u ),
+        mRecycleViolations( 0u )
     {
         if( mQueue )
         {
-            OGRE_ASSERT_LOW( mQueue->_jahHasOwnSlots() );
+            if( !mQueue->_jahHasOwnSlots() )
+            {
+                OGRE_EXCEPT( Exception::ERR_INVALID_STATE, "the compute queue is not in the own-slot mode",
+                             "VulkanAsyncComputeQueue" );
+            }
             mGraphicsTimeline = createTimeline();
             mComputeTimeline = createTimeline();
             mSlotValues.resize( mQueue->_jahNumSlots(), 0u );
+            const uint32 family = mQueue->getFamilyIdx();
+            mTimestamps = family < mDevice->mQueueProps.size() &&
+                          mDevice->mQueueProps[family].timestampValidBits != 0u;
         }
         LogManager::getSingleton().logMessage(
             mQueue ? "Vulkan: async compute ON: queue family " +
@@ -131,7 +143,12 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanAsyncComputeQueue::setEnabled( bool bEnabled )
     {
-        OGRE_ASSERT_LOW( !mOpen && "VulkanAsyncComputeQueue::setEnabled inside a bracket" );
+        // Runtime-active (the install is OGRE_DEBUG_MODE 0, where an assert is nothing).
+        if( mOpen )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALID_STATE, "setEnabled inside a bracket",
+                         "VulkanAsyncComputeQueue::setEnabled" );
+        }
         if( bEnabled == mEnabled )
             return;
         if( mQueue && !bEnabled && mComputeValue )
@@ -164,27 +181,66 @@ namespace Ogre
         return mGraphicsValue;
     }
     //-------------------------------------------------------------------------
-    void VulkanAsyncComputeQueue::begin( uint64 afterGraphicsPoint )
+    void VulkanAsyncComputeQueue::begin( uint64 afterGraphicsPoint, const char *name )
     {
-        OGRE_ASSERT_LOW( !mOpen && "VulkanAsyncComputeQueue::begin: a bracket is already open" );
-        OGRE_ASSERT_LOW( afterGraphicsPoint <= mGraphicsValue &&
-                         "VulkanAsyncComputeQueue::begin: a point that was never signalled" );
-        mOpen = true;
+        if( mOpen )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALID_STATE, "a bracket is already open",
+                         "VulkanAsyncComputeQueue::begin" );
+        }
+        if( afterGraphicsPoint > mGraphicsValue )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS, "a graphics point that was never signalled",
+                         "VulkanAsyncComputeQueue::begin" );
+        }
         mOpenAsync = isAsync();
-        if( !mOpenAsync )
-            return;
-        mAfter = std::max( afterGraphicsPoint, mMinAfter );
-        mSlot = static_cast<size_t>( mNumAsyncBrackets % mSlotValues.size() );
-        // The slot's command buffers are reused only after the bracket that last used them
-        // has finished on the GPU.
-        hostWaitCompute( mSlotValues[mSlot] );
-        mQueue->_jahBeginSlot( mSlot );
+        VulkanRenderSystem *rs = mDevice->mRenderSystem;
+        if( mOpenAsync )
+        {
+            mAfter = std::max( afterGraphicsPoint, mMinAfter );
+            mSlot = static_cast<size_t>( mNumAsyncBrackets % mSlotValues.size() );
+            // The slot's command buffers are reused only after the bracket that last used them
+            // has finished on the GPU.
+            hostWaitCompute( mSlotValues[mSlot] );
+            // Whatever the graphics queue has open (a render pass, a compute encoder with its
+            // bindings) ends here; the compute bindings are per command buffer.
+            mDevice->mGraphicsQueue.endAllEncoders();
+            rs->_notifyActiveComputeEnded();
+            mQueue->_jahBeginSlot( mSlot );
+            mDevice->mJahRecordQueue = mQueue;
+            mDevice->mGraphicsQueue._jahSetBlocked( true );
+            FrameBracket fb;
+            fb.recordFrame = mDevice->mVaoManager->getFrameCount();
+            fb.value = mComputeValue + 1u;
+            fb.waitedFrame = ~uint64( 0u );
+            mFrameBrackets.push_back( fb );
+        }
+        mOpen = true;
+        mDevice->mJahInBracket = true;
+        mOpenName = name ? name : "";
+        if( name )
+            rs->debugAnnotationPush( name );
     }
     //-------------------------------------------------------------------------
     uint64 VulkanAsyncComputeQueue::end()
     {
-        OGRE_ASSERT_LOW( mOpen && "VulkanAsyncComputeQueue::end without begin" );
+        if( !mOpen )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALID_STATE, "end without begin",
+                         "VulkanAsyncComputeQueue::end" );
+        }
+        if( !mOpenName.empty() )
+            mDevice->mRenderSystem->debugAnnotationPop();
         mOpen = false;
+        mDevice->mJahInBracket = false;
+        if( mOpenAsync )
+        {
+            // The compute queue's encoders end first (its compute bindings die with its command
+            // buffer), then the graphics queue takes the recording back.
+            mQueue->endAllEncoders();
+            mDevice->mJahRecordQueue = &mDevice->mGraphicsQueue;
+            mDevice->mGraphicsQueue._jahSetBlocked( false );
+        }
         ++mComputeValue;
         if( !mOpenAsync )
         {
@@ -200,7 +256,6 @@ namespace Ogre
         if( mAfter )
             mQueue->addWaitSemaphore( mGraphicsTimeline, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, mAfter );
         mQueue->addSignalSemaphore( mComputeTimeline, mComputeValue );
-        mQueue->endAllEncoders();
         mQueue->commitAndNextCommandBuffer( SubmissionType::FlushOnly );
         mSlotValues[mSlot] = mComputeValue;
         ++mNumAsyncBrackets;
@@ -209,22 +264,93 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanAsyncComputeQueue::waitAt( uint64 computeValue, VkPipelineStageFlags dstStage )
     {
-        OGRE_ASSERT_LOW( computeValue <= mComputeValue &&
-                         "VulkanAsyncComputeQueue::waitAt: a value no bracket will signal" );
+        // A value no bracket has signalled would make the next graphics submission wait for
+        // ever (the ring's fence wait never returns): refused, at runtime.
+        if( computeValue > mComputeValue )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS, "a compute value no bracket has signalled",
+                         "VulkanAsyncComputeQueue::waitAt" );
+        }
         // The in-order arm waits for nothing: its brackets precede on the one queue, and the
         // async brackets before a setEnabled( false ) are waited by that switch.
         if( !isAsync() || !computeValue )
             return;
+        markWaited( computeValue );
         // Everything recorded so far goes first, unblocked; the wait holds what follows.
         mDevice->commitAndNextCommandBuffer( SubmissionType::FlushOnly );
         mDevice->mGraphicsQueue.addWaitSemaphore( mComputeTimeline, dstStage, computeValue );
     }
     //-------------------------------------------------------------------------
+    void VulkanAsyncComputeQueue::markWaited( uint64 computeValue )
+    {
+        const uint64 frame = mDevice->mVaoManager->getFrameCount();
+        for( FrameBracket &fb : mFrameBrackets )
+        {
+            if( fb.value <= computeValue && fb.waitedFrame == ~uint64( 0u ) )
+                fb.waitedFrame = frame;
+        }
+    }
+    //-------------------------------------------------------------------------
+    void VulkanAsyncComputeQueue::_notifySlotReuse( uint64 frameCount )
+    {
+        if( mFrameBrackets.empty() )
+            return;
+        VulkanVaoManager *vaoManager = mDevice->mVaoManager;
+        const uint64 ring = vaoManager->getDynamicBufferMultiplier();
+        size_t retired = 0u;
+        while( retired < mFrameBrackets.size() &&
+               mFrameBrackets[retired].recordFrame + ring <= frameCount )
+        {
+            const FrameBracket &fb = mFrameBrackets[retired];
+            bool held = false;
+            // 1. the bracket itself (its descriptor sets, its dynamic and auto-param data)
+            if( getCompletedComputeValue() < fb.value )
+            {
+                held = true;
+                hostWaitCompute( fb.value );
+            }
+            // 2. the graphics frame that waited for it (reads of its frame data there); a frame
+            // that is still being recorded cannot be waited -- then only C protects the slot
+            if( fb.waitedFrame != ~uint64( 0u ) && fb.waitedFrame > fb.recordFrame &&
+                fb.waitedFrame < frameCount )
+            {
+                const uint8 slot = static_cast<uint8>( fb.waitedFrame % ring );
+                if( !mDevice->mGraphicsQueue._isFrameFinished( slot ) )
+                {
+                    held = true;
+                    mDevice->mGraphicsQueue._waitOnFrame( slot );
+                }
+            }
+            // the rule, re-read after the waits
+            if( getCompletedComputeValue() < fb.value ||
+                ( fb.waitedFrame != ~uint64( 0u ) && fb.waitedFrame > fb.recordFrame &&
+                  fb.waitedFrame < frameCount &&
+                  !mDevice->mGraphicsQueue._isFrameFinished(
+                      static_cast<uint8>( fb.waitedFrame % ring ) ) ) )
+            {
+                ++mRecycleViolations;
+            }
+            ++mSlotRecycles;
+            if( held )
+                ++mRecyclesHeld;
+            ++retired;
+        }
+        if( retired )
+            mFrameBrackets.erase( mFrameBrackets.begin(), mFrameBrackets.begin() + retired );
+    }
+    //-------------------------------------------------------------------------
     void VulkanAsyncComputeQueue::waitAtFrameEnd( uint64 computeValue )
     {
-        OGRE_ASSERT_LOW( computeValue <= mComputeValue );
+        // A value no bracket has signalled would make the next graphics submission wait for
+        // ever (the ring's fence wait never returns): refused, at runtime.
+        if( computeValue > mComputeValue )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS, "a compute value no bracket has signalled",
+                         "VulkanAsyncComputeQueue::waitAtFrameEnd" );
+        }
         if( !isAsync() || !computeValue )
             return;
+        markWaited( computeValue );
         mDevice->mGraphicsQueue.addFrameEndWaitSemaphore(
             mComputeTimeline, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, computeValue );
     }

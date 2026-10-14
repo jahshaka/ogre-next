@@ -600,6 +600,9 @@ namespace Ogre
         mPipelineCache( 0 ),
         mPresentQueue( 0 ),
         mAsyncCompute( 0 ),
+        mJahRecordQueue( &mGraphicsQueue ),
+        mJahInBracket( false ),
+        mJahShareFamilyCount( 0u ),
         mVaoManager( 0 ),
         mRenderSystem( renderSystem ),
         mSupportedStages( 0xFFFFFFFF ),
@@ -1527,6 +1530,17 @@ namespace Ogre
 
         VkResult result = vkCreateDevice( mPhysicalDevice, &createInfo, NULL, &mDevice );
         checkVkResult( this, result, "vkCreateDevice" );
+
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): the families a CONCURRENT resource is shared
+        // over, known now, before the VaoManager's first pool or any image exists.
+        mJahShareFamilyCount = 0u;
+        if( !mComputeQueues.empty() && mDeviceExtraFeatures.timelineSemaphore &&
+            mComputeQueues[0].mFamilyIdx != mGraphicsQueue.mFamilyIdx )
+        {
+            mJahShareFamilies[0] = mGraphicsQueue.mFamilyIdx;
+            mJahShareFamilies[1] = mComputeQueues[0].mFamilyIdx;
+            mJahShareFamilyCount = 2u;
+        }
     }
     //-------------------------------------------------------------------------
     bool VulkanDevice::hasDeviceExtension( const IdString extension ) const
@@ -1579,7 +1593,11 @@ namespace Ogre
 
         // Jahshaka (ENGINE-UPGRADE-ASYNC): the Component, on the first compute queue (none:
         // its off arm). An external device enabled its own features: its timelines are not ours.
-        OGRE_ASSERT_LOW( !mAsyncCompute );
+        if( mAsyncCompute )  // initQueues again on a live device: the old Component goes first
+        {
+            mAsyncCompute->_destroy();
+            delete mAsyncCompute;
+        }
         mAsyncCompute = new VulkanAsyncComputeQueue(
             this, mComputeQueues.empty() ? 0 : &mComputeQueues[0],
             !mIsExternal && mDeviceExtraFeatures.timelineSemaphore );

@@ -61,6 +61,23 @@ namespace Ogre
         queue does it). With a compute queue present but disabled, end() still has the graphics
         queue signal C = its value, so C stays ONE monotonic timeline across switches.
 
+        RECORDING (stage 2): between begin and end the render system's compute work -- the
+        compute PSO, the root layout's descriptor sets, the dispatches, the resource barriers,
+        the labels and the GPU timestamps -- records into the compute queue (VulkanDevice::
+        _jahRecordQueue); the graphics queue is BLOCKED and anything graphics-only (a render
+        pass, a draw, a graphics PSO, a copy or an upload, a mipmap blit, a texture creation)
+        THROWS an Ogre::Exception naming it -- in the off arm too, so a bracket that works off
+        works on. Resources both queues touch are CONCURRENT (TextureFlags::AsyncComputeShared;
+        every VBO pool but the readback one): no ownership transfers, the timelines carry the
+        memory dependency, each queue records its own barriers through the one BarrierSolver.
+
+        THE FRAME THAT WAITS OWNS THE BRACKET'S FRAME DATA: what a bracket allocates from the
+        graphics frame ring (dynamic buffers, auto-param buffers, descriptor sets) lives in the
+        slot of the frame that RECORDED it, but it is consumed until C passes the bracket and
+        read by the graphics frame that WAITED for it. So that slot is recycled only after C has
+        passed every bracket recorded in it AND the graphics frame that waited each one has
+        finished (_notifySlotReuse, from VulkanVaoManager::waitForTailFrameToFinish).
+
         LIFETIME: the bracket's command buffers come from a ring of the compute queue's own
         slots (as many as the graphics ring has frames); begin() reuses a slot only after C
         has passed the value of the bracket that last used it (normally long done: a host wait
@@ -89,7 +106,7 @@ namespace Ogre
         uint64 signalPoint( const char *name );
         /// Opens the bracket. Its work starts on the GPU once G >= afterGraphicsPoint
         /// (0 = no wait; values below the enable point are raised to it).
-        void begin( uint64 afterGraphicsPoint );
+        void begin( uint64 afterGraphicsPoint, const char *name = 0 );
         bool isOpen() const { return mOpen; }
         /// Closes and submits the bracket; C = the returned value when its work is done.
         uint64 end();
@@ -118,9 +135,25 @@ namespace Ogre
         /// Called by VulkanDevice before the semaphores' device dies.
         void _destroy();
 
+        /// True when the compute family writes timestamps (timestampValidBits != 0): the
+        /// render system's GPU samples inside a bracket are then timed on the compute queue.
+        bool hasTimestamps() const { return mTimestamps; }
+
+        /// The graphics frame ring is about to recycle the slot of frame `frameCount` minus the
+        /// ring's length (VulkanVaoManager::waitForTailFrameToFinish, its graphics fences
+        /// already waited): holds it until the brackets recorded in it are consumed.
+        void _notifySlotReuse( uint64 frameCount );
+        /// THE COUNTS of the frame-data rule: brackets whose recording slot was recycled, how
+        /// many of those recycles had to wait for C or for the waiting graphics frame, and
+        /// recycles that found the rule broken after the waits (must be 0).
+        uint64 getNumSlotRecycles() const { return mSlotRecycles; }
+        uint64 getNumRecyclesHeld() const { return mRecyclesHeld; }
+        uint64 getNumRecycleViolations() const { return mRecycleViolations; }
+
     protected:
         VkSemaphore createTimeline();
         void hostWaitCompute( uint64 value );
+        void markWaited( uint64 computeValue );
 
         VulkanDevice *mDevice;
         VulkanQueue *mQueue;  ///< null = the off arm for good
@@ -136,6 +169,19 @@ namespace Ogre
         size_t mSlot;
         uint64 mNumAsyncBrackets;
         FastArray<uint64> mSlotValues;
+        bool mTimestamps;
+        String mOpenName;
+
+        struct FrameBracket
+        {
+            uint64 recordFrame;  ///< VaoManager frame count while it recorded
+            uint64 value;        ///< its C value
+            uint64 waitedFrame;  ///< the graphics frame whose waitAt covered it (~0 = none yet)
+        };
+        FastArray<FrameBracket> mFrameBrackets;  ///< oldest first
+        uint64 mSlotRecycles;
+        uint64 mRecyclesHeld;
+        uint64 mRecycleViolations;
     };
 }  // namespace Ogre
 

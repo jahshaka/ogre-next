@@ -57,6 +57,7 @@ namespace Ogre
         mOwnerDevice( 0 ),
         mJahOwnSlots( false ),
         mJahSlot( 0u ),
+        mJahBlocked( false ),
         mCurrentCmdBuffer( 0 ),
         mVaoManager( 0 ),
         mRenderSystem( 0 ),
@@ -331,8 +332,26 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
+    void VulkanQueue::_jahThrowBlocked( const char *what ) const
+    {
+        OGRE_EXCEPT( Exception::ERR_INVALID_STATE,
+                     String( what ) +
+                         " is graphics-only and was recorded inside an async compute bracket "
+                         "(VulkanAsyncComputeQueue::begin .. end): record it before begin() or "
+                         "after end()",
+                     "VulkanAsyncComputeQueue" );
+    }
+    //-------------------------------------------------------------------------
+    void VulkanQueue::_jahCheckCopy() const
+    {
+        if( mJahBlocked || ( mFamily == Graphics && mOwnerDevice && mOwnerDevice->mJahInBracket ) )
+            _jahThrowBlocked( "a copy (an upload, a download or a buffer/texture copy: vkCmdCopy*)" );
+    }
+    //-------------------------------------------------------------------------
     void VulkanQueue::getGraphicsEncoder()
     {
+        if( mJahBlocked )
+            _jahThrowBlocked( "a graphics encoder (a render pass or a draw)" );
         if( mEncoderState != EncoderGraphicsOpen )
         {
             endCopyEncoder();
@@ -344,6 +363,8 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanQueue::getComputeEncoder()
     {
+        if( mJahBlocked )
+            _jahThrowBlocked( "a compute encoder on the graphics queue" );
         if( mEncoderState != EncoderComputeOpen )
         {
             endRenderEncoder();
@@ -930,6 +951,9 @@ namespace Ogre
                                       const bool bDownload,
                                       CopyEncTransitionMode::CopyEncTransitionMode transitionMode )
     {
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): copies are graphics-queue work (uploads happen
+        // before an async compute bracket opens).
+        _jahCheckCopy();
         if( mEncoderState != EncoderCopyOpen )
         {
             endRenderEncoder();
@@ -967,6 +991,9 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanQueue::getCopyEncoderAsyncTextureTicketUpload()
     {
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): copies are graphics-queue work (uploads happen
+        // before an async compute bracket opens).
+        _jahCheckCopy();
         if( mEncoderState != EncoderCopyOpen )
         {
             endRenderEncoder();
@@ -980,6 +1007,9 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanQueue::getCopyEncoderV1Buffer( const bool bDownload )
     {
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): copies are graphics-queue work (uploads happen
+        // before an async compute bracket opens).
+        _jahCheckCopy();
         if( mEncoderState != EncoderCopyOpen )
         {
             endRenderEncoder();
@@ -1236,7 +1266,12 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanQueue::_jahBeginSlot( size_t slot )
     {
-        OGRE_ASSERT_LOW( mJahOwnSlots && !mCurrentCmdBuffer && slot < mPerFrameData.size() );
+        if( !mJahOwnSlots || mCurrentCmdBuffer || slot >= mPerFrameData.size() )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALID_STATE,
+                         "not an own-slot queue, a command buffer already open, or no such slot",
+                         "VulkanQueue::_jahBeginSlot" );
+        }
         mJahSlot = slot;
         // Rewinding the index makes getCmdBuffer reset the slot's pool before reusing it.
         mPerFrameData[slot].mCurrentCmdIdx = 0u;
@@ -1316,7 +1351,12 @@ namespace Ogre
         if( mPendingCmds.empty() && mJahSignalSemaph.empty() )
             return;
 
-        OGRE_ASSERT_LOW( !mJahOwnSlots || submissionType == SubmissionType::FlushOnly );
+        if( mJahOwnSlots && submissionType != SubmissionType::FlushOnly )
+        {
+            // It would advance the graphics frame ring (_notifyNewCommandBuffer).
+            OGRE_EXCEPT( Exception::ERR_INVALID_STATE, "an own-slot queue submits FlushOnly only",
+                         "VulkanQueue::commitAndNextCommandBuffer" );
+        }
 
         VkSubmitInfo submitInfo;
         makeVkStruct( submitInfo, VK_STRUCTURE_TYPE_SUBMIT_INFO );

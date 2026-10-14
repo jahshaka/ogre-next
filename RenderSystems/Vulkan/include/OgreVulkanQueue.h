@@ -127,6 +127,8 @@ namespace Ogre
         /// frame. Off (every other queue): upstream's behaviour exactly.
         bool   mJahOwnSlots;
         size_t mJahSlot;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): see _jahSetBlocked.
+        bool   mJahBlocked;
 
         typedef map<VkFence, RefCountedFence>::type RefCountedFenceMap;
 
@@ -251,10 +253,22 @@ namespace Ogre
     public:
         VkCommandBuffer getCurrentCmdBuffer()
         {
+            if( mJahBlocked )
+                _jahThrowBlocked( "a command on the graphics queue (getCurrentCmdBuffer)" );
             if( !mCurrentCmdBuffer )  // device lost or any other error happens near vkSubmitQueue()
                 checkVkResult( mOwnerDevice, VK_ERROR_DEVICE_LOST, "getCurrentCmdBuffer" );
             return mCurrentCmdBuffer;
         }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): THE CATCH-ALL. While an async compute
+        /// bracket is open the graphics queue is BLOCKED: anything that reaches for its command
+        /// buffer or an encoder throws, naming what it reached for (the render system's named
+        /// checks fire first where they apply). A runtime check, not an OGRE_ASSERT: the
+        /// install is OGRE_DEBUG_MODE 0.
+        void _jahSetBlocked( bool blocked ) { mJahBlocked = blocked; }
+        bool _jahIsBlocked() const { return mJahBlocked; }
+        void _jahThrowBlocked( const char *what ) const;
+        /// Throws when a copy encoder is asked for on the graphics queue inside a bracket (either arm).
+        void _jahCheckCopy() const;
         EncoderState getEncoderState() const { return mEncoderState; }
 
         void getGraphicsEncoder();

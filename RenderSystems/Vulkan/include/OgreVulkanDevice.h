@@ -216,6 +216,33 @@ namespace Ogre
         /// queues (never null after initQueues; its off arm when there is no second queue).
         VulkanAsyncComputeQueue *mAsyncCompute;
         VulkanAsyncComputeQueue *getAsyncCompute() const { return mAsyncCompute; }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): THE CURRENT RECORDING QUEUE. The graphics
+        /// queue, except inside an async compute bracket on the async arm, where it is the
+        /// compute queue: the render system's compute work (the compute PSO, the root layout's
+        /// descriptor sets, the dispatches, the barriers, the labels and the timestamps)
+        /// records into it. mJahInBracket is true inside a bracket in EITHER arm, so the
+        /// graphics-only checks fire the same way on and off.
+        VulkanQueue *mJahRecordQueue;
+        bool mJahInBracket;
+        VulkanQueue &_jahRecordQueue() { return *mJahRecordQueue; }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): THE SHARED FAMILIES. True when the device has
+        /// the async compute queue in a family other than the graphics one (and timelines):
+        /// outCount/outFamilies then describe VK_SHARING_MODE_CONCURRENT over both. Decided at
+        /// device creation (before any pool or image), constant for the device's life.
+        bool _jahShareFamilies( uint32 &outCount, const uint32 *&outFamilies ) const
+        {
+            outCount = mJahShareFamilyCount;
+            outFamilies = mJahShareFamilies;
+            return mJahShareFamilyCount > 1u;
+        }
+        uint32 mJahShareFamilies[2];
+        uint32 mJahShareFamilyCount;
+        /// Throws (Ogre::Exception, ERR_INVALID_STATE) naming `what` when called inside a bracket.
+        void _jahRequireGraphics( const char *what ) const
+        {
+            if( mJahInBracket )
+                mGraphicsQueue._jahThrowBlocked( what );
+        }
         /// Jahshaka (ENGINE-UPGRADE-ASYNC): false when the environment sets JAH_VK_ASYNC_COMPUTE=0
         /// (no second queue is requested: the off arm a device without one has).
         static bool jahAsyncComputeRequested();
