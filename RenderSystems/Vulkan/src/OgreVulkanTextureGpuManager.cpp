@@ -69,6 +69,18 @@ namespace Ogre
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        {
+            // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): the dummies stand in for an empty slot of
+            // ANY job, the async compute queue's included: shared with it.
+            uint32 numFamilies = 0u;
+            const uint32 *families = 0;
+            if( mDevice->_jahShareFamilies( numFamilies, families ) )
+            {
+                imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+                imageInfo.queueFamilyIndexCount = numFamilies;
+                imageInfo.pQueueFamilyIndices = families;
+            }
+        }
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
 
         // clang-format off

@@ -672,8 +672,10 @@ namespace Ogre
         // The table may have been dirty, but nothing the root layout actually uses was dirty
         if( firstDirtySet < mSets.size() )
         {
+            // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): a compute layout binds on the current
+            // recording queue (the async compute queue inside a bracket).
             vkCmdBindDescriptorSets(
-                device->mGraphicsQueue.getCurrentCmdBuffer(),
+                ( mCompute ? device->_jahRecordQueue() : device->mGraphicsQueue ).getCurrentCmdBuffer(),
                 mCompute ? VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS, mRootLayout,
                 firstDirtySet, static_cast<uint32_t>( mSets.size() ) - firstDirtySet,
                 &descSets[firstDirtySet], 0u, 0 );

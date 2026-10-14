@@ -504,22 +504,21 @@ namespace Ogre
             OgreProfileGpuBeginDynamic( mDefinition->mProfilingId );
         }
 #endif
-#if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 0): at every debug mode. A render system
+        // without labels (OGRE_DEBUG_MODE below MEDIUM and the runtime pass-label switch off)
+        // returns at once; Vulkan's switch is VulkanInstance::jahPassLabelsRequested.
         {
             RenderSystem *renderSystem = mParentNode->getRenderSystem();
             renderSystem->debugAnnotationPush( mDefinition->mProfilingId );
         }
-#endif
     }
     //-----------------------------------------------------------------------------------
     void CompositorPass::profilingEnd()
     {
-#if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM
         {
             RenderSystem *renderSystem = mParentNode->getRenderSystem();
             renderSystem->debugAnnotationPop();
         }
-#endif
         if( mDefinition->mFlushCommandBuffers )
         {
             RenderSystem *renderSystem = mParentNode->getRenderSystem();

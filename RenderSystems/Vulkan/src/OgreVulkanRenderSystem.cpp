@@ -28,6 +28,8 @@ THE SOFTWARE.
 
 #include "OgreVulkanRenderSystem.h"
 
+#include "OgreVulkanAsyncComputeQueue.h"
+
 #include "OgreRenderPassDescriptor.h"
 #include "OgreVulkanCache.h"
 #include "OgreVulkanDelayedFuncs.h"
@@ -2102,11 +2104,38 @@ namespace Ogre
         mComputeTableDirty = true;
     }
     //-------------------------------------------------------------------------
+    void VulkanRenderSystem::_beginFrameOnce()
+    {
+        // Jahshaka (ENGINE-UPGRADE-ASYNC, the stage-2 read's W3): a bracket a throw left open
+        // would block the graphics queue for this frame and every later one.
+        if( mDevice->mAsyncCompute )
+            mDevice->mAsyncCompute->_closeLeakedBracket( "the frame's begin" );
+        RenderSystem::_beginFrameOnce();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 0): THE CAPTURE SPLIT. Under the pass-label
+        // switch the frame's head -- everything recorded since the previous frame's swap: the
+        // uploads and every job the host runs before the compositor (the GI's pre-frame
+        // update) -- is closed and submitted on its own, so a GPU trace shows it as one
+        // workload and the compositor's frame as the next. Off: nothing happens here.
+        if( mJahHeadLabelOpen )
+        {
+            endRenderPassDescriptor( false );
+            debugAnnotationPop();
+            mJahHeadLabelOpen = false;
+            mDevice->commitAndNextCommandBuffer( SubmissionType::FlushOnly );
+        }
+    }
+    //-------------------------------------------------------------------------
     void VulkanRenderSystem::_endFrameOnce()
     {
         RenderSystem::_endFrameOnce();
         endRenderPassDescriptor( false );
         mDevice->commitAndNextCommandBuffer( SubmissionType::EndFrameAndSwap );
+        if( VulkanInstance::jahPassLabelsRequested() && mInstance->CmdBeginDebugUtilsLabelEXT )
+        {
+            // The next frame's head opens here, in the command buffer after the swap.
+            debugAnnotationPush( "jah.frame.head" );
+            mJahHeadLabelOpen = true;
+        }
     }
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_setHlmsSamplerblock( uint8 texUnit, const HlmsSamplerblock *samplerblock )
@@ -2141,6 +2170,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_setPipelineStateObject( const HlmsPso *pso )
     {
+        mDevice->_jahRequireGraphics( "a graphics pipeline bind (_setPipelineStateObject)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         if( pso && mDevice->mGraphicsQueue.getEncoderState() != VulkanQueue::EncoderGraphicsOpen )
         {
             OGRE_ASSERT_LOW(
@@ -2182,7 +2212,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_setComputePso( const HlmsComputePso *pso )
     {
-        mDevice->mGraphicsQueue.getComputeEncoder();
+        mDevice->_jahRecordQueue().getComputeEncoder();
 
         // check, if we deferred pipeline compilation due to the skipped deadline
         // NOTE: right now we never skip compute pipelines compilations
@@ -2200,7 +2230,7 @@ namespace Ogre
 
                 OGRE_ASSERT_LOW( pso->rsData );
                 VulkanHlmsPso *vulkanPso = static_cast<VulkanHlmsPso *>( pso->rsData );
-                VkCommandBuffer cmdBuffer = mDevice->mGraphicsQueue.getCurrentCmdBuffer();
+                VkCommandBuffer cmdBuffer = mDevice->_jahRecordQueue().getCurrentCmdBuffer();
                 vkCmdBindPipeline( cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, vulkanPso->pso );
 
                 if( vulkanPso->rootLayout != oldRootLayout )
@@ -2220,7 +2250,7 @@ namespace Ogre
     {
         flushRootLayoutCS();
 
-        vkCmdDispatch( mDevice->mGraphicsQueue.getCurrentCmdBuffer(), pso.mNumThreadGroups[0],
+        vkCmdDispatch( mDevice->_jahRecordQueue().getCurrentCmdBuffer(), pso.mNumThreadGroups[0],
                        pso.mNumThreadGroups[1], pso.mNumThreadGroups[2] );
     }
     //-------------------------------------------------------------------------
@@ -2255,7 +2285,7 @@ namespace Ogre
 
         flushRootLayoutCS();
 
-        VkCommandBuffer cmdBuffer = mDevice->mGraphicsQueue.getCurrentCmdBuffer();
+        VkCommandBuffer cmdBuffer = mDevice->_jahRecordQueue().getCurrentCmdBuffer();
 
         // THE BARRIER THE SOLVER CANNOT EXPRESS.
         //
@@ -2300,8 +2330,9 @@ namespace Ogre
 
             const VkPipelineStageFlags srcStage =
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
-            vkCmdPipelineBarrier( cmdBuffer, srcStage & mDevice->mSupportedStages,
-                                  VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT & mDevice->mSupportedStages, 0,
+            const VkPipelineStageFlags queueStages = mDevice->_jahRecordQueue()._jahSupportedStages();
+            vkCmdPipelineBarrier( cmdBuffer, srcStage & queueStages,
+                                  VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT & queueStages, 0,
                                   0u, 0, 1u, &bufferBarrier, 0u, 0 );
         }
 
@@ -2310,6 +2341,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_setVertexArrayObject( const VertexArrayObject *vao )
     {
+        mDevice->_jahRequireGraphics( "a vertex array bind (_setVertexArrayObject)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         VkBuffer vulkanVertexBuffers[15];
         VkDeviceSize offsets[15];
         memset( offsets, 0, sizeof( offsets ) );
@@ -2380,6 +2412,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_render( const CbDrawCallIndexed *cmd )
     {
+        mDevice->_jahRequireGraphics( "a draw (vkCmdDraw*)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         // check, if we deferred pipeline compilation due to the skipped deadline
         if( mPso == nullptr )
             return;
@@ -2394,6 +2427,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_render( const CbDrawCallStrip *cmd )
     {
+        mDevice->_jahRequireGraphics( "a draw (vkCmdDraw*)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         // check, if we deferred pipeline compilation due to the skipped deadline
         if( mPso == nullptr )
             return;
@@ -2408,6 +2442,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_renderEmulated( const CbDrawCallIndexed *cmd )
     {
+        mDevice->_jahRequireGraphics( "a draw (vkCmdDraw*)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         // check, if we deferred pipeline compilation due to the skipped deadline
         if( mPso == nullptr )
             return;
@@ -2430,6 +2465,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_renderEmulated( const CbDrawCallStrip *cmd )
     {
+        mDevice->_jahRequireGraphics( "a draw (vkCmdDraw*)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         // check, if we deferred pipeline compilation due to the skipped deadline
         if( mPso == nullptr )
             return;
@@ -2451,6 +2487,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_setRenderOperation( const v1::CbRenderOp *cmd )
     {
+        mDevice->_jahRequireGraphics( "a v1 render operation bind" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mVaoManager );
 
         VkCommandBuffer cmdBuffer = mDevice->mGraphicsQueue.getCurrentCmdBuffer();
@@ -2512,6 +2549,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_render( const v1::CbDrawCallIndexed *cmd )
     {
+        mDevice->_jahRequireGraphics( "a draw (vkCmdDraw*)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         // check, if we deferred pipeline compilation due to the skipped deadline
         if( mPso == nullptr )
             return;
@@ -2525,6 +2563,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_render( const v1::CbDrawCallStrip *cmd )
     {
+        mDevice->_jahRequireGraphics( "a draw (vkCmdDraw*)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         // check, if we deferred pipeline compilation due to the skipped deadline
         if( mPso == nullptr )
             return;
@@ -2538,6 +2577,7 @@ namespace Ogre
 
     void VulkanRenderSystem::_render( const v1::RenderOperation &op )
     {
+        mDevice->_jahRequireGraphics( "a draw (vkCmdDraw*)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         // check, if we deferred pipeline compilation due to the skipped deadline
         if( mPso == nullptr )
             return;
@@ -2803,25 +2843,24 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::debugAnnotationPush( const String &event )
     {
-#if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 0): compiled in at every debug mode. The
+        // function pointer is loaded only at OGRE_DEBUG_MODE >= MEDIUM or under the runtime
+        // switch (VulkanInstance::jahPassLabelsRequested), so off it is this one test.
         if( !mInstance->CmdBeginDebugUtilsLabelEXT )
             return;  // VK_EXT_debug_utils not available
-        VkCommandBuffer cmdBuffer = mDevice->mGraphicsQueue.getCurrentCmdBuffer();
+        VkCommandBuffer cmdBuffer = mDevice->_jahRecordQueue().getCurrentCmdBuffer();
         VkDebugUtilsLabelEXT markerInfo;
         makeVkStruct( markerInfo, VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT );
         markerInfo.pLabelName = event.c_str();
         mInstance->CmdBeginDebugUtilsLabelEXT( cmdBuffer, &markerInfo );
-#endif
     }
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::debugAnnotationPop()
     {
-#if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM
         if( !mInstance->CmdEndDebugUtilsLabelEXT )
             return;  // VK_EXT_debug_utils not available
-        VkCommandBuffer cmdBuffer = mDevice->mGraphicsQueue.getCurrentCmdBuffer();
+        VkCommandBuffer cmdBuffer = mDevice->_jahRecordQueue().getCurrentCmdBuffer();
         mInstance->CmdEndDebugUtilsLabelEXT( cmdBuffer );
-#endif
     }
     //-------------------------------------------------------------------------
     // JAHSHAKA fork 1a81f866a+1bccc3f93 (was 0027): the GPU timestamp half of these hooks. Upstream
@@ -2920,7 +2959,12 @@ namespace Ogre
         // 6 faces x 22 passes before the view and the planar arms are counted.
         JahGpuSample sample;
         sample.hash = hashCache ? *hashCache : 0u;
-        if( mJahPoolIdx >= mJahPools.size() || mJahNextQuery + 2u > kJahMaxGpuQueries )
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): inside an async compute bracket the sample is
+        // timed on the compute queue -- when its family has timestamps; else it is LOST.
+        const bool bNoTimestampsHere = &mDevice->_jahRecordQueue() != &mDevice->mGraphicsQueue &&
+                                       !mDevice->mAsyncCompute->hasTimestamps();
+        if( bNoTimestampsHere || mJahPoolIdx >= mJahPools.size() ||
+            mJahNextQuery + 2u > kJahMaxGpuQueries )
         {
             sample.query = kJahOverflowQuery;
             ++mJahOverflowed;
@@ -2931,7 +2975,7 @@ namespace Ogre
         mJahNextQuery += 2u;
         // A timestamp write is legal inside a render pass, which is where most
         // of these land.
-        vkCmdWriteTimestamp( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
+        vkCmdWriteTimestamp( mDevice->_jahRecordQueue().getCurrentCmdBuffer(),
                              VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, mJahPools[mJahPoolIdx].pool,
                              sample.query );
         mJahSampleStack.push_back( sample );
@@ -2963,7 +3007,7 @@ namespace Ogre
                 mJahParked.push_back( sample.hash );
             return;
         }
-        vkCmdWriteTimestamp( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
+        vkCmdWriteTimestamp( mDevice->_jahRecordQueue().getCurrentCmdBuffer(),
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mJahPools[mJahPoolIdx].pool,
                              sample.query + 1u );
         mJahPools[mJahPoolIdx].samples.push_back( sample );
@@ -3025,6 +3069,10 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::jahGpuFrameBegin()
     {
+        // Jahshaka (ENGINE-UPGRADE-ASYNC, W3): the frame top, before anything records -- a
+        // bracket a throw left open is closed here (see _closeLeakedBracket).
+        if( mDevice->mAsyncCompute )
+            mDevice->mAsyncCompute->_closeLeakedBracket( "the frame's top (jahGpuFrameBegin)" );
         if( !mJahGpuProfiling )
             return;
         // Any sample left open by a frame that threw would corrupt the next
@@ -3216,6 +3264,7 @@ namespace Ogre
                                                         const Vector4 *scissors, uint32 numViewports,
                                                         bool overlaysEnabled, bool warnIfRtvWasFlushed )
     {
+        mDevice->_jahRequireGraphics( "a render pass (beginRenderPassDescriptor)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         if( desc->mInformationOnly && desc->hasSameAttachments( mCurrentRenderPassDescriptor ) )
             return;
 
@@ -3304,6 +3353,7 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::executeRenderPassDescriptorDelayedActions( bool officialCall )
     {
+        mDevice->_jahRequireGraphics( "a render pass (vkCmdBeginRenderPass)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         if( officialCall )
             mInterruptedRenderCommandEncoder = false;
 
@@ -3650,7 +3700,7 @@ namespace Ogre
             return;
 
         // Needs to be done now, as it may change layouts of textures we're about to change
-        mDevice->mGraphicsQueue.endAllEncoders();
+        mDevice->_jahRecordQueue().endAllEncoders();
 
         VkPipelineStageFlags srcStage = 0u;
         VkPipelineStageFlags dstStage = 0u;
@@ -3721,6 +3771,21 @@ namespace Ogre
 
                     if( itor->oldStageMask != 0u )
                         srcStage |= ogreToVkStageFlags( itor->oldStageMask );
+                }
+                else if( itor->oldLayout != ResourceLayout::Undefined &&
+                         texture->isAsyncComputeShared() &&
+                         mDevice->mAsyncCompute &&
+                         mDevice->mAsyncCompute->hasComputeQueue() )
+                {
+                    // Jahshaka (ENGINE-UPGRADE-ASYNC): A TEXTURE THE OTHER QUEUE TOUCHED. The
+                    // solver forgets every use at the frame's start (RenderSystem::_beginFrame
+                    // resets it), so the first transition of a frame has no source stage -- TOP,
+                    // no execution dependency. On one queue the previous frame is behind the
+                    // ring's fences; across queues the last use (the async bracket's layout
+                    // transition, its writes) is ordered only by the timeline wait, and the
+                    // barrier must CHAIN to that wait: ALL_COMMANDS (measured:
+                    // SYNC-HAZARD-WRITE-AFTER-WRITE on this transition with TOP).
+                    srcStage |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
                 }
 
                 // Jahshaka: AN ATTACHMENT LAYOUT WAS WRITTEN BY ITS RENDER PASS, WHATEVER THE
@@ -3808,13 +3873,15 @@ namespace Ogre
             numMemBarriers = 1u;
         }
 
-        if( srcStage == 0 )
-            srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        if( dstStage == 0 )
-            dstStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        // Jahshaka (ENGINE-UPGRADE-ASYNC, the stage-2 read's W1): the masks fitted to the queue
+        // that records -- inside an async bracket that is a compute-only family, which has no
+        // attachment or fragment stages (a RenderTarget's COLOR_ATTACHMENT_OUTPUT, a pixel
+        // reader's FRAGMENT_SHADER). The graphics queue: the device mask, as upstream.
+        VulkanQueue &recordQueue = mDevice->_jahRecordQueue();
+        recordQueue._jahFitBarrier( srcStage, dstStage, &memBarrier, numMemBarriers,
+                                    mImageBarriers.begin(), static_cast<uint32>( mImageBarriers.size() ) );
 
-        vkCmdPipelineBarrier( mDevice->mGraphicsQueue.getCurrentCmdBuffer(),
-                              srcStage & mDevice->mSupportedStages, dstStage & mDevice->mSupportedStages,
+        vkCmdPipelineBarrier( recordQueue.getCurrentCmdBuffer(), srcStage, dstStage,
                               0, numMemBarriers, &memBarrier, 0u, 0,
                               static_cast<uint32>( mImageBarriers.size() ), mImageBarriers.begin() );
         mImageBarriers.clear();
@@ -4404,6 +4471,7 @@ namespace Ogre
     void VulkanRenderSystem::setStencilBufferParams( uint32 refValue,
                                                      const StencilParams &stencilParams )
     {
+        mDevice->_jahRequireGraphics( "a stencil reference (vkCmdSetStencilReference)" );   // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
         RenderSystem::setStencilBufferParams( refValue, stencilParams );
 
         // There are two main cases:

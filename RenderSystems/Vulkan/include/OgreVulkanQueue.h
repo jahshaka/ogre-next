@@ -104,6 +104,32 @@ namespace Ogre
         VkSemaphoreArray                mGpuSignalSemaphForCurrCmdBuff;
         // clang-format on
 
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): the TIMELINE value of each entry of
+        /// mGpuWaitSemaphForCurrCmdBuff (0 for a binary semaphore -- a swapchain's acquire),
+        /// kept index-aligned with it and with mGpuWaitFlags.
+        FastArray<uint64> mGpuWaitValues;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): semaphores the NEXT submission signals, of ANY
+        /// submission type (the present semaphores above are only signalled at NewFrameIdx and
+        /// later). Not owned. mJahSignalValues is index-aligned (0 = binary).
+        VkSemaphoreArray  mJahSignalSemaph;
+        FastArray<uint64> mJahSignalValues;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): waits held back until the next submission that
+        /// advances the frame (NewFrameIdx / EndFrameAndSwap), so the frame's fence also
+        /// proves what they wait for.
+        VkSemaphoreArray                mJahFrameEndWaitSemaph;
+        FastArray<VkPipelineStageFlags> mJahFrameEndWaitFlags;
+        FastArray<uint64>               mJahFrameEndWaitValues;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): THE OWN-SLOT MODE of the async compute queue. Its
+        /// command buffers come from ITS OWN ring of mPerFrameData slots, chosen by the
+        /// owner (VulkanAsyncComputeQueue::begin) instead of the VaoManager's graphics frame
+        /// index; it records only between _jahBeginSlot and the next commit (no command
+        /// buffer is open in between), never waits the graphics ring and never advances a
+        /// frame. Off (every other queue): upstream's behaviour exactly.
+        bool   mJahOwnSlots;
+        size_t mJahSlot;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): see _jahSetBlocked.
+        bool   mJahBlocked;
+
         typedef map<VkFence, RefCountedFence>::type RefCountedFenceMap;
 
         VkFenceArray mAvailableFences;
@@ -227,10 +253,22 @@ namespace Ogre
     public:
         VkCommandBuffer getCurrentCmdBuffer()
         {
+            if( mJahBlocked )
+                _jahThrowBlocked( "a command on the graphics queue (getCurrentCmdBuffer)" );
             if( !mCurrentCmdBuffer )  // device lost or any other error happens near vkSubmitQueue()
                 checkVkResult( mOwnerDevice, VK_ERROR_DEVICE_LOST, "getCurrentCmdBuffer" );
             return mCurrentCmdBuffer;
         }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): THE CATCH-ALL. While an async compute
+        /// bracket is open the graphics queue is BLOCKED: anything that reaches for its command
+        /// buffer or an encoder throws, naming what it reached for (the render system's named
+        /// checks fire first where they apply). A runtime check, not an OGRE_ASSERT: the
+        /// install is OGRE_DEBUG_MODE 0.
+        void _jahSetBlocked( bool blocked ) { mJahBlocked = blocked; }
+        bool _jahIsBlocked() const { return mJahBlocked; }
+        void _jahThrowBlocked( const char *what ) const;
+        /// Throws when a copy encoder is asked for on the graphics queue inside a bracket (either arm).
+        void _jahCheckCopy() const;
         EncoderState getEncoderState() const { return mEncoderState; }
 
         void getGraphicsEncoder();
@@ -295,6 +333,54 @@ namespace Ogre
 
         void commitAndNextCommandBuffer(
             SubmissionType::SubmissionType submissionType = SubmissionType::FlushOnly );
+
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): a GENERAL wait for the next submission (upstream's
+        /// only wait was addWindowToWaitFor: a binary acquire semaphore at COLOR_ATTACHMENT_OUTPUT).
+        /// timelineValue != 0 waits a TIMELINE semaphore for that value.
+        void addWaitSemaphore( VkSemaphore semaphore, VkPipelineStageFlags dstStage,
+                               uint64 timelineValue = 0u );
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): the next submission (of any type) signals this
+        /// semaphore (timelineValue != 0: a timeline set to that value). A pending signal
+        /// forces the submission even with no command recorded.
+        void addSignalSemaphore( VkSemaphore semaphore, uint64 timelineValue = 0u );
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): a wait attached to the next frame-advancing
+        /// submission only (NewFrameIdx / EndFrameAndSwap).
+        void addFrameEndWaitSemaphore( VkSemaphore semaphore, VkPipelineStageFlags dstStage,
+                                       uint64 timelineValue );
+
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): the own-slot mode (see mJahOwnSlots). Set before init().
+        void _jahSetOwnSlots( bool ownSlots ) { mJahOwnSlots = ownSlots; }
+        bool _jahHasOwnSlots() const { return mJahOwnSlots; }
+        /// Own-slot mode: open a command buffer from `slot`. The slot's command index is
+        /// rewound first, so its pool is RESET -- the caller guarantees the GPU is done with
+        /// everything submitted from that slot.
+        void _jahBeginSlot( size_t slot );
+        bool _jahIsRecording() const { return mCurrentCmdBuffer != 0; }
+        size_t _jahNumSlots() const { return mPerFrameData.size(); }
+        /// Counts for the rows: every command buffer ever allocated (all slots), and every
+        /// fence this queue owns (available + protecting + externally referenced).
+        size_t _jahNumAllocatedCmdBuffers() const;
+        size_t _jahNumFences() const;
+
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC, the stage-2 read's W1): the pipeline stages a
+        /// barrier recorded on THIS queue may name -- the device's (mSupportedStages) ANDed with
+        /// what the queue's family supports. A compute-only family has no vertex, fragment,
+        /// attachment or early/late test stages (VUID-vkCmdPipelineBarrier-srcStageMask-06461 /
+        /// -dstStageMask-06462); the graphics family keeps the device's mask unchanged.
+        VkPipelineStageFlags _jahSupportedStages() const;
+        /// The access bits a barrier on this queue may keep on a side whose (already fitted)
+        /// stage mask is `stages` (VUID-vkCmdPipelineBarrier-srcAccessMask-02815 / -02816).
+        /// The graphics family: every bit (upstream's behaviour).
+        VkAccessFlags _jahSupportedAccess( VkPipelineStageFlags stages ) const;
+        /// Fits a barrier to this queue: both stage masks ANDed with _jahSupportedStages()
+        /// (a source side emptied by the fit becomes ALL_COMMANDS so it chains to the timeline
+        /// wait; an empty side otherwise TOP_OF_PIPE / BOTTOM_OF_PIPE) and, on a family without
+        /// graphics, every access mask to what its fitted side's stages can access. What a
+        /// dropped graphics stage ordered on the other queue is ordered by the timeline wait
+        /// that brought the work here (its signal makes every write available and visible).
+        void _jahFitBarrier( VkPipelineStageFlags &srcStage, VkPipelineStageFlags &dstStage,
+                             VkMemoryBarrier *memBarriers, uint32 numMemBarriers,
+                             VkImageMemoryBarrier *imageBarriers, uint32 numImageBarriers ) const;
 
         VulkanVaoManager *getVaoManager() { return mVaoManager; }
     };

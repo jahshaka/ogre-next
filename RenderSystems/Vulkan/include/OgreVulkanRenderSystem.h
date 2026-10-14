@@ -109,6 +109,11 @@ namespace Ogre
         /// Jahshaka fork d014b064f+1bccc3f93 (was 0072): the "device lost, not recreated" line is said once.
         bool mReportedDeviceLost = false;
 
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 0): the "jah.frame.head" label is open on the
+        /// graphics queue (pushed after a frame's swap, popped + split at the next
+        /// _beginFrameOnce). Only ever true under VulkanInstance::jahPassLabelsRequested().
+        bool mJahHeadLabelOpen = false;
+
         VulkanCache *mCache;
 
         HlmsPso const *mPso;
@@ -339,6 +344,7 @@ namespace Ogre
 
         void _beginFrame() override;
         void _endFrame() override;
+        void _beginFrameOnce() override;
         void _endFrameOnce() override;
 
         void _setHlmsSamplerblock( uint8 texUnit, const HlmsSamplerblock *Samplerblock ) override;

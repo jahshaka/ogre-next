@@ -85,6 +85,14 @@ namespace Ogre
     public:
         static void enumerateExtensionsAndLayers( VulkanExternalInstance *externalInstance );
         static bool hasExtension( const char *extension );
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 0): THE PASS-LABEL SWITCH. True when the
+        /// environment sets JAH_VK_PASS_LABELS (not "0"): VK_EXT_debug_utils is enabled at any
+        /// OGRE_DEBUG_MODE, every compositor pass pushes its profiling id as a command-buffer
+        /// label, and the render system splits the frame's head (everything recorded between
+        /// the previous frame's swap and the compositor's first pass) into its own submission
+        /// named "jah.frame.head" -- what a Nsight capture needs to see a pre-frame job on its
+        /// own. Off (the default): no extension, no label, no extra submission.
+        static bool jahPassLabelsRequested();
 
         VulkanInstance( const String &appName, VulkanExternalInstance *externalInstance,
                         PFN_vkDebugReportCallbackEXT debugCallback, RenderSystem *renderSystem );
@@ -148,6 +156,10 @@ namespace Ogre
             VkBool32 multiview;
             // VkPhysicalDeviceMultiviewProperties::maxMultiviewViewCount (0 without multiview)
             uint32 maxMultiviewViewCount;
+
+            // Jahshaka (ENGINE-UPGRADE-ASYNC): VkPhysicalDeviceTimelineSemaphoreFeatures (core
+            // in Vulkan 1.2; asked only when the instance AND the device are 1.2)
+            VkBool32 timelineSemaphore;
         };
 
         /// Jahshaka (fork d014b064f (was 0038)): the feature structs a hardware ray-query tier
@@ -195,7 +207,45 @@ namespace Ogre
         VkPhysicalDeviceFeatures mDeviceFeatures;
         ExtraVkFeatures mDeviceExtraFeatures;
         RayQueryVkFeatures mRayQueryFeatures;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): a member for the same reason as mRayQueryFeatures
+        /// (the chain must live until vkCreateDevice reads it).
+        VkPhysicalDeviceTimelineSemaphoreFeatures mTimelineFeatures;
         FastArray<VkQueueFamilyProperties> mQueueProps;
+
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): THE ASYNC COMPUTE QUEUE Component, made with the
+        /// queues (never null after initQueues; its off arm when there is no second queue).
+        VulkanAsyncComputeQueue *mAsyncCompute;
+        VulkanAsyncComputeQueue *getAsyncCompute() const { return mAsyncCompute; }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): THE CURRENT RECORDING QUEUE. The graphics
+        /// queue, except inside an async compute bracket on the async arm, where it is the
+        /// compute queue: the render system's compute work (the compute PSO, the root layout's
+        /// descriptor sets, the dispatches, the barriers, the labels and the timestamps)
+        /// records into it. mJahInBracket is true inside a bracket in EITHER arm, so the
+        /// graphics-only checks fire the same way on and off.
+        VulkanQueue *mJahRecordQueue;
+        bool mJahInBracket;
+        VulkanQueue &_jahRecordQueue() { return *mJahRecordQueue; }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): THE SHARED FAMILIES. True when the device has
+        /// the async compute queue in a family other than the graphics one (and timelines):
+        /// outCount/outFamilies then describe VK_SHARING_MODE_CONCURRENT over both. Decided at
+        /// device creation (before any pool or image), constant for the device's life.
+        bool _jahShareFamilies( uint32 &outCount, const uint32 *&outFamilies ) const
+        {
+            outCount = mJahShareFamilyCount;
+            outFamilies = mJahShareFamilies;
+            return mJahShareFamilyCount > 1u;
+        }
+        uint32 mJahShareFamilies[2];
+        uint32 mJahShareFamilyCount;
+        /// Throws (Ogre::Exception, ERR_INVALID_STATE) naming `what` when called inside a bracket.
+        void _jahRequireGraphics( const char *what ) const
+        {
+            if( mJahInBracket )
+                mGraphicsQueue._jahThrowBlocked( what );
+        }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC): false when the environment sets JAH_VK_ASYNC_COMPUTE=0
+        /// (no second queue is requested: the off arm a device without one has).
+        static bool jahAsyncComputeRequested();
 
         /// Extensions requested when created. Sorted
         FastArray<IdString> mDeviceExtensions;
@@ -317,7 +367,8 @@ namespace Ogre
             VkPhysicalDeviceShaderFloat16Int8Features &deviceShaderFloat16Int8Features,
             VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT &deviceCacheControlFeatures,
             VkPhysicalDeviceMultiviewFeatures &deviceMultiviewFeatures,
-            RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures );
+            RayQueryVkFeatures &rayQueryFeatures, ExtraVkFeatures &outExtraFeatures,
+            uint32 instanceApiVersion, VkPhysicalDeviceTimelineSemaphoreFeatures &timelineFeatures );
     };
 
     // Mask away read flags from srcAccessMask
