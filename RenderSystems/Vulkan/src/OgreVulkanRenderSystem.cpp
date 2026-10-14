@@ -2102,11 +2102,34 @@ namespace Ogre
         mComputeTableDirty = true;
     }
     //-------------------------------------------------------------------------
+    void VulkanRenderSystem::_beginFrameOnce()
+    {
+        RenderSystem::_beginFrameOnce();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 0): THE CAPTURE SPLIT. Under the pass-label
+        // switch the frame's head -- everything recorded since the previous frame's swap: the
+        // uploads and every job the host runs before the compositor (the GI's pre-frame
+        // update) -- is closed and submitted on its own, so a GPU trace shows it as one
+        // workload and the compositor's frame as the next. Off: nothing happens here.
+        if( mJahHeadLabelOpen )
+        {
+            endRenderPassDescriptor( false );
+            debugAnnotationPop();
+            mJahHeadLabelOpen = false;
+            mDevice->commitAndNextCommandBuffer( SubmissionType::FlushOnly );
+        }
+    }
+    //-------------------------------------------------------------------------
     void VulkanRenderSystem::_endFrameOnce()
     {
         RenderSystem::_endFrameOnce();
         endRenderPassDescriptor( false );
         mDevice->commitAndNextCommandBuffer( SubmissionType::EndFrameAndSwap );
+        if( VulkanInstance::jahPassLabelsRequested() && mInstance->CmdBeginDebugUtilsLabelEXT )
+        {
+            // The next frame's head opens here, in the command buffer after the swap.
+            debugAnnotationPush( "jah.frame.head" );
+            mJahHeadLabelOpen = true;
+        }
     }
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::_setHlmsSamplerblock( uint8 texUnit, const HlmsSamplerblock *samplerblock )
@@ -2803,7 +2826,9 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::debugAnnotationPush( const String &event )
     {
-#if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 0): compiled in at every debug mode. The
+        // function pointer is loaded only at OGRE_DEBUG_MODE >= MEDIUM or under the runtime
+        // switch (VulkanInstance::jahPassLabelsRequested), so off it is this one test.
         if( !mInstance->CmdBeginDebugUtilsLabelEXT )
             return;  // VK_EXT_debug_utils not available
         VkCommandBuffer cmdBuffer = mDevice->mGraphicsQueue.getCurrentCmdBuffer();
@@ -2811,17 +2836,14 @@ namespace Ogre
         makeVkStruct( markerInfo, VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT );
         markerInfo.pLabelName = event.c_str();
         mInstance->CmdBeginDebugUtilsLabelEXT( cmdBuffer, &markerInfo );
-#endif
     }
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::debugAnnotationPop()
     {
-#if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM
         if( !mInstance->CmdEndDebugUtilsLabelEXT )
             return;  // VK_EXT_debug_utils not available
         VkCommandBuffer cmdBuffer = mDevice->mGraphicsQueue.getCurrentCmdBuffer();
         mInstance->CmdEndDebugUtilsLabelEXT( cmdBuffer );
-#endif
     }
     //-------------------------------------------------------------------------
     // JAHSHAKA fork 1a81f866a+1bccc3f93 (was 0027): the GPU timestamp half of these hooks. Upstream

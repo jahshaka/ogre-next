@@ -85,6 +85,14 @@ namespace Ogre
     public:
         static void enumerateExtensionsAndLayers( VulkanExternalInstance *externalInstance );
         static bool hasExtension( const char *extension );
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 0): THE PASS-LABEL SWITCH. True when the
+        /// environment sets JAH_VK_PASS_LABELS (not "0"): VK_EXT_debug_utils is enabled at any
+        /// OGRE_DEBUG_MODE, every compositor pass pushes its profiling id as a command-buffer
+        /// label, and the render system splits the frame's head (everything recorded between
+        /// the previous frame's swap and the compositor's first pass) into its own submission
+        /// named "jah.frame.head" -- what a Nsight capture needs to see a pre-frame job on its
+        /// own. Off (the default): no extension, no label, no extra submission.
+        static bool jahPassLabelsRequested();
 
         VulkanInstance( const String &appName, VulkanExternalInstance *externalInstance,
                         PFN_vkDebugReportCallbackEXT debugCallback, RenderSystem *renderSystem );

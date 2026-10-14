@@ -39,6 +39,8 @@ THE SOFTWARE.
 
 #include "vulkan/vulkan_core.h"
 
+#include <stdlib.h>
+
 #ifdef OGRE_VULKAN_USE_SWAPPY
 #    include "swappy/swappyVk.h"
 #endif
@@ -163,10 +165,15 @@ namespace Ogre
                 if( extensionName == VK_EXT_DEBUG_REPORT_EXTENSION_NAME )
                     enabledExtensions.push_back( VK_EXT_DEBUG_REPORT_EXTENSION_NAME );
 #endif
+                // Jahshaka (ENGINE-UPGRADE-ASYNC stage 0): the command-buffer labels are a
+                // RUNTIME switch too (jahPassLabelsRequested), so a capture of a release
+                // install (OGRE_DEBUG_MODE 0) can name its passes.
 #if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM
                 if( extensionName == VK_EXT_DEBUG_UTILS_EXTENSION_NAME )
-                    enabledExtensions.push_back( VK_EXT_DEBUG_UTILS_EXTENSION_NAME );
+#else
+                if( extensionName == VK_EXT_DEBUG_UTILS_EXTENSION_NAME && jahPassLabelsRequested() )
 #endif
+                    enabledExtensions.push_back( VK_EXT_DEBUG_UTILS_EXTENSION_NAME );
                 if( extensionName == VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME )
                     enabledExtensions.push_back(
                         VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME );
@@ -270,6 +277,19 @@ namespace Ogre
         auto itor = std::lower_bound( enabledExtensions.begin(), enabledExtensions.end(), extension,
                                       StrCmpLess );
         return itor != enabledExtensions.end() && 0 == strcmp( *itor, extension );
+    }
+    //-------------------------------------------------------------------------
+    bool VulkanInstance::jahPassLabelsRequested()
+    {
+        // Read once per process: the instance is created before any frame and the answer
+        // must not change under a live device (the labels' function pointers are loaded
+        // with the instance).
+        static const bool requested = []()
+        {
+            const char *v = getenv( "JAH_VK_PASS_LABELS" );
+            return v && *v && strcmp( v, "0" ) != 0;
+        }();
+        return requested;
     }
     //-------------------------------------------------------------------------
     VulkanInstance::VulkanInstance( const String &appName, VulkanExternalInstance *externalInstance,
@@ -377,6 +397,9 @@ namespace Ogre
 
 #if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM
         initDebugFeatures( debugCallback, renderSystem, renderSystem->getRenderDocApi() );
+#else
+        if( jahPassLabelsRequested() )
+            initDebugFeatures( debugCallback, renderSystem, renderSystem->getRenderDocApi() );
 #endif
         initPhysicalDeviceList();
     }
@@ -433,7 +456,8 @@ namespace Ogre
         }
 #endif
 
-#if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM  // VK_EXT_debug_utils, command buffer labels
+        // VK_EXT_debug_utils, command buffer labels: compiled in at every debug mode; the
+        // caller decides (OGRE_DEBUG_MODE >= MEDIUM, or the runtime switch).
         if( !CmdBeginDebugUtilsLabelEXT && !CmdEndDebugUtilsLabelEXT )
         {
             bool bAllow_VK_EXT_debug_utils = false;
@@ -471,7 +495,6 @@ namespace Ogre
                     mVkInstance, "vkCmdEndDebugUtilsLabelEXT" );
             }
         }
-#endif
     }
     //-------------------------------------------------------------------------
     void VulkanInstance::initPhysicalDeviceList()
