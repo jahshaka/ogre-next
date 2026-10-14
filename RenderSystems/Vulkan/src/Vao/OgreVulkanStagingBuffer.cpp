@@ -242,6 +242,8 @@ namespace Ogre
         VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mVaoManager );
         VulkanDevice *device = vaoManager->getDevice();
 
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): uploads are graphics-queue copies.
+        device->_jahRequireGraphics( "a copy (an upload: the staging buffer's vkCmdCopyBuffer)" );
         VkCommandBuffer cmdBuffer = device->mGraphicsQueue.getCurrentCmdBuffer();
 
         OGRE_ASSERT_MEDIUM( mUnmapTicket != std::numeric_limits<size_t>::max() &&

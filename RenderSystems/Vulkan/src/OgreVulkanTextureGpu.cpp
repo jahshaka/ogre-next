@@ -159,6 +159,20 @@ namespace Ogre
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        {
+            // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): a texture the async compute queue touches
+            // is shared CONCURRENTLY with it (TextureFlags::AsyncComputeShared).
+            VulkanTextureGpuManager *mgr = static_cast<VulkanTextureGpuManager *>( mTextureManager );
+            uint32 numFamilies = 0u;
+            const uint32 *families = 0;
+            if( ( mTextureFlags & TextureFlags::AsyncComputeShared ) &&
+                mgr->getDevice()->_jahShareFamilies( numFamilies, families ) )
+            {
+                imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+                imageInfo.queueFamilyIndexCount = numFamilies;
+                imageInfo.pQueueFamilyIndices = families;
+            }
+        }
         if( hasMsaaExplicitResolves() )
         {
             if( mSampleDescription.getCoverageSamples() != 0u &&
@@ -205,6 +219,9 @@ namespace Ogre
         VulkanTextureGpuManager *textureManager =
             static_cast<VulkanTextureGpuManager *>( mTextureManager );
         VulkanDevice *device = textureManager->getDevice();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): the image's first layout transition records on
+        // the graphics queue.
+        device->_jahRequireGraphics( "a texture creation (its first layout transition)" );
 
         VkResult imageResult = vkCreateImage( device->mDevice, &imageInfo, 0, &mFinalTextureName );
         checkVkResult( device, imageResult, "vkCreateImage" );
@@ -541,6 +558,7 @@ namespace Ogre
         VulkanTextureGpuManager *textureManager =
             static_cast<VulkanTextureGpuManager *>( mTextureManager );
         VulkanDevice *device = textureManager->getDevice();
+        device->_jahRequireGraphics( "a texture copy (vkCmdCopyImage / vkCmdResolveImage)" );  // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2)
 
         device->mGraphicsQueue.getCopyEncoder( 0, this, true, srcTransitionMode );
         device->mGraphicsQueue.getCopyEncoder( 0, dstTexture, false, dstTransitionMode );
@@ -631,6 +649,8 @@ namespace Ogre
         VulkanTextureGpuManager *textureManager =
             static_cast<VulkanTextureGpuManager *>( mTextureManager );
         VulkanDevice *device = textureManager->getDevice();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): vkCmdBlitImage is graphics-queue-only by spec.
+        device->_jahRequireGraphics( "a mipmap generation (vkCmdBlitImage)" );
 
         device->mGraphicsQueue.getCopyEncoder( 0, this, true, transitionMode );
 
