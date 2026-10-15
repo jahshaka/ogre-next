@@ -568,6 +568,12 @@ namespace Ogre
             ( *itor )->passEarlyPreExecute( this );
             ++itor;
         }
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3): ...then the manager's pass listeners (addPassListener).
+        for( CompositorWorkspaceListener *listener :
+             mParentNode->getWorkspace()->getCompositorManager()->getPassListeners() )
+        {
+            listener->passEarlyPreExecute( this );
+        }
     }
     //-----------------------------------------------------------------------------------
     void CompositorPass::notifyPassPreExecuteListeners()
@@ -582,6 +588,12 @@ namespace Ogre
             ( *itor )->passPreExecute( this );
             ++itor;
         }
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3): ...then the manager's pass listeners (addPassListener).
+        for( CompositorWorkspaceListener *listener :
+             mParentNode->getWorkspace()->getCompositorManager()->getPassListeners() )
+        {
+            listener->passPreExecute( this );
+        }
     }
     //-----------------------------------------------------------------------------------
     void CompositorPass::notifyPassPosExecuteListeners()
@@ -595,6 +607,12 @@ namespace Ogre
         {
             ( *itor )->passPosExecute( this );
             ++itor;
+        }
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3): ...then the manager's pass listeners (addPassListener).
+        for( CompositorWorkspaceListener *listener :
+             mParentNode->getWorkspace()->getCompositorManager()->getPassListeners() )
+        {
+            listener->passPosExecute( this );
         }
     }
     //-----------------------------------------------------------------------------------

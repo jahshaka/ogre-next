@@ -30,6 +30,7 @@ THE SOFTWARE.
 
 #include "Compositor/Pass/PassScene/OgreCompositorPassScene.h"
 
+#include "Compositor/OgreCompositorManager2.h"
 #include "Compositor/OgreCompositorShadowNode.h"
 #include "Compositor/OgreCompositorWorkspace.h"
 #include "Compositor/OgreCompositorWorkspaceListener.h"
@@ -153,6 +154,12 @@ namespace Ogre
             ( *itor )->passSceneAfterShadowMaps( this );
             ++itor;
         }
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3): ...then the manager's pass listeners (addPassListener).
+        for( CompositorWorkspaceListener *listener :
+             mParentNode->getWorkspace()->getCompositorManager()->getPassListeners() )
+        {
+            listener->passSceneAfterShadowMaps( this );
+        }
     }
     //-----------------------------------------------------------------------------------
     void CompositorPassScene::notifyPassSceneAfterFrustumCullingListeners()
@@ -166,6 +173,12 @@ namespace Ogre
         {
             ( *itor )->passSceneAfterFrustumCulling( this );
             ++itor;
+        }
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3): ...then the manager's pass listeners (addPassListener).
+        for( CompositorWorkspaceListener *listener :
+             mParentNode->getWorkspace()->getCompositorManager()->getPassListeners() )
+        {
+            listener->passSceneAfterFrustumCulling( this );
         }
     }
     //-----------------------------------------------------------------------------------

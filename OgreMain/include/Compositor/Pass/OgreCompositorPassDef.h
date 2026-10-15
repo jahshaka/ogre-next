@@ -148,6 +148,12 @@ namespace Ogre
         /// Custom value in case there's a listener attached (to identify the pass)
         uint32 mIdentifier;
 
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 2): DOES THIS PASS'S WORK SAMPLE THE HOST'S GLOBAL
+        /// ILLUMINATION? True by default (an unknown pass is a reader); a host clears it on the
+        /// passes whose shaders sample none (a G-buffer prepass, an overlay pass), binds the GI only
+        /// on readers, and finds the frame's first and last GI reader by it. Never read by Ogre.
+        bool mJahReadsGi;
+
         ColourValue              mClearColour[OGRE_MAX_MULTIPLE_RENDER_TARGETS];
         float                    mClearDepth;
         uint32                   mClearStencil;
@@ -254,6 +260,7 @@ namespace Ogre
             mShadowMapIdx( ~0U ),
             mNumInitialPasses( ~0U ),
             mIdentifier( 0U ),
+            mJahReadsGi( true ),
             mClearDepth( 1.0f ),
             mClearStencil( 0 ),
             mLoadActionDepth( LoadAction::Load ),

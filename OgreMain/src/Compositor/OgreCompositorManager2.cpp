@@ -884,6 +884,19 @@ namespace Ogre
             mListeners.erase( itor );
     }
     //-----------------------------------------------------------------------------------
+    void CompositorManager2::addPassListener( CompositorWorkspaceListener *listener )
+    {
+        mPassListeners.push_back( listener );
+    }
+    //-----------------------------------------------------------------------------------
+    void CompositorManager2::removePassListener( CompositorWorkspaceListener *listener )
+    {
+        CompositorWorkspaceListenerVec::iterator itor =
+            std::find( mPassListeners.begin(), mPassListeners.end(), listener );
+        if( itor != mPassListeners.end() )
+            mPassListeners.erase( itor );
+    }
+    //-----------------------------------------------------------------------------------
     void CompositorManager2::_notifyBarriersDirty() { mRenderWindowsPresentBarrierDirty = true; }
     //-----------------------------------------------------------------------------------
     RenderSystem *CompositorManager2::getRenderSystem() const { return mRenderSystem; }

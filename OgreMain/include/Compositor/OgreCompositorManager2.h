@@ -143,6 +143,7 @@ namespace Ogre
         QueuedWorkspaceVec mQueuedWorkspaces;
         /// Listeners to call CompositorWorkspaceListener::allWorkspacesBeginUpdate
         CompositorWorkspaceListenerVec mListeners;
+        CompositorWorkspaceListenerVec mPassListeners;  ///< Jahshaka: addPassListener
 
         size_t mFrameCount;
 
@@ -431,6 +432,17 @@ namespace Ogre
 
         void addListener( CompositorWorkspaceListener *listener );
         void removeListener( CompositorWorkspaceListener *listener );
+
+        /** Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 2): THE PASS LISTENERS. A listener added here receives
+            the PASS callbacks (passEarlyPreExecute, passPreExecute, passPosExecute,
+            passSceneAfterShadowMaps, passSceneAfterFrustumCulling) of EVERY workspace this manager
+            updates - those a component creates on its own (a cubemap probe's, a capture's) included -
+            after the workspace's own listeners. The listeners of addListener keep receiving only the
+            allWorkspaces* callbacks, as upstream.
+        */
+        void addPassListener( CompositorWorkspaceListener *listener );
+        void removePassListener( CompositorWorkspaceListener *listener );
+        const CompositorWorkspaceListenerVec &getPassListeners() const { return mPassListeners; }
 
         void _notifyBarriersDirty();
 
