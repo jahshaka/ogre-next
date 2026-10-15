@@ -3696,7 +3696,13 @@ namespace Ogre
         return retVal;
     }
     //-------------------------------------------------------------------------
-    void VulkanRenderSystem::endCopyEncoder() { mDevice->mGraphicsQueue.endCopyEncoder(); }
+    void VulkanRenderSystem::endCopyEncoder()
+    {
+        mDevice->mGraphicsQueue.endCopyEncoder();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3): ...and the RECORDING queue's, where the routed copies are.
+        if( mDevice->_jahRecordingOnCompute() )
+            mDevice->_jahRecordQueue().endCopyEncoder();
+    }
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::executeResourceTransition( const ResourceTransitionArray &rstCollection )
     {

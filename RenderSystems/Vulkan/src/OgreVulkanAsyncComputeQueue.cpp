@@ -139,7 +139,17 @@ namespace Ogre
                 break;
             need = fb.value;
         }
-        if( need && need <= mComputeValue )
+        // A frame whose bracket is still OPEN cannot be waited (its work is not submitted): a
+        // download recorded in it and mapped before its end would read nothing - refused, loudly
+        // (the stage-1 read), never skipped.
+        if( need > mComputeValue )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALID_STATE,
+                         "a frame's data is waited while its async compute bracket is still open (a "
+                         "download mapped inside the bracket that recorded it): it can never be reached",
+                         "VulkanAsyncComputeQueue::_jahWaitFrameDataConsumed" );
+        }
+        if( need )
             hostWaitCompute( need );
     }
     //-------------------------------------------------------------------------

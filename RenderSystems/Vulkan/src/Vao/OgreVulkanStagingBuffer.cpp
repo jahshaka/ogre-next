@@ -32,6 +32,7 @@ THE SOFTWARE.
 #include "Vao/OgreVulkanDynamicBuffer.h"
 #include "Vao/OgreVulkanVaoManager.h"
 
+#include "OgreException.h"
 #include "OgreLogManager.h"
 #include "OgreStringConverter.h"
 
@@ -106,8 +107,11 @@ namespace Ogre
 
         // Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): A ROUTED UPLOAD ON THE ASYNC COMPUTE QUEUE is
         // fenced at once by its bracket's C value - no graphics fence (its copy is not on the
-        // graphics queue) and no flush (the bracket submits itself at its end).
-        if( device->_jahRecordingOnCompute() )
+        // graphics queue) and no flush (the bracket submits itself at its end). ONLY the range the
+        // routed upload read (the stage-1 read's F2): the forced fence of a ring WRAP covers the
+        // pending GRAPHICS uploads too and takes the graphics path below.
+        const bool onCompute = device->_jahRecordingOnCompute();
+        if( onCompute && !forceFence )
         {
             VulkanFence fence( from, to );
             fence.computeValue = device->mAsyncCompute->_jahOpenComputeValue();
@@ -156,8 +160,11 @@ namespace Ogre
             VulkanFence fence( startRange, endRange );
             fence.fenceName = device->mGraphicsQueue.acquireCurrentFence();
 
-            // Flush the device for accuracy in the fences.
-            device->commitAndNextCommandBuffer();
+            // Flush the device for accuracy in the fences. Jahshaka (ENGINE-UPGRADE-ASYNC-3): not
+            // inside an async bracket - the graphics queue is blocked there; its fence is signalled
+            // by its next submission, and wait() refuses an unsubmitted one instead of hanging.
+            if( !onCompute )
+                device->commitAndNextCommandBuffer();
             mFences.push_back( fence );
 
             mUnfencedHazards.clear();
@@ -191,6 +198,20 @@ namespace Ogre
         if( !fence.fenceName )
             return;
         VkFence syncObj = fence.fenceName;
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3): a graphics fence taken inside an async bracket (a ring
+        // wrap there) is not submitted until the bracket ends: waiting it now would never return.
+        if( !device->mGraphicsQueue.isFenceFlushed( syncObj ) )
+        {
+            if( device->_jahRecordingOnCompute() )
+            {
+                OGRE_EXCEPT( Exception::ERR_INVALID_STATE,
+                             "a staging region a GRAPHICS upload read is waited inside an async compute "
+                             "bracket before the graphics queue submitted it (the ring wrapped inside one "
+                             "bracket): it can never be reached",
+                             "VulkanStagingBuffer::wait" );
+            }
+            device->commitAndNextCommandBuffer();
+        }
         VkResult result = vkWaitForFences( device->mDevice, 1, &syncObj, VK_TRUE,
                                            UINT64_MAX );  // You can't wait forever in Vulkan?!?
         checkVkResult( device, result, "VulkanStagingBuffer::wait" );
