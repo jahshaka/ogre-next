@@ -324,6 +324,9 @@ namespace Ogre
                             static_cast<CompositorPassWarmUpDef *>( pass );
 
                         passWarmUp->mIdentifier = refPassScene->mIdentifier;
+                        // Jahshaka (ENGINE-UPGRADE-ASYNC-3): the warm-up compiles the variants the
+                        // scene pass will draw with, the GI reader's or not.
+                        passWarmUp->mJahReadsGi = refPassScene->mJahReadsGi;
                         passWarmUp->mSkipLoadStoreSemantics = refPassScene->mSkipLoadStoreSemantics;
                         passWarmUp->mColourWrite = refPassScene->mColourWrite;
                         passWarmUp->mReadOnlyDepth = refPassScene->mReadOnlyDepth;
