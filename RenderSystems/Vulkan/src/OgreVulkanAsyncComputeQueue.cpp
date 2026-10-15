@@ -117,6 +117,32 @@ namespace Ogre
         return sem;
     }
     //-------------------------------------------------------------------------
+    void VulkanAsyncComputeQueue::_jahWaitComputeValue( uint64 value, const char *who )
+    {
+        if( value > mComputeValue )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALID_STATE,
+                         String( who ) +
+                             " waits for the async compute bracket that is still open (its work is "
+                             "not submitted): it can never be reached",
+                         "VulkanAsyncComputeQueue::_jahWaitComputeValue" );
+        }
+        hostWaitCompute( value );
+    }
+    //-------------------------------------------------------------------------
+    void VulkanAsyncComputeQueue::_jahWaitFrameDataConsumed( uint64 frameCount )
+    {
+        uint64 need = 0u;
+        for( const FrameBracket &fb : mFrameBrackets )
+        {
+            if( fb.recordFrame > frameCount )
+                break;
+            need = fb.value;
+        }
+        if( need && need <= mComputeValue )
+            hostWaitCompute( need );
+    }
+    //-------------------------------------------------------------------------
     void VulkanAsyncComputeQueue::hostWaitCompute( uint64 value )
     {
         if( !mComputeTimeline || value == 0u )

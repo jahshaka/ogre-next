@@ -381,6 +381,11 @@ namespace Ogre
         void _jahFitBarrier( VkPipelineStageFlags &srcStage, VkPipelineStageFlags &dstStage,
                              VkMemoryBarrier *memBarriers, uint32 numMemBarriers,
                              VkImageMemoryBarrier *imageBarriers, uint32 numImageBarriers ) const;
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): the copy encoder's barriers, recorded on THIS
+        /// queue -- upstream's on the graphics family, fitted (_jahFitBarrier) on another one.
+        void _jahCopyBarrier( VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
+                              uint32 numMemBarriers, VkMemoryBarrier *memBarriers,
+                              uint32 numImageBarriers, VkImageMemoryBarrier *imageBarriers );
 
         VulkanVaoManager *getVaoManager() { return mVaoManager; }
     };

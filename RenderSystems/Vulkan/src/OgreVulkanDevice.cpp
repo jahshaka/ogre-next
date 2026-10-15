@@ -602,6 +602,7 @@ namespace Ogre
         mAsyncCompute( 0 ),
         mJahRecordQueue( &mGraphicsQueue ),
         mJahInBracket( false ),
+        mJahRoutedCopy( 0u ),
         mJahShareFamilyCount( 0u ),
         mVaoManager( 0 ),
         mRenderSystem( renderSystem ),

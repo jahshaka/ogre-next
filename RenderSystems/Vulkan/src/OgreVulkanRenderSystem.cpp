@@ -2246,8 +2246,11 @@ namespace Ogre
     //-------------------------------------------------------------------------
     VertexElementType VulkanRenderSystem::getColourVertexElementType() const { return VET_COLOUR_ABGR; }
     //-------------------------------------------------------------------------
+    uint64 VulkanRenderSystem::_jahGetNumDispatches() const { return mJahDispatches; }
+    //-------------------------------------------------------------------------
     void VulkanRenderSystem::_dispatch( const HlmsComputePso &pso )
     {
+        ++mJahDispatches;   // Jahshaka (ENGINE-UPGRADE-ASYNC-3)
         flushRootLayoutCS();
 
         vkCmdDispatch( mDevice->_jahRecordQueue().getCurrentCmdBuffer(), pso.mNumThreadGroups[0],
@@ -2336,6 +2339,7 @@ namespace Ogre
                                   0u, 0, 1u, &bufferBarrier, 0u, 0 );
         }
 
+        ++mJahDispatches;   // Jahshaka (ENGINE-UPGRADE-ASYNC-3)
         vkCmdDispatchIndirect( cmdBuffer, bufferInterface->getVboName(), bufferOffset );
     }
     //-------------------------------------------------------------------------

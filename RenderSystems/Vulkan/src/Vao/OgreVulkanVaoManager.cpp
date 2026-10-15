@@ -2059,6 +2059,13 @@ namespace Ogre
                                                         size_t elementStart, size_t elementCount,
                                                         bool accurateTracking )
     {
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): an ACCURATE ticket parks a fence on the graphics
+        // queue and flushes it - graphics work, refused inside a bracket (either arm). An
+        // inaccurate one (the frame tracks it) records its copy on the record queue (_asyncDownload)
+        // and the frame's tracking covers the bracket. (The copy itself is recorded by the
+        // AsyncTicket base's constructor below, after this check.)
+        if( accurateTracking )
+            mDevice->_jahRequireGraphics( "an accurately tracked download (a graphics fence and a flush)" );
         return AsyncTicketPtr( OGRE_NEW VulkanAsyncTicket( creator, stagingBuffer, elementStart,
                                                            elementCount, &mDevice->mGraphicsQueue,
                                                            this, accurateTracking ) );
@@ -2443,6 +2450,10 @@ namespace Ogre
                                mDynamicBufferMultiplier;
 
             mDevice->mGraphicsQueue._waitOnFrame( static_cast<uint8>( idx ) );
+            // Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): ...and what the frame recorded on the async
+            // compute queue (a routed download inside a bracket): isFrameFinished's W2 rule, waited.
+            if( mDevice->mAsyncCompute )
+                mDevice->mAsyncCompute->_jahWaitFrameDataConsumed( frameCount );
         }
         else
         {

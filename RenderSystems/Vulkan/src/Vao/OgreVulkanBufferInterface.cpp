@@ -194,10 +194,12 @@ namespace Ogre
         VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mBuffer->mVaoManager );
         VulkanDevice *device = vaoManager->getDevice();
 
-        device->mGraphicsQueue.getCopyEncoder( this->getBufferPacked(), 0, true,
-                                               CopyEncTransitionMode::Auto );
-        device->mGraphicsQueue.getCopyEncoder( dstBuffer->getBufferPacked(), 0, false,
-                                               CopyEncTransitionMode::Auto );
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): a ROUTED COPY (VulkanStagingBuffer::unmapImpl's
+        // note): on the record queue, legal on a compute family.
+        VulkanDevice::JahRoutedCopy routed( device );
+        VulkanQueue &queue = device->_jahRecordQueue();
+        queue.getCopyEncoder( this->getBufferPacked(), 0, true, CopyEncTransitionMode::Auto );
+        queue.getCopyEncoder( dstBuffer->getBufferPacked(), 0, false, CopyEncTransitionMode::Auto );
 
         OGRE_ASSERT_HIGH( dynamic_cast<VulkanBufferInterface *>( dstBuffer ) );
         VulkanBufferInterface *dstBufferVk = static_cast<VulkanBufferInterface *>( dstBuffer );
@@ -206,7 +208,6 @@ namespace Ogre
         region.srcOffset = srcOffsetBytes;
         region.dstOffset = dstOffsetBytes;
         region.size = sizeBytes;
-        vkCmdCopyBuffer( device->mGraphicsQueue.getCurrentCmdBuffer(), mVboName,
-                         dstBufferVk->getVboName(), 1u, &region );
+        vkCmdCopyBuffer( queue.getCurrentCmdBuffer(), mVboName, dstBufferVk->getVboName(), 1u, &region );
     }
 }  // namespace Ogre

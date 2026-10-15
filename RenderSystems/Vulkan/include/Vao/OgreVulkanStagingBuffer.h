@@ -63,8 +63,15 @@ namespace Ogre
         struct VulkanFence : Fence
         {
             VkFence fenceName;
+            /// Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): a region a routed upload read on the ASYNC
+            /// COMPUTE queue is fenced by the bracket's C value instead (fenceName 0): it is free
+            /// once the compute timeline reached it.
+            uint64 computeValue;
 
-            VulkanFence( size_t _start, size_t _end ) : Fence( _start, _end ), fenceName( 0 ) {}
+            VulkanFence( size_t _start, size_t _end ) :
+                Fence( _start, _end ), fenceName( 0 ), computeValue( 0u )
+            {
+            }
         };
 
         //------------------------------------
@@ -92,8 +99,9 @@ namespace Ogre
 
         void deleteFences( VulkanFenceVec::iterator itor, VulkanFenceVec::iterator end );
 
-        /// Waits undefinitely on the given GLSync object. Can throw if failed to wait.
-        void wait( VkFence syncObj );
+        /// Waits undefinitely on the given fence (its VkFence, or its compute value). Can throw if
+        /// failed to wait.
+        void wait( const VulkanFence &fence );
 
         /// Checks all the fences and compares them against current state (i.e. mMappingStart &
         /// mMappingCount), and stalls if needed (synchronize); also book-keeps mFences and

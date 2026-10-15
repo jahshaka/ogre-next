@@ -35,6 +35,7 @@ THE SOFTWARE.
 #include "OgreLogManager.h"
 #include "OgreStringConverter.h"
 
+#include "OgreVulkanAsyncComputeQueue.h"
 #include "OgreVulkanDevice.h"
 #include "OgreVulkanHardwareBufferCommon.h"
 #include "OgreVulkanQueue.h"
@@ -73,7 +74,12 @@ namespace Ogre
         // vkDestroyFence and the pool return below are both legal on a lost device, so
         // skipping only the wait is the whole fix.
         if( !mFences.empty() && !vaoManager->getDevice()->isDeviceLost() )
-            wait( mFences.back().fenceName );
+        {
+            // Jahshaka (ENGINE-UPGRADE-ASYNC-3): the fences are on two queues - the last one
+            // proves only its own; every one is waited.
+            for( const VulkanFence &fence : mFences )
+                wait( fence );
+        }
         else if( !mFences.empty() )
         {
             LogManager::getSingleton().logMessage(
@@ -95,6 +101,20 @@ namespace Ogre
     {
         assert( to <= mSizeBytes );
 
+        VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mVaoManager );
+        VulkanDevice *device = vaoManager->getDevice();
+
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): A ROUTED UPLOAD ON THE ASYNC COMPUTE QUEUE is
+        // fenced at once by its bracket's C value - no graphics fence (its copy is not on the
+        // graphics queue) and no flush (the bracket submits itself at its end).
+        if( device->_jahRecordingOnCompute() )
+        {
+            VulkanFence fence( from, to );
+            fence.computeValue = device->mAsyncCompute->_jahOpenComputeValue();
+            mFences.push_back( fence );
+            return;
+        }
+
         VulkanFence unfencedHazard( from, to );
 
         mUnfencedHazards.push_back( unfencedHazard );
@@ -102,9 +122,6 @@ namespace Ogre
         assert( from <= to );
 
         mUnfencedBytes += to - from;
-
-        VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mVaoManager );
-        VulkanDevice *device = vaoManager->getDevice();
 
         if( mUnfencedBytes >= mFenceThreshold || forceFence )
         {
@@ -154,17 +171,26 @@ namespace Ogre
         VulkanDevice *device = vaoManager->getDevice();
         while( itor != end )
         {
-            device->mGraphicsQueue.releaseFence( itor->fenceName );
+            if( itor->fenceName )
+                device->mGraphicsQueue.releaseFence( itor->fenceName );
             itor->fenceName = 0;
             ++itor;
         }
     }
     //-----------------------------------------------------------------------------------
-    void VulkanStagingBuffer::wait( VkFence syncObj )
+    void VulkanStagingBuffer::wait( const VulkanFence &fence )
     {
         VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mVaoManager );
         VulkanDevice *device = vaoManager->getDevice();
 
+        if( fence.computeValue )
+        {
+            device->mAsyncCompute->_jahWaitComputeValue(
+                fence.computeValue, "a staging buffer's region (the ring wrapped inside one bracket)" );
+        }
+        if( !fence.fenceName )
+            return;
+        VkFence syncObj = fence.fenceName;
         VkResult result = vkWaitForFences( device->mDevice, 1, &syncObj, VK_TRUE,
                                            UINT64_MAX );  // You can't wait forever in Vulkan?!?
         checkVkResult( device, result, "VulkanStagingBuffer::wait" );
@@ -207,7 +233,10 @@ namespace Ogre
 
         if( lastWaitableFence != endt )
         {
-            wait( lastWaitableFence->fenceName );
+            // Jahshaka (ENGINE-UPGRADE-ASYNC-3): two queues' fences - each one up to the last
+            // overlapping is waited (on one queue the last proved all before it).
+            for( VulkanFenceVec::iterator f = mFences.begin(); f != lastWaitableFence + 1; ++f )
+                wait( *f );
             deleteFences( mFences.begin(), lastWaitableFence + 1 );
             mFences.erase( mFences.begin(), lastWaitableFence + 1 );
         }
@@ -242,9 +271,13 @@ namespace Ogre
         VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mVaoManager );
         VulkanDevice *device = vaoManager->getDevice();
 
-        // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): uploads are graphics-queue copies.
-        device->_jahRequireGraphics( "a copy (an upload: the staging buffer's vkCmdCopyBuffer)" );
-        VkCommandBuffer cmdBuffer = device->mGraphicsQueue.getCurrentCmdBuffer();
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): A ROUTED COPY - recorded on the record queue (the
+        // async compute queue inside a bracket on the async arm, the graphics queue otherwise);
+        // vkCmdCopyBuffer is legal on a compute family. Its region is fenced by that queue's
+        // completion (addFence).
+        VulkanDevice::JahRoutedCopy routed( device );
+        VulkanQueue &queue = device->_jahRecordQueue();
+        VkCommandBuffer cmdBuffer = queue.getCurrentCmdBuffer();
 
         OGRE_ASSERT_MEDIUM( mUnmapTicket != std::numeric_limits<size_t>::max() &&
                             "VulkanStagingBuffer already unmapped!" );
@@ -263,8 +296,7 @@ namespace Ogre
 
             assert( dst.destination->getBufferType() == BT_DEFAULT );
 
-            device->mGraphicsQueue.getCopyEncoder( dst.destination, 0, false,
-                                                   CopyEncTransitionMode::Auto );
+            queue.getCopyEncoder( dst.destination, 0, false, CopyEncTransitionMode::Auto );
 
             size_t dstOffset = dst.dstOffset + dst.destination->_getInternalBufferStart() *
                                                    dst.destination->getBytesPerElement();
@@ -324,7 +356,13 @@ namespace Ogre
         VulkanVaoManager *vaoManager = static_cast<VulkanVaoManager *>( mVaoManager );
         VulkanDevice *device = vaoManager->getDevice();
 
-        device->mGraphicsQueue.getCopyEncoder( source, 0, true, CopyEncTransitionMode::Auto );
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): a ROUTED COPY (unmapImpl's note): the download
+        // records on the record queue, after the write it reads in that queue's order; the
+        // ticket's frame tracking covers the bracket's C (VulkanVaoManager::isFrameFinished /
+        // waitForSpecificFrameToFinish).
+        VulkanDevice::JahRoutedCopy routed( device );
+        VulkanQueue &queue = device->_jahRecordQueue();
+        queue.getCopyEncoder( source, 0, true, CopyEncTransitionMode::Auto );
 
         VkBufferCopy region;
         region.srcOffset = source->_getFinalBufferStart() * source->getBytesPerElement() + srcOffset;
@@ -336,8 +374,8 @@ namespace Ogre
         OGRE_ASSERT_HIGH( !Workarounds::mPowerVRAlignment ||
                           ( region.dstOffset % Workarounds::mPowerVRAlignment ) == 0u );
 #endif
-        vkCmdCopyBuffer( device->mGraphicsQueue.getCurrentCmdBuffer(), bufferInterface->getVboName(),
-                         mVboName, 1u, &region );
+        vkCmdCopyBuffer( queue.getCurrentCmdBuffer(), bufferInterface->getVboName(), mVboName, 1u,
+                         &region );
 
         return freeRegionOffset;
     }

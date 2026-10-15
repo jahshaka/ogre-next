@@ -225,6 +225,24 @@ namespace Ogre
         VulkanQueue *mJahRecordQueue;
         bool mJahInBracket;
         VulkanQueue &_jahRecordQueue() { return *mJahRecordQueue; }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): THE ROUTED COPIES. A buffer copy is legal on a
+        /// compute family (every compute queue supports transfer), so the staging uploads
+        /// (VulkanStagingBuffer::unmapImpl), the buffer-to-buffer copies (VulkanBufferInterface::
+        /// copyTo) and the buffer downloads (VulkanStagingBuffer::_asyncDownload) record on
+        /// _jahRecordQueue() and say so with this scope: inside a bracket the copy check
+        /// (VulkanQueue::_jahCheckCopy) refuses every copy that is NOT routed -- on the off arm too,
+        /// where the record queue is the graphics queue -- so a taker of the graphics queue's copy
+        /// encoder is never silent. Texture copies, the texture tickets and the v1 buffers stay
+        /// graphics (they throw in a bracket).
+        uint32 mJahRoutedCopy;
+        struct JahRoutedCopy
+        {
+            VulkanDevice *d;
+            explicit JahRoutedCopy( VulkanDevice *device ) : d( device ) { ++d->mJahRoutedCopy; }
+            ~JahRoutedCopy() { --d->mJahRoutedCopy; }
+        };
+        /// True while the record queue is not the graphics queue (an async bracket is open).
+        bool _jahRecordingOnCompute() const { return mJahRecordQueue != &mGraphicsQueue; }
         /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): THE SHARED FAMILIES. True when the device has
         /// the async compute queue in a family other than the graphics one (and timelines):
         /// outCount/outFamilies then describe VK_SHARING_MODE_CONCURRENT over both. Decided at

@@ -119,6 +119,18 @@ namespace Ogre
         /// that frame's fence also proves the compute work done.
         void waitAtFrameEnd( uint64 computeValue );
 
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): the C value the OPEN async bracket's end() will
+        /// signal -- what a resource recorded in it (a staging region a routed upload read) is
+        /// free behind. 0 when no async bracket is open.
+        uint64 _jahOpenComputeValue() const { return ( mOpen && mOpenAsync ) ? mComputeValue + 1u : 0u; }
+        /// The host waits until C >= value. A value no bracket has SUBMITTED yet (the open
+        /// bracket's own) can never be reached by waiting: it throws, naming the caller.
+        void _jahWaitComputeValue( uint64 value, const char *who );
+        /// What VulkanVaoManager::waitForSpecificFrameToFinish adds to its graphics wait: the host
+        /// waits until C passed every bracket recorded at or before `frameCount` (the frame-data
+        /// rule of _isFrameDataConsumed, as a wait).
+        void _jahWaitFrameDataConsumed( uint64 frameCount );
+
         uint64 getLastGraphicsPoint() const { return mGraphicsValue; }
         uint64 getLastComputeValue() const { return mComputeValue; }
         /// What the GPU has reached on C (the counter itself in the off arm).

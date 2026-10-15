@@ -359,6 +359,18 @@ namespace Ogre
         void _dispatchIndirect( const HlmsComputePso &pso, BufferPacked *indirectBuffer,
                                 size_t offsetBytes, bool issueBarrier ) override;
         bool supportsIndirectDispatch() const override { return true; }
+        /// Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): THE RENDER SYSTEM'S OWN DISPATCH COUNT (every
+        /// _dispatch and _dispatchIndirect, ever) - the independent witness an engine's dispatch
+        /// door is checked against (a dispatch recorded around the door is seen). OUT OF LINE on
+        /// purpose: a host that includes this header under other build settings sees another
+        /// layout of this class's late members (measured: the engine read 192 bytes short), so
+        /// the count is read by the plugin's own code.
+        uint64 _jahGetNumDispatches() const;
+
+    private:
+        uint64 mJahDispatches = 0u;
+
+    public:
 
         void _setVertexArrayObject( const VertexArrayObject *vao ) override;
 

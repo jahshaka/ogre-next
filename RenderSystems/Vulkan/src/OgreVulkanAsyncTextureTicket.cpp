@@ -28,6 +28,7 @@ THE SOFTWARE.
 
 #include "OgreVulkanAsyncTextureTicket.h"
 
+#include "OgreVulkanDevice.h"
 #include "OgreVulkanMappings.h"
 #include "OgreVulkanQueue.h"
 #include "OgreVulkanTextureGpu.h"
@@ -121,6 +122,11 @@ namespace Ogre
         // this is a fresh memory region (unless mStatus == Downloading)
         // But getCopyEncoderAsyncTextureTicketUpload still tells Vulkan to
         // flush the caches once we're done writing to mVboName.mVboName
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): a texture download is graphics-queue work (its
+        // image layout transitions and restores are the graphics queue's); refused, by name, inside
+        // a bracket (either arm).
+        mQueue->mOwnerDevice->_jahRequireGraphics(
+            "a texture download (AsyncTextureTicket: vkCmdCopyImageToBuffer)" );
         mQueue->getCopyEncoderAsyncTextureTicketUpload();
         mQueue->getCopyEncoder( 0, textureSrc, true, CopyEncTransitionMode::Auto );
         if( mStatus == Downloading )

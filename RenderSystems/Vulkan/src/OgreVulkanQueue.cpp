@@ -344,8 +344,14 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanQueue::_jahCheckCopy() const
     {
-        if( mJahBlocked || ( mFamily == Graphics && mOwnerDevice && mOwnerDevice->mJahInBracket ) )
+        // A copy routed through the record queue (VulkanDevice::JahRoutedCopy) is legal in a bracket:
+        // on the compute queue (the async arm) or on the graphics queue in order (the off arm).
+        if( mJahBlocked ||
+            ( mFamily == Graphics && mOwnerDevice && mOwnerDevice->mJahInBracket &&
+              !mOwnerDevice->mJahRoutedCopy ) )
+        {
             _jahThrowBlocked( "a copy (an upload, a download or a buffer/texture copy: vkCmdCopy*)" );
+        }
     }
     //-------------------------------------------------------------------------
     void VulkanQueue::getGraphicsEncoder()
@@ -724,9 +730,8 @@ namespace Ogre
 
             // Wait until earlier render, compute and transfers are done so we can copy what
             // they wrote (unless we're only here for a texture transition)
-            vkCmdPipelineBarrier( getCurrentCmdBuffer(), srcStage & mOwnerDevice->mSupportedStages,
-                                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, numMemBarriers, &memBarrier, 0u, 0,
-                                  numImageMemBarriers, &imageMemBarrier );
+            _jahCopyBarrier( srcStage & mOwnerDevice->mSupportedStages, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             numMemBarriers, &memBarrier, numImageMemBarriers, &imageMemBarrier );
         }
 
         if( !bNeedsTexTransition && vkTexture &&
@@ -928,9 +933,8 @@ namespace Ogre
 
             // Wait until earlier render, compute and transfers are done so we can copy what
             // they wrote (unless we're only here for a texture transition)
-            vkCmdPipelineBarrier( getCurrentCmdBuffer(), srcStage & mOwnerDevice->mSupportedStages,
-                                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, numMemBarriers, &memBarrier, 0u, 0,
-                                  numImageMemBarriers, &imageMemBarrier );
+            _jahCopyBarrier( srcStage & mOwnerDevice->mSupportedStages, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             numMemBarriers, &memBarrier, numImageMemBarriers, &imageMemBarrier );
         }
 
         if( !bNeedsTexTransition && vkTexture &&
@@ -1095,10 +1099,9 @@ namespace Ogre
 
             // Wait until earlier render, compute and transfers are done
             // Block render, compute and transfers until we're done
-            vkCmdPipelineBarrier( getCurrentCmdBuffer(), VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                  dstStage & mOwnerDevice->mSupportedStages, 0, numMemBarriers,
-                                  &memBarrier, 0u, 0, static_cast<uint32_t>( mImageMemBarriers.size() ),
-                                  mImageMemBarriers.begin() );
+            _jahCopyBarrier( VK_PIPELINE_STAGE_TRANSFER_BIT, dstStage & mOwnerDevice->mSupportedStages,
+                             numMemBarriers, &memBarrier,
+                             static_cast<uint32>( mImageMemBarriers.size() ), mImageMemBarriers.begin() );
 
             mImageMemBarriers.clear();
             mImageMemBarrierPtrs.clear();
@@ -1316,6 +1319,22 @@ namespace Ogre
         if( all || ( stages & VK_PIPELINE_STAGE_HOST_BIT ) )
             access |= VK_ACCESS_HOST_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
         return access;
+    }
+    //-------------------------------------------------------------------------
+    void VulkanQueue::_jahCopyBarrier( VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
+                                       uint32 numMemBarriers, VkMemoryBarrier *memBarriers,
+                                       uint32 numImageBarriers, VkImageMemoryBarrier *imageBarriers )
+    {
+        // Jahshaka (ENGINE-UPGRADE-ASYNC-3 stage 1): the graphics family records upstream's barrier
+        // unchanged; another family (a routed copy on the async compute queue) fits it first (the
+        // stage-2 read's W1 rule).
+        if( mFamily != Graphics )
+        {
+            _jahFitBarrier( srcStage, dstStage, memBarriers, numMemBarriers, imageBarriers,
+                            numImageBarriers );
+        }
+        vkCmdPipelineBarrier( getCurrentCmdBuffer(), srcStage, dstStage, 0, numMemBarriers, memBarriers,
+                              0u, 0, numImageBarriers, imageBarriers );
     }
     //-------------------------------------------------------------------------
     void VulkanQueue::_jahFitBarrier( VkPipelineStageFlags &srcStage, VkPipelineStageFlags &dstStage,
