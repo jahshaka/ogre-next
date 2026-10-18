@@ -478,8 +478,21 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void ParallaxCorrectedCubemapAuto::collectDirtyProbes()
     {
-        if( !mPaused )
-            this->updateSceneGraph();
+        if( mPaused )
+            return;
+        this->updateSceneGraph();
+        // A HOST THAT COLLECTS AFTER THE FRAME'S updateSceneGraph (setCollectsExternally): a static probe that culls
+        // lights has just added its camera to light culling (CubemapProbe::_prepareForRendering), after the frame's
+        // light list was built — rebuilt here, once, so the list holds the lamps only the probe sees (the area lights
+        // and the shadow node read it), as it does when the collection runs in frameStarted, before the scene graph.
+        if( mCollectsExternally )
+        {
+            bool addedCamera = false;
+            for( const CubemapProbe *probe : mDirtyProbes )
+                addedCamera = addedCamera || ( probe->mStatic && probe->mCullLights && probe->mCamera );
+            if( addedCamera )
+                mSceneManager->_rebuildLightList();
+        }
     }
     //-----------------------------------------------------------------------------------
     bool ParallaxCorrectedCubemapAuto::frameStarted( const FrameEvent &evt )
