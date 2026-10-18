@@ -646,6 +646,12 @@ namespace Ogre
                 pipelineCacheCreateInfo.initialDataSize =
                     buf.size() - sizeof( PipelineCachePrefixHeader );
                 pipelineCacheCreateInfo.pInitialData = buf.data() + sizeof( PipelineCachePrefixHeader );
+                // (Jahshaka, FRAME-MONITOR-DOOR-1) NEVER EXTERNALLY SYNCHRONIZED: savePipelineCache reads this cache from
+                // the host's disk-cache writer thread while the render thread and the compile workers create pipelines
+                // with it — legal because vkGetPipelineCacheData's pipelineCache carries no externsync in vk.xml, and
+                // vkCreate*Pipelines' is externsync only for a cache created with this flag.
+                OGRE_ASSERT_LOW( ( pipelineCacheCreateInfo.flags &
+                                       VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT ) == 0 );
 
                 VkPipelineCache pipelineCache{};
                 result = vkCreatePipelineCache( mDevice->mDevice, &pipelineCacheCreateInfo, nullptr,
@@ -669,6 +675,12 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
+    // (Jahshaka, FRAME-MONITOR-DOOR-1) THREAD-SAFE OFF THE RENDER THREAD: the host's disk-cache writer calls this while
+    // frames draw. vkGetPipelineCacheData's pipelineCache has NO externsync in vk.xml (the driver synchronises the
+    // cache internally), the cache is created without VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT (asserted
+    // at both creates), and this reads nothing of the render system but the device's two handles and the log. The
+    // device outliving the call is the CALLER's (Jahshaka: the writer is flushed before the device dies). The
+    // "fragile close to PSO creation" note below stays the caller's policy: a settled burst.
     void VulkanRenderSystem::savePipelineCache( DataStreamPtr stream ) const
     {
 #ifdef OGRE_VK_WORKAROUND_BROKEN_VKPIPELINECACHE
