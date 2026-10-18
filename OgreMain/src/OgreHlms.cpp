@@ -30,6 +30,8 @@ THE SOFTWARE.
 
 #include "OgreHlms.h"
 
+#include <atomic>
+
 #include "Compositor/OgreCompositorShadowNode.h"
 #include "Compositor/Pass/PassScene/OgreCompositorPassSceneDef.h"
 #include "OgreBitset.inl"
@@ -285,6 +287,12 @@ namespace Ogre
     LightweightMutex Hlms::msGlobalMutex;
     bool Hlms::msHasParticleFX2Plugin = false;
 
+    // (Jahshaka) THE CODE-CACHE GENERATIONS ARE PROCESS-WIDE: every Hlms takes a fresh value at construction and at
+    // every clearShaderCache, so no two code caches — a destroyed Hlms and one re-registered at its type included —
+    // ever share a generation, and HlmsDiskCache::appendFrom can trust the value alone.
+    static std::atomic<uint32> sJahCodeCacheGenerations{ 0u };
+    static uint32 jahNextCodeCacheGeneration() { return ++sJahCodeCacheGenerations; }
+    //-----------------------------------------------------------------------------------
     Hlms::Hlms( HlmsTypes type, const String &typeName, Archive *dataFolder,
                 ArchiveVec *libraryFolders ) :
         mDataFolder( dataFolder ),
@@ -328,6 +336,7 @@ namespace Ogre
         mTypeNameStr( typeName )
     {
         memset( mShaderTargets, 0, sizeof( mShaderTargets ) );
+        mJahCodeCacheGeneration = jahNextCodeCacheGeneration();
 
         // ASYNC-SHADERS-1: every slot, once (see kAsyncTidBase). Nothing ever resizes mT again.
         mT.resize( kAsyncTidBase + kNumAsyncTids );
@@ -2230,7 +2239,7 @@ namespace Ogre
         mShaderCodeCacheDirty = true;
         // (Jahshaka) A NEW GENERATION: an incremental disk-cache copy restarts, and the template checksum is
         // re-hashed at its next ask (a reload that follows this call changes the files it hashes).
-        ++mJahCodeCacheGeneration;
+        mJahCodeCacheGeneration = jahNextCodeCacheGeneration();
         mJahTemplateChecksumValid = false;
     }
     //-----------------------------------------------------------------------------------

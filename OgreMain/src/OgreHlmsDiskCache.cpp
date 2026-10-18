@@ -115,7 +115,8 @@ namespace Ogre
         // of a dirty Hlms on every save (1.4-1.7 ms per Hlms measured, in the render frame that ran the save). The
         // code cache is APPEND-ONLY between clears (Hlms::clearShaderCache bumps its generation), so this object
         // keeps what it copied and copies, under hlms->mMutex, only the entries past the ones it holds — at most
-        // `maxEntries` of them per call. A moved generation, or another Hlms, starts it over. When caught up it
+        // `maxEntries` of them per call. A moved generation starts it over — and generations are unique process-wide
+        // (Hlms.cpp), so another Hlms, even one re-registered at the same type, is a moved generation. When caught up it
         // re-copies the rest whole (the header, the custom piece files, the deferred entries, the PSO list: <= 0.07
         // ms measured) and returns 0; else it returns how many entries are still to copy.
         if( !mJahIncrementalValid || mJahGeneration != hlms->getShaderCodeCacheGeneration() ||

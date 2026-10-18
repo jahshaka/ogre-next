@@ -322,9 +322,10 @@ namespace Ogre
         LightGatheringMode mLightGatheringMode;
         bool               mStaticBranchingLights;
         bool               mShaderCodeCacheDirty;
-        /// (Jahshaka) THE CODE CACHE'S GENERATION: bumped by clearShaderCache, the one path that empties
-        /// mShaderCodeCache (which is append-only in between) — HlmsDiskCache::appendFrom restarts its incremental
-        /// copy when it moved. Written by the Hlms' owner thread only.
+        /// (Jahshaka) THE CODE CACHE'S GENERATION, unique PROCESS-WIDE: a fresh value from one atomic counter at
+        /// construction and at every clearShaderCache (the one path that empties mShaderCodeCache, append-only in
+        /// between) — HlmsDiskCache::appendFrom restarts its incremental copy when it moved, and no other Hlms (a
+        /// re-registered one of the same type included) can carry the value it holds. Written by the owner thread.
         uint32 mJahCodeCacheGeneration = 0u;
         /// (Jahshaka) THE TEMPLATE CHECKSUM, computed ONCE PER GENERATION (getTemplateChecksum reads and hashes every
         /// template and piece FILE: 0.18-0.75 ms per Hlms measured, on every disk-cache save before this). Invalidated
