@@ -333,7 +333,17 @@ namespace Ogre
         ScopedLock lock( mMicrocodeCacheMutex );
         if( !mCacheDirty )
             return;
-
+        saveMicrocodeCache( stream, mMicrocodeCache );
+    }
+    //---------------------------------------------------------------------
+    void GpuProgramManager::copyMicrocodeCache( MicrocodeMap &out ) const
+    {
+        ScopedLock lock( mMicrocodeCacheMutex );
+        out = mMicrocodeCache;
+    }
+    //---------------------------------------------------------------------
+    void GpuProgramManager::saveMicrocodeCache( DataStreamPtr stream, const MicrocodeMap &microcodes )
+    {
         if( !stream->isWriteable() )
         {
             OGRE_EXCEPT( Exception::ERR_CANNOT_WRITE_TO_FILE,
@@ -342,12 +352,12 @@ namespace Ogre
         }
 
         // write the size of the array
-        uint32 sizeOfArray = static_cast<uint32>( mMicrocodeCache.size() );
+        uint32 sizeOfArray = static_cast<uint32>( microcodes.size() );
         stream->write( &sizeOfArray, sizeof( uint32 ) );
 
         // loop the array and save it
-        MicrocodeMap::const_iterator iter = mMicrocodeCache.begin();
-        MicrocodeMap::const_iterator iterE = mMicrocodeCache.end();
+        MicrocodeMap::const_iterator iter = microcodes.begin();
+        MicrocodeMap::const_iterator iterE = microcodes.end();
         for( ; iter != iterE; ++iter )
         {
             // saves the hash of the shader

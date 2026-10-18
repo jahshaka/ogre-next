@@ -294,6 +294,13 @@ namespace Ogre
         @param stream The destination stream
         */
         virtual void saveMicrocodeCache( DataStreamPtr stream ) const;
+        /// (Jahshaka, FRAME-MONITOR-DOOR-1) Serialises a GIVEN map in saveMicrocodeCache's format — the bytes a
+        /// copy taken by copyMicrocodeCache turns into, on any thread: it touches nothing of the manager.
+        static void saveMicrocodeCache( DataStreamPtr stream, const MicrocodeMap &microcodes );
+        /// (Jahshaka, FRAME-MONITOR-DOOR-1) A SNAPSHOT of the microcode cache, under its mutex: the map of shared
+        /// pointers (the blobs are immutable once added — a removal drops the map's reference, never the bytes a
+        /// copy holds), so a caller serialises it later, elsewhere, without the lock.
+        void copyMicrocodeCache( MicrocodeMap &out ) const;
         /** Loads the microcode cache from disk.
         @param stream The source stream
         */
