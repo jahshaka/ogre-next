@@ -1082,6 +1082,16 @@ namespace Ogre
         /// See Camera::setLightCullingVisibility
         void _setLightCullingVisibility( Camera *camera, bool collectLights, bool isCubemap );
 
+        /** Rebuilds the global light list (and every object's own light list) from the cameras queued for light
+            culling now — what updateSceneGraph does after updating the bounds.
+        @remarks
+            For a camera added to light culling AFTER this frame's updateSceneGraph (a static cubemap probe prepared
+            for rendering inside the frame, ParallaxCorrectedCubemapAuto::collectDirtyProbes): without it the frame's
+            list lacks the lamps only that camera sees. The transforms and bounds must be the frame's (call it after
+            updateSceneGraph, before rendering).
+        */
+        void _rebuildLightList() { buildLightList(); }
+
         /** Creates a light for use in the scene.
             @remarks
                 The direction and position of a light is managed via
