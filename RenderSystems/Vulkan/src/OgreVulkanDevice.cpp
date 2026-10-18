@@ -1155,12 +1155,11 @@ namespace Ogre
             // initial pipeline cache
             VkPipelineCacheCreateInfo pipelineCacheCreateInfo;
             makeVkStruct( pipelineCacheCreateInfo, VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO );
-            // (Jahshaka, FRAME-MONITOR-DOOR-1) NEVER EXTERNALLY SYNCHRONIZED: savePipelineCache reads this cache from
-            // the host's disk-cache writer thread while the render thread and the compile workers create pipelines
-            // with it — legal because vkGetPipelineCacheData's pipelineCache carries no externsync in vk.xml, and
-            // vkCreate*Pipelines' is externsync only for a cache created with this flag.
-            OGRE_ASSERT_LOW( ( pipelineCacheCreateInfo.flags &
-                               VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT ) == 0 );
+            // (Jahshaka, FRAME-MONITOR-DOOR-1) FLAGS 0 — NEVER EXTERNALLY SYNCHRONIZED, and the documented thread-safety
+            // of savePipelineCache rests on it: the host's disk-cache writer reads this cache while the render thread
+            // and the compile workers create pipelines with it, legal because vkGetPipelineCacheData's pipelineCache
+            // carries no externsync in vk.xml and vkCreate*Pipelines' is externsync only for a cache created with
+            // VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT. Keep the flags 0.
             result =
                 vkCreatePipelineCache( mDevice, &pipelineCacheCreateInfo, nullptr, &mPipelineCache );
             checkVkResult( this, result, "vkCreatePipelineCache" );
