@@ -415,6 +415,12 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void Hlms::getTemplateChecksum( uint64 outHash[2] ) const
     {
+        if( mJahTemplateChecksumValid )
+        {
+            outHash[0] = mJahTemplateChecksum[0];
+            outHash[1] = mJahTemplateChecksum[1];
+            return;
+        }
         FastArray<uint8> fileContents;
         fileContents.resize( sizeof( uint64 ) * 2u, 0 );
 
@@ -443,6 +449,9 @@ namespace Ogre
         }
 
         memcpy( outHash, fileContents.begin(), sizeof( uint64 ) * 2u );
+        mJahTemplateChecksum[0] = outHash[0];
+        mJahTemplateChecksum[1] = outHash[1];
+        mJahTemplateChecksumValid = true;
     }
     //-----------------------------------------------------------------------------------
     void Hlms::enumeratePieceFiles()
@@ -1968,6 +1977,7 @@ namespace Ogre
 
         mDataFolder = newDataFolder;
         enumeratePieceFiles();
+        mJahTemplateChecksumValid = false;   // (Jahshaka) the reloaded files are what the checksum hashes
 
         // Reload datablock pieces (those that can be reloaded from disk).
         for( auto &itor : mDatablockCustomPieceFiles )
@@ -2218,6 +2228,10 @@ namespace Ogre
         mShaderCodeCache.clear();
         mShadersGenerated = 0u;
         mShaderCodeCacheDirty = true;
+        // (Jahshaka) A NEW GENERATION: an incremental disk-cache copy restarts, and the template checksum is
+        // re-hashed at its next ask (a reload that follows this call changes the files it hashes).
+        ++mJahCodeCacheGeneration;
+        mJahTemplateChecksumValid = false;
     }
     //-----------------------------------------------------------------------------------
     void Hlms::processPieces( Archive *archive, const StringVector &pieceFiles, const size_t tid )

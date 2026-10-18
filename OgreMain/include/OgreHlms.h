@@ -322,6 +322,17 @@ namespace Ogre
         LightGatheringMode mLightGatheringMode;
         bool               mStaticBranchingLights;
         bool               mShaderCodeCacheDirty;
+        /// (Jahshaka) THE CODE CACHE'S GENERATION: bumped by clearShaderCache, the one path that empties
+        /// mShaderCodeCache (which is append-only in between) — HlmsDiskCache::appendFrom restarts its incremental
+        /// copy when it moved. Written by the Hlms' owner thread only.
+        uint32 mJahCodeCacheGeneration = 0u;
+        /// (Jahshaka) THE TEMPLATE CHECKSUM, computed ONCE PER GENERATION (getTemplateChecksum reads and hashes every
+        /// template and piece FILE: 0.18-0.75 ms per Hlms measured, on every disk-cache save before this). Invalidated
+        /// by every path that (re)loads the templates or pieces or changes the file extension: clearShaderCache, which
+        /// reloadFrom, _changeRenderSystem and setPrecisionMode run first (nothing asks inside them), and reloadFrom
+        /// again after its reload. The datablock custom pieces are not hashed by it (their own checksums are).
+        mutable bool   mJahTemplateChecksumValid = false;
+        mutable uint64 mJahTemplateChecksum[2] = { 0u, 0u };
         uint8              mParticleSystemConstSlot;
         uint8              mParticleSystemSlot;
         uint16             mNumLightsLimit;
@@ -780,7 +791,11 @@ namespace Ogre
         const String &getShaderProfile() const { return mShaderProfile; }
         IdString      getShaderSyntax() const { return mShaderSyntax; }
 
+        /// (Jahshaka) Cached per generation of the code cache (mJahTemplateChecksumValid): the first ask hashes the
+        /// template and piece files, every later one copies the value until a reload invalidates it.
         void getTemplateChecksum( uint64 outHash[2] ) const;
+        /// (Jahshaka) See mJahCodeCacheGeneration.
+        uint32 getShaderCodeCacheGeneration() const { return mJahCodeCacheGeneration; }
 
         /// Sets the precision mode of Hlms. See PrecisionMode
         /// Note: This call may invalidate the shader cache!

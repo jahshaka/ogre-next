@@ -42,6 +42,7 @@ THE SOFTWARE.
 #endif
 
 #include <algorithm>
+#include <limits>
 #include <atomic>
 
 namespace Ogre
@@ -69,6 +70,8 @@ namespace Ogre
         mNativeShadingLangVer = 0u;
         mPrecisionMode = Hlms::PrecisionFull32;
         mFastShaderBuildHack = true;
+        mJahIncrementalValid = false;   // (Jahshaka) appendFrom starts over
+        mJahLiveConsumed = mJahLiveCopied = 0u;
     }
     //-----------------------------------------------------------------------------------
     //-----------------------------------------------------------------------------------
@@ -101,42 +104,48 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void HlmsDiskCache::copyFrom( Hlms *hlms )
     {
+        // (Jahshaka) A WHOLE COPY = an incremental one from nothing, in one call.
         clearCache();
-
-        mCache.type = hlms->getType();
-        mShaderProfile = hlms->getShaderProfile();
-        mNativeShadingLangVer = hlms->getRenderSystem()->getNativeShadingLanguageVersion();
-        mPrecisionMode = hlms->getSupportedPrecisionMode();
-        mFastShaderBuildHack = hlms->getFastShaderBuildHack();
-        hlms->getTemplateChecksum( mCache.templateHash );
-
+        appendFrom( hlms, std::numeric_limits<size_t>::max() );
+    }
+    //-----------------------------------------------------------------------------------
+    size_t HlmsDiskCache::appendFrom( Hlms *hlms, size_t maxEntries, size_t *outCopied )
+    {
+        // (Jahshaka, FRAME-MONITOR-DOOR-1) THE INCREMENTAL COPY. copyFrom deep-copied every shader's source strings
+        // of a dirty Hlms on every save (1.4-1.7 ms per Hlms measured, in the render frame that ran the save). The
+        // code cache is APPEND-ONLY between clears (Hlms::clearShaderCache bumps its generation), so this object
+        // keeps what it copied and copies, under hlms->mMutex, only the entries past the ones it holds — at most
+        // `maxEntries` of them per call. A moved generation, or another Hlms, starts it over. When caught up it
+        // re-copies the rest whole (the header, the custom piece files, the deferred entries, the PSO list: <= 0.07
+        // ms measured) and returns 0; else it returns how many entries are still to copy.
+        if( !mJahIncrementalValid || mJahGeneration != hlms->getShaderCodeCacheGeneration() ||
+            mCache.type != hlms->getType() )
         {
-            // Copy datablock's custom pieces
-            // (Those that came from files. The ones from memory cannot be cached).
-            mCache.datablockCustomPieceFiles.reserve( hlms->mDatablockCustomPieceFiles.size() );
-            for( const auto &itPair : hlms->mDatablockCustomPieceFiles )
-            {
-                const Hlms::DatablockCustomPieceFile &customPieceFile = itPair.second;
-                if( customPieceFile.isCacheable() )
-                {
-                    DatablockCustomPiecesCache cacheEntry;
-                    cacheEntry.filename = customPieceFile.filename;
-                    cacheEntry.resourceGroup = customPieceFile.resourceGroup;
-                    customPieceFile.getCodeChecksum( cacheEntry.sourceCodeHash );
-                    mCache.datablockCustomPieceFiles.emplace_back( cacheEntry );
-                }
-            }
+            clearCache();
+            mJahIncrementalValid = true;
+            mJahGeneration = hlms->getShaderCodeCacheGeneration();
+            mCache.type = hlms->getType();
         }
+        // The tail past the live entries is the previous call's deferred entries: re-copied when caught up.
+        mCache.sourceCode.resize( mJahLiveCopied );
 
+        size_t remaining = 0u, copied = 0u;
+        DatablockCustomPiecesCacheVec deferredPieces;   // read under the lock, written after the live list
         {
             // Copy shaders. (ASYNC-SHADERS-1: under the Hlms mutex — the asynchronous compiler's
             // threads append to the code cache while the main thread saves it.)
             ScopedLock lock( hlms->mMutex );
-            mCache.sourceCode.reserve( hlms->mShaderCodeCache.size() );
-            Hlms::ShaderCodeCacheVec::const_iterator itor = hlms->mShaderCodeCache.begin();
-            Hlms::ShaderCodeCacheVec::const_iterator endt = hlms->mShaderCodeCache.end();
-
-            while( itor != endt )
+            const size_t total = hlms->mShaderCodeCache.size();
+            if( total < mJahLiveConsumed )
+            {
+                // Shorter without a new generation breaks the append-only law: start over, never index past it.
+                mCache.sourceCode.clear();
+                mJahLiveConsumed = mJahLiveCopied = 0u;
+            }
+            const size_t endIdx = mJahLiveConsumed + std::min( maxEntries, total - mJahLiveConsumed );
+            Hlms::ShaderCodeCacheVec::const_iterator itor = hlms->mShaderCodeCache.begin() + ptrdiff_t( mJahLiveConsumed );
+            Hlms::ShaderCodeCacheVec::const_iterator endt = hlms->mShaderCodeCache.begin() + ptrdiff_t( endIdx );
+            for( ; itor != endt; ++itor )
             {
                 bool bCacheable = true;
 
@@ -157,52 +166,92 @@ namespace Ogre
                     SourceCode sourceCode( *itor );
                     mCache.sourceCode.push_back( sourceCode );
                 }
-                ++itor;
             }
 
-            // (Jahshaka) THE ENTRIES applyTo KEPT ASIDE (Hlms::mDiskCacheDeferred), written back while their
-            // piece is still unknown to this session: a piece this session registered was recompiled live from
-            // its current content, so its old entries — and its old checksum — are not saved beside the new.
-            for( const Hlms::DiskCacheDeferredPiece &kept : hlms->mDiskCacheDeferredPieces )
+            copied = endIdx - mJahLiveConsumed;
+            mJahLiveConsumed = endIdx;
+            mJahLiveCopied = mCache.sourceCode.size();
+            remaining = total - endIdx;
+            if( !remaining )
             {
-                const int32 nameHash = static_cast<int32>( IdString( kept.filename ).getU32Value() );
-                if( hlms->mDatablockCustomPieceFiles.find( nameHash ) !=
-                    hlms->mDatablockCustomPieceFiles.end() )
+                // (Jahshaka) THE ENTRIES applyTo KEPT ASIDE (Hlms::mDiskCacheDeferred), written back while their
+                // piece is still unknown to this session: a piece this session registered was recompiled live from
+                // its current content, so its old entries — and its old checksum — are not saved beside the new.
+                for( const Hlms::DiskCacheDeferredPiece &kept : hlms->mDiskCacheDeferredPieces )
                 {
-                    continue;
-                }
-                DatablockCustomPiecesCache cacheEntry;
-                cacheEntry.filename = kept.filename;
-                cacheEntry.resourceGroup = kept.resourceGroup;
-                cacheEntry.sourceCodeHash[0] = kept.sourceCodeHash[0];
-                cacheEntry.sourceCodeHash[1] = kept.sourceCodeHash[1];
-                mCache.datablockCustomPieceFiles.push_back( cacheEntry );
-            }
-            for( const Hlms::DiskCacheDeferredEntry &kept : hlms->mDiskCacheDeferred )
-            {
-                bool allUnknown = true;
-                for( size_t i = 0u; i < CustomPieceStage::NumCustomPieceStages && allUnknown; ++i )
-                {
-                    const int32 customPieceName = hlms->getProperty(
-                        kept.mergedCache.setProperties, HlmsBaseProp::_DatablockCustomPieceShaderName[i] );
-                    if( customPieceName && hlms->mDatablockCustomPieceFiles.find( customPieceName ) !=
-                                               hlms->mDatablockCustomPieceFiles.end() )
+                    const int32 nameHash = static_cast<int32>( IdString( kept.filename ).getU32Value() );
+                    if( hlms->mDatablockCustomPieceFiles.find( nameHash ) !=
+                        hlms->mDatablockCustomPieceFiles.end() )
                     {
-                        allUnknown = false;
+                        continue;
                     }
+                    DatablockCustomPiecesCache cacheEntry;
+                    cacheEntry.filename = kept.filename;
+                    cacheEntry.resourceGroup = kept.resourceGroup;
+                    cacheEntry.sourceCodeHash[0] = kept.sourceCodeHash[0];
+                    cacheEntry.sourceCodeHash[1] = kept.sourceCodeHash[1];
+                    deferredPieces.push_back( cacheEntry );
                 }
-                if( !allUnknown )
-                    continue;
-                SourceCode sourceCode;
-                sourceCode.mergedCache = kept.mergedCache;
-                for( size_t i = 0u; i < NumShaderTypes; ++i )
-                    sourceCode.sourceFile[i] = kept.sourceFile[i];
-                mCache.sourceCode.push_back( sourceCode );
+                for( const Hlms::DiskCacheDeferredEntry &kept : hlms->mDiskCacheDeferred )
+                {
+                    bool allUnknown = true;
+                    for( size_t i = 0u; i < CustomPieceStage::NumCustomPieceStages && allUnknown; ++i )
+                    {
+                        const int32 customPieceName = hlms->getProperty(
+                            kept.mergedCache.setProperties, HlmsBaseProp::_DatablockCustomPieceShaderName[i] );
+                        if( customPieceName && hlms->mDatablockCustomPieceFiles.find( customPieceName ) !=
+                                                   hlms->mDatablockCustomPieceFiles.end() )
+                        {
+                            allUnknown = false;
+                        }
+                    }
+                    if( !allUnknown )
+                        continue;
+                    SourceCode sourceCode;
+                    sourceCode.mergedCache = kept.mergedCache;
+                    for( size_t i = 0u; i < NumShaderTypes; ++i )
+                        sourceCode.sourceFile[i] = kept.sourceFile[i];
+                    mCache.sourceCode.push_back( sourceCode );
+                }
+            }
+        }
+        if( outCopied )
+            *outCopied = copied;
+        if( remaining )
+            return remaining;
+
+        mShaderProfile = hlms->getShaderProfile();
+        mNativeShadingLangVer = hlms->getRenderSystem()->getNativeShadingLanguageVersion();
+        mPrecisionMode = hlms->getSupportedPrecisionMode();
+        mFastShaderBuildHack = hlms->getFastShaderBuildHack();
+        hlms->getTemplateChecksum( mCache.templateHash );
+
+        {
+            // Copy datablock's custom pieces
+            // (Those that came from files. The ones from memory cannot be cached).
+            mCache.datablockCustomPieceFiles.clear();
+            mCache.datablockCustomPieceFiles.reserve( hlms->mDatablockCustomPieceFiles.size() );
+            for( const auto &itPair : hlms->mDatablockCustomPieceFiles )
+            {
+                const Hlms::DatablockCustomPieceFile &customPieceFile = itPair.second;
+                if( customPieceFile.isCacheable() )
+                {
+                    DatablockCustomPiecesCache cacheEntry;
+                    cacheEntry.filename = customPieceFile.filename;
+                    cacheEntry.resourceGroup = customPieceFile.resourceGroup;
+                    customPieceFile.getCodeChecksum( cacheEntry.sourceCodeHash );
+                    mCache.datablockCustomPieceFiles.emplace_back( cacheEntry );
+                }
             }
         }
 
+        // ...and the deferred pieces after the live list, as copyFrom always wrote them.
+        mCache.datablockCustomPieceFiles.insert( mCache.datablockCustomPieceFiles.end(), deferredPieces.begin(),
+                                                 deferredPieces.end() );
+
         {
-            // Copy PSOs
+            // Copy PSOs (whole, every call that is caught up: no strings, <= 0.07 ms measured)
+            mCache.pso.clear();
             mCache.pso.reserve( hlms->mShaderCache.size() );
             HlmsCacheVec::const_iterator itor = hlms->mShaderCache.begin();
             HlmsCacheVec::const_iterator endt = hlms->mShaderCache.end();
@@ -317,6 +366,7 @@ namespace Ogre
                 ++itor;
             }
         }
+        return 0u;
     }
     //-----------------------------------------------------------------------------------
     struct CompilerJobParams

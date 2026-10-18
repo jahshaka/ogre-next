@@ -180,6 +180,12 @@ namespace Ogre
         };
 
         bool         mTemplatesOutOfDate;
+        /// (Jahshaka) appendFrom's state: the Hlms code-cache generation copied, how many of its entries were
+        /// examined, how many of mCache.sourceCode came from them (the deferred entries follow).
+        bool   mJahIncrementalValid = false;
+        uint32 mJahGeneration = 0u;
+        size_t mJahLiveConsumed = 0u;
+        size_t mJahLiveCopied = 0u;
         Cache        mCache;
         HlmsManager *mHlmsManager;
         String       mShaderProfile;
@@ -205,6 +211,13 @@ namespace Ogre
         void clearCache();
 
         void copyFrom( Hlms *hlms );
+        /// (Jahshaka, FRAME-MONITOR-DOOR-1) THE INCREMENTAL COPY: copies, under hlms->mMutex, at most `maxEntries`
+        /// of the shader-code entries past the ones this object already holds (the code cache is append-only
+        /// between clears; a new generation — Hlms::clearShaderCache — or another Hlms starts it over). Returns
+        /// the entries still to copy; at 0 the header, the custom piece files, the deferred entries and the PSO list
+        /// were re-copied whole and the object is a complete copy, as copyFrom makes. `outCopied`: the entries this
+        /// call took. The object lives on across saves — that is the point; copyFrom is this from nothing.
+        size_t appendFrom( Hlms *hlms, size_t maxEntries, size_t *outCopied = 0 );
         void applyTo( Hlms *hlms, size_t numThreads );
 
         void saveTo( DataStreamPtr &dataStream );
