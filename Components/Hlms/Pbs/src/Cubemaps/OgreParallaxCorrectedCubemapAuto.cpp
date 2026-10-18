@@ -79,7 +79,8 @@ namespace Ogre
         mTrackedPosition( Vector3::ZERO ),
         mRenderTarget( 0 ),
         mIblTarget( 0 ),
-        mListener( 0 )
+        mListener( 0 ),
+        mCollectsExternally( false )
     {
         const RenderSystemCapabilities *caps =
             mSceneManager->getDestinationRenderSystem()->getCapabilities();
@@ -475,10 +476,16 @@ namespace Ogre
             mSceneManager->clearFrameData();
     }
     //-----------------------------------------------------------------------------------
-    bool ParallaxCorrectedCubemapAuto::frameStarted( const FrameEvent &evt )
+    void ParallaxCorrectedCubemapAuto::collectDirtyProbes()
     {
         if( !mPaused )
             this->updateSceneGraph();
+    }
+    //-----------------------------------------------------------------------------------
+    bool ParallaxCorrectedCubemapAuto::frameStarted( const FrameEvent &evt )
+    {
+        if( !mCollectsExternally )
+            this->collectDirtyProbes();
         return true;
     }
     //-----------------------------------------------------------------------------------

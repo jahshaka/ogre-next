@@ -83,6 +83,9 @@ namespace Ogre
 
         ParallaxCorrectedCubemapAutoListener *mListener;
 
+        /// See setCollectsExternally.
+        bool mCollectsExternally;
+
         void updateSceneGraph();
         /// Probes with a large number of iterations will blow up our memory consumption
         /// because too many commands will be queued up before flushing the command buffer
@@ -173,6 +176,18 @@ namespace Ogre
         /// at once (i.e. at loading time)
         /// This function also uses a memory-friendly way of updating the probes.
         void updateAllDirtyProbes() override;
+
+        /** Collects the probes to update this frame (the tracked position's non-static probes and every dirty
+            one) and prepares them for rendering — what frameStarted does every frame. Does nothing while paused.
+        @remarks
+            A host that dirties probes AFTER Root's frameStarted (its own per-frame probe budget, run where the
+            frame's scene graph is current) calls this once after it, and declares so with
+            setCollectsExternally( true ): frameStarted then leaves the collection to it.
+        */
+        void collectDirtyProbes();
+        /// True: frameStarted does not collect; the host calls collectDirtyProbes once per frame. Default false.
+        void setCollectsExternally( bool bCollectsExternally ) { mCollectsExternally = bCollectsExternally; }
+        bool getCollectsExternally() const { return mCollectsExternally; }
 
         // CompositorWorkspaceListener overloads
         void allWorkspacesBeforeBeginUpdate() override;
