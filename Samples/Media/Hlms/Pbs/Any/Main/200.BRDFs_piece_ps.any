@@ -223,6 +223,9 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
 
 	//We should divide Rd by PI, but it is already included in kD
 	midf3 Rd = (diffuseLobe * fresnelD) * pixelData.diffuse.xyz;
+	// Jahshaka: a library's per-light addition to the diffuse response, NdotL and pixelData in scope (the piece
+	// custom_ps_brdfDiffuse: Hlms Atom's gather records re-emit a metal by its lobe's directional albedo).
+	@insertpiece( custom_ps_brdfDiffuse )
 
 	@property( clear_coat )
 		midf3 color = Rd + Rs;
