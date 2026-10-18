@@ -275,6 +275,11 @@ namespace Ogre
         sceneNode->setPosition( ( restrictedAabbMin + restrictedAabbMax ) * 0.5f );
         sceneNode->setScale( restrictedAabbMax - restrictedAabbMin );
         sceneNode->setOrientation( qRot );
+        // The node's derived transform and the probe's world bounds, current at once: a probe synced inside a
+        // frame (after its updateSceneGraph) is culled and binned (Forward+) in that frame where it was set, not
+        // where it stood. (Before the scene graph the frame's update recomputes them anyway.)
+        mInternalProbe->getWorldAabbUpdated();
+        mInternalProbe->getWorldRadiusUpdated();
 
         mCreator->fillConstBufferData( *this, Matrix4::IDENTITY, Matrix3::IDENTITY,
                                        reinterpret_cast<float *>( mInternalProbe->mGpuData ) );

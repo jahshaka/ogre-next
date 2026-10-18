@@ -49,6 +49,7 @@ THE SOFTWARE.
 #include "OgreMesh2.h"
 #include "OgreMeshManager2.h"
 #include "OgrePixelFormatGpuUtils.h"
+#include "OgreRenderQueue.h"
 #include "OgreRoot.h"
 #include "OgreSceneManager.h"
 #include "OgreSubMesh2.h"
@@ -435,6 +436,13 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void ParallaxCorrectedCubemapAuto::updateAllDirtyProbes()
     {
+        // A PROBE UPDATE INSIDE A FRAME (after the frame's updateSceneGraph built the global light list) must not
+        // leave the frame drawing with an empty one: the list is left as it was found. Between frames it is empty
+        // (Root clears it at the frame's end) and is cleared again as before; inside a frame the list the
+        // updateSceneGraph below rebuilds (the same lamps, their current poses) is kept and only the render
+        // queue's state is cleared.
+        const bool hadLightList = !mSceneManager->getGlobalLightList().lights.empty();
+
         mSceneManager->updateSceneGraph();
 
         mDirtyProbes.clear();
@@ -461,7 +469,10 @@ namespace Ogre
 
         this->updateExpensiveCollectedDirtyProbes( 0 );
 
-        mSceneManager->clearFrameData();
+        if( hadLightList )
+            mSceneManager->getRenderQueue()->clearState();
+        else
+            mSceneManager->clearFrameData();
     }
     //-----------------------------------------------------------------------------------
     bool ParallaxCorrectedCubemapAuto::frameStarted( const FrameEvent &evt )
