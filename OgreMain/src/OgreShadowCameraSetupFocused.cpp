@@ -309,6 +309,11 @@ namespace Ogre
         Vector3 shadowCameraPos = ( vMin + vMax ) * 0.5f;
         shadowCameraPos.z = vMax.z + zPadding;  // Backwards is towards +Z!
 
+        // This frame's window BEFORE the texel snap below reads it back: snapped with the previous frame's
+        // window, a window that moved (a pan, a caster entering the focused body) put the camera on the old
+        // texel grid and the map stepped a frame later (CAMERA-SPLITS-LAG-1).
+        texCam->setOrthoWindow( ( vMax.x - vMin.x ), ( vMax.y - vMin.y ) );
+
         // Round local x/y position based on a world-space texel; this helps to reduce
         // jittering caused by the projection moving with the camera
         const Real worldTexelSizeX = ( texCam->getOrthoWindowWidth() ) / viewportRealSize.x;
@@ -321,7 +326,6 @@ namespace Ogre
         // Go back from light space to world space
         shadowCameraPos = scalarLightSpaceToWorld * shadowCameraPos;
         texCam->setPosition( shadowCameraPos );
-        texCam->setOrthoWindow( ( vMax.x - vMin.x ), ( vMax.y - vMin.y ) );
 
         mMinDistance = 1.0f;
         mMaxDistance =
