@@ -268,11 +268,14 @@ namespace Ogre
 
         const size_t numSets = calculateNumUsedSets();
 
-        // Jahshaka (PHOTON-VOXEL-3): A DYNAMIC SET'S SLOTS LIVE IN THE GLOBAL BINDING
+        // Jahshaka (PHOTON-VOXEL-3, BUGS-1): A DYNAMIC SET'S SLOTS LIVE IN THE GLOBAL BINDING
         // TABLE'S FIXED ARRAYS (OgreVulkanGlobalBindingTable.h), and the render system
         // writes them by slot number with no check in a release build: a layout that
         // needs more slots than the table holds must be refused here, where it is
-        // made, not discovered as corrupted descriptors when it is drawn.
+        // made, not discovered as corrupted descriptors when it is drawn. The test is on
+        // the range's END because the table is indexed by ABSOLUTE slot number (bind
+        // writes from &textures[start]); the descriptors made are end - start. The table
+        // is an emulation array of this render system, not the device's limit.
         for( size_t i = 0u; i < numSets; ++i )
         {
             if( mBaked[i] )
@@ -287,7 +290,10 @@ namespace Ogre
                                  " texture / " +
                                  StringConverter::toString(
                                      mDescBindingRanges[i][DescBindingTypes::Sampler].end ) +
-                                 " sampler slots; the global binding table holds " +
+                                 " sampler slots (the range's end: the table is indexed by "
+                                 "absolute slot); the global binding table (NUM_BIND_TEXTURES / "
+                                 "NUM_BIND_SAMPLERS, an emulation array - not the device's limit) "
+                                 "holds " +
                                  StringConverter::toString( NUM_BIND_TEXTURES ) + " / " +
                                  StringConverter::toString( NUM_BIND_SAMPLERS ),
                              "VulkanRootLayout::createVulkanHandles" );

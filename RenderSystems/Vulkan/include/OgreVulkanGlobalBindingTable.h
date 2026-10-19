@@ -38,18 +38,22 @@ namespace Ogre
 #define NUM_BIND_TEX_BUFFERS 16u
 // We don't use OGRE_MAX_TEXTURE_LAYERS. That's overkill and thus
 // reserved for DescriptorSetTextures kind of textures
-// Jahshaka (PHOTON-VOXEL-3): 64, not 32. The dynamic set's texture and sampler
-// slots are written straight into these arrays by slot number and the only guard
-// was an OGRE_ASSERT_MEDIUM, compiled out of every non-debug build: a pass with more
-// than 32 textures (HlmsPbs with a four-cascade anisotropic chain carries 20 voxel
-// volumes, the shadow maps, the irradiance field, the environment...) wrote past
-// `textures` into `samplers` and past `samplers` into the buffer tables - measured
-// as destroyed samplers and buffers in the next descriptor write and a SIGSEGV in
-// VulkanRootLayout::bind. VulkanRootLayout::createVulkanHandles now refuses a
-// layout whose dynamic set needs more (an exception at PSO creation, not
-// corruption at draw time).
-#define NUM_BIND_TEXTURES 64u
-#define NUM_BIND_SAMPLERS 64u
+// Jahshaka (PHOTON-VOXEL-3, BUGS-1): THE EMULATION TABLE IS INDEXED BY ABSOLUTE SLOT
+// NUMBER, so its size bounds the LAST slot a pass numbers, not the count of textures
+// it binds. VulkanRootLayout::bind hands the descriptor write
+// &textures[range.start] for (end - start) entries, and the Hlms number buffers and
+// tex buffers in the same slot space ahead of the textures: a pass whose textures
+// start at t11 (a derived Hlms with nine reserved buffer slots) and binds 54 textures
+// needs a table of 65. The device's limit is not this array (an RTX 4080's
+// maxPerStageDescriptorSampledImages is 1,048,576): 32 -> 64 when a four-cascade
+// anisotropic voxel chain put 40 volumes in a PBS pass (past 32 the writes ran into
+// `samplers` and the buffer tables - destroyed descriptors and a SIGSEGV in
+// VulkanRootLayout::bind; the only guard was an OGRE_ASSERT_MEDIUM, compiled out),
+// 64 -> 128 when that pass's derived-Hlms twin asked for 65/66. The dirty-slot
+// counters below are uint8 (255 = clean), so 128 fits them. VulkanRootLayout::
+// createVulkanHandles refuses a dynamic set whose range ends past the table.
+#define NUM_BIND_TEXTURES 128u
+#define NUM_BIND_SAMPLERS 128u
 #define NUM_BIND_READONLY_BUFFERS 16u
 
     namespace BakedDescriptorSets
