@@ -270,6 +270,23 @@ midf3 BRDF_IR( midf3 lightDir, midf3 lightDiffuse, PixelData pixelData )
 @end
 @end
 
+// THE SPECULAR LOBE'S ALBEDO TABLE (Jahshaka, PHOTON-3 stage 1): one immutable constant buffer,
+// 528 float4s (2,112 floats: the directional table then the hemispherical rows), bound engine-wide
+// by the host's listener at the slot it names in jah_spec_albedo_cb - past the pass's own buffers
+// and the manual probe's - and read by JahSpecularAlbedo (Hlms/Pbs/Any/JahSpecularAlbedo_piece_all.any).
+// A pass whose host binds no table declares none, and BRDF_EnvMap then fails to compile: the table
+// is the environment term, there is no fallback arm.
+@piece( DeclJahSpecularAlbedo )
+	@property( jah_spec_albedo_cb )
+		CONST_BUFFER( JahSpecularAlbedoBuf, @value( jah_spec_albedo_cb ) )
+		{
+			float4 jahSpecularAlbedoTable[528];
+		};
+		#define JAH_SPEC_ALBEDO( k ) jahSpecularAlbedoTable[( k ) >> 2][( k ) & 3]
+		@insertpiece( JahSpecularAlbedo )
+	@end
+@end
+
 /// Applying Fresnel term to prefiltered cubemap has a bad effect of always showing high specular
 /// color at edge, even for rough surface. See https://seblagarde.wordpress.com/2011/08/17/hello-world/
 /// and see http://www.ogre3d.org/forums/viewtopic.php?f=25&p=523550#p523544
@@ -290,15 +307,6 @@ midf3 BRDF_IR( midf3 lightDir, midf3 lightDiffuse, PixelData pixelData )
 	//Thus H = N, and therefore we use VdotN (NdotV)
 	//float VdotH = saturate( dot( pixelData.viewDir, normalize( pixelData.reflDir + pixelData.viewDir ) ) );
 	float_fresnel fresnelS = @insertpiece( getSpecularFresnelWithRoughness );
-
-	@property( ltc_texture_available )
-		#define brdfLUT ltcMatrix
-		midf3 envBRDF = OGRE_SampleArray2DF16( brdfLUT, ltcSampler,
-											   float2( pixelData.NdotV,
-													   1.0 - pixelData.perceptualRoughness ), 2 ).xyz;
-	@else
-		midf3 envBRDF = midf3_c( 1.0f, 0.0f, 1.0f );
-	@end
 
 	@property( fresnel_has_diffuse )
 		@property( fresnel_separate_diffuse )
@@ -321,12 +329,20 @@ midf3 BRDF_IR( midf3 lightDir, midf3 lightDiffuse, PixelData pixelData )
         // the constant alone everywhere else.
         midf3 Rd = pixelData.envColourD * pixelData.diffuse.xyz * _h( 3.141592654 ) * fresnelD *
                    _h( jahDiffuseAlbedo( float( pixelData.NdotV ), float( pixelData.perceptualRoughness ) ) );
+        // THE SPECULAR LOBE'S ALBEDO FOR THE ENVIRONMENT (Jahshaka, PHOTON-3 stage 1): the split
+        // sum, Rs = envColourS kS ( F0 A( NdotV, r ) + B( NdotV, r ) ) - the prefiltered radiance
+        // times the lobe's directional albedo, exact for a uniform environment. A and B are the
+        // integral of BRDF_Default's own lobe (GGX, the height-correlated Smith visibility,
+        // Schlick on V.H), Jahshaka's table read through JahSpecularAlbedo (within 0.22 % of the
+        // integral) from the constant buffer DeclJahSpecularAlbedo declares; no texture slot.
+        // Upstream's two arms are gone: without the DFG table envBRDF was ( 1, 0, 1 ), so Rs was
+        // envColourS kS fresnelS with no albedo integral at all (a rough metal read 3.26 x its true
+        // term at normal view, a rough dielectric 1.48 x at grazing), and with the table - bound
+        // only beside an area light - the fresnelS A + B arm read up to 1.9 x on a dielectric.
+        float jahEnvA, jahEnvB;
+        jahSpecularAlbedo( float( pixelData.NdotV ), float( pixelData.perceptualRoughness ), jahEnvA, jahEnvB );
         midf3 Rs = pixelData.envColourS * pixelData.specular.xyz *
-    @property( industry_compatible )
-                    ( pixelData.F0 * envBRDF.x + envBRDF.y );
-    @else
-                    ( fresnelS * envBRDF.x + envBRDF.y );
-    @end
+                   ( pixelData.F0 * midf_c( jahEnvA ) + midf_c( jahEnvB ) );
 
 	@property( clear_coat )
 		@property( normal_map )
@@ -341,15 +357,10 @@ midf3 BRDF_IR( midf3 lightDir, midf3 lightDiffuse, PixelData pixelData )
 		Rd *= attenuation;
 		Rs *= attenuation;
 
-		@property( ltc_texture_available )
-			midf3 clearCoatEnvBRDF = OGRE_SampleArray2DF16( brdfLUT, ltcSampler,
-															float2( clearCoatNoV,
-																	1.0 - pixelData.clearCoatPerceptualRoughness ), 2 ).xyz;
-		@else
-			midf3 clearCoatEnvBRDF = midf3_c( 1.0f, 0.0f, 1.0f );
-		@end
-
-		Rs += pixelData.clearCoatEnvColourS * pixelData.specular.xyz * ( _h( 0.04 ) * clearCoatEnvBRDF.x + clearCoatEnvBRDF.y ) * pixelData.clearCoat;
+		// The coat's lobe by the same table (Jahshaka, PHOTON-3 stage 1): F0 = 0.04 at its own roughness.
+		float jahCoatA, jahCoatB;
+		jahSpecularAlbedo( float( clearCoatNoV ), float( pixelData.clearCoatPerceptualRoughness ), jahCoatA, jahCoatB );
+		Rs += pixelData.clearCoatEnvColourS * pixelData.specular.xyz * midf_c( 0.04 * jahCoatA + jahCoatB ) * pixelData.clearCoat;
 	@end
 
 	finalColour += Rd + Rs;

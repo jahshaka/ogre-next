@@ -17,6 +17,7 @@
 	@end
 
 	@property( !hlms_prepass && needs_view_dir )
+		@insertpiece( DeclJahSpecularAlbedo )
 		@insertpiece( JahDiffuseAlbedo )
 		@insertpiece( DeclareBRDF )
 		@insertpiece( DeclareBRDF_InstantRadiosity )
