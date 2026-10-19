@@ -104,4 +104,33 @@ float jahSpotAttenuation( float spotCosAngle, vec3 spotParams )
 	float spotAtten = clamp( ( spotCosAngle - spotParams.y ) * spotParams.x, 0.0, 1.0 );
 	return pow( spotAtten, spotParams.z );
 }
+
+// THE LOBE ITSELF, TOWARD ONE VIEW (PHOTON-3 stage 2): BRDF_Default's specular f_s = D Vis F - GGX D with
+// alpha = max( r^2, 0.001 ) (the pixel's clamp), the height-correlated Smith visibility, F = F0 ( 1 - Fc ) +
+// w Fc, Fc = ( 1 - V.H )^5 - the function JahSpecularAlbedo's table integrates: the radiance a light of irradiance E
+// at cosine mu sends toward V is E mu f_s, and its cosine-weighted integral over V is mu ( F0 A + w B ). Zero
+// where L or V is below the surface. The readers that know their own ray evaluate it (the ray hit, the card
+// read), where the stores keep the lobe's integral.
+vec3 jahSpecularLobe( vec3 N, vec3 L, vec3 V, float r, vec3 F0, float w )
+{
+	const float NdotL = dot( N, L );
+	const float NdotV = dot( N, V );
+	if( !( NdotL > 0.0 ) || !( NdotV > 0.0 ) )
+		return vec3( 0.0 );
+	const vec3 H = normalize( L + V );
+	const float VdotH = clamp( dot( V, H ), 0.0, 1.0 );
+	const float a = max( r * r, 0.001 );
+	const float a2 = a * a;
+	// 1 - N.H^2 by the Lagrange identity, | N x H |^2 (BRDF_Default's half-precision form): the full-precision
+	// ( N.H a2 - N.H ) N.H + 1 cancels to a2 at the peak, where a polished lobe's a2 (6e-6 at r 0.05) is a few
+	// float steps of 1 - its peak read 2.6 % low (gi.metal_bounce's law).
+	const vec3 NxH = cross( N, H );
+	const float f = a2 + dot( NxH, NxH ) * ( 1.0 - a2 );
+	const float D = a2 / ( 3.141592654 * f * f );
+	const float lv = NdotL * sqrt( ( -NdotV * a2 + NdotV ) * NdotV + a2 );
+	const float ll = NdotV * sqrt( ( -NdotL * a2 + NdotL ) * NdotL + a2 );
+	const float vis = 0.5 / ( lv + ll + 1e-6 );
+	const float fc = pow( 1.0 - VdotH, 5.0 );
+	return ( D * vis ) * ( F0 * ( 1.0 - fc ) + vec3( w * fc ) );
+}
 @end
