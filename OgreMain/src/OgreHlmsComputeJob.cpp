@@ -68,6 +68,7 @@ namespace Ogre
         mSamplersDescSet( 0 ),
         mUavsDescSet( 0 ),
         mInformHlmsOfTextureData( false ),
+        mInformHlmsOfTextureSize( true ),
         mMaxTexUnitReached( 0 ),
         mMaxUavUnitReached( 0 ),
         mPsoCacheHash( std::numeric_limits<size_t>::max() ),
@@ -204,21 +205,26 @@ namespace Ogre
 
         const size_t texturePropSize = propName.size();
 
-        propName.a( "_width" );  // texture0_width
-        setProperty( propName.c_str(), static_cast<int32>( texture->getWidth() ) );
-        propName.resize( texturePropSize );
+        // JAHSHAKA fork (BUGS-6): the sizes only for a job whose source reads them
+        // (setInformHlmsOfTextureSize) - every property is part of the permutation.
+        if( mInformHlmsOfTextureSize )
+        {
+            propName.a( "_width" );  // texture0_width
+            setProperty( propName.c_str(), static_cast<int32>( texture->getWidth() ) );
+            propName.resize( texturePropSize );
 
-        propName.a( "_height" );  // texture0_height
-        setProperty( propName.c_str(), static_cast<int32>( texture->getHeight() ) );
-        propName.resize( texturePropSize );
+            propName.a( "_height" );  // texture0_height
+            setProperty( propName.c_str(), static_cast<int32>( texture->getHeight() ) );
+            propName.resize( texturePropSize );
 
-        propName.a( "_depth" );  // texture0_depth
-        setProperty( propName.c_str(), static_cast<int32>( texture->getDepthOrSlices() ) );
-        propName.resize( texturePropSize );
+            propName.a( "_depth" );  // texture0_depth
+            setProperty( propName.c_str(), static_cast<int32>( texture->getDepthOrSlices() ) );
+            propName.resize( texturePropSize );
 
-        propName.a( "_mipmaps" );  // texture0_mipmaps
-        setProperty( propName.c_str(), texture->getNumMipmaps() );
-        propName.resize( texturePropSize );
+            propName.a( "_mipmaps" );  // texture0_mipmaps
+            setProperty( propName.c_str(), texture->getNumMipmaps() );
+            propName.resize( texturePropSize );
+        }
 
         propName.a( "_msaa" );  // texture0_msaa
         setProperty( propName.c_str(), texture->isMultisample() ? 1 : 0 );
@@ -627,17 +633,20 @@ namespace Ogre
                         uint32 mipLevel =
                             std::min<uint32>( texSlot.mipmapLevel, texture->getNumMipmaps() - 1u );
 
-                        propName.a( "_width_with_lod" );  // uav0_width_with_lod
-                        setProperty( propName.c_str(),
-                                     static_cast<int32>(
-                                         std::max( texture->getWidth() >> (uint32)mipLevel, 1u ) ) );
-                        propName.resize( texturePropSize );
+                        if( mInformHlmsOfTextureSize )  // JAHSHAKA fork (BUGS-6)
+                        {
+                            propName.a( "_width_with_lod" );  // uav0_width_with_lod
+                            setProperty( propName.c_str(),
+                                         static_cast<int32>(
+                                             std::max( texture->getWidth() >> (uint32)mipLevel, 1u ) ) );
+                            propName.resize( texturePropSize );
 
-                        propName.a( "_height_with_lod" );  // uav0_height_with_lod
-                        setProperty( propName.c_str(),
-                                     static_cast<int32>(
-                                         std::max( texture->getHeight() >> (uint32)mipLevel, 1u ) ) );
-                        propName.resize( texturePropSize );
+                            propName.a( "_height_with_lod" );  // uav0_height_with_lod
+                            setProperty( propName.c_str(),
+                                         static_cast<int32>(
+                                             std::max( texture->getHeight() >> (uint32)mipLevel, 1u ) ) );
+                            propName.resize( texturePropSize );
+                        }
                     }
                     else if( itor->isBuffer() && itor->getBuffer().buffer )
                     {
@@ -652,6 +661,12 @@ namespace Ogre
                 mMaxUavUnitReached = static_cast<uint8>( mUavSlots.size() );
             }
         }
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsComputeJob::setInformHlmsOfTextureSize( bool bInformHlms )
+    {
+        mInformHlmsOfTextureSize = bInformHlms;
+        mPsoCacheHash = std::numeric_limits<size_t>::max();
     }
     //-----------------------------------------------------------------------------------
     void HlmsComputeJob::setInformHlmsOfTextureData( bool bInformHlms )

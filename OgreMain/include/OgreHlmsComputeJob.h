@@ -114,6 +114,8 @@ namespace Ogre
         DescriptorSetUav const      *mUavsDescSet;
 
         bool            mInformHlmsOfTextureData;
+        /// See setInformHlmsOfTextureSize (Jahshaka fork, BUGS-6). True = upstream's behaviour.
+        bool            mInformHlmsOfTextureSize;
         uint8           mMaxTexUnitReached;
         uint8           mMaxUavUnitReached;
         HlmsPropertyVec mSetProperties;
@@ -171,6 +173,22 @@ namespace Ogre
             True to enable this feature, false to disable.
         */
         void setInformHlmsOfTextureData( bool bInformHlms );
+
+        /** JAHSHAKA fork (BUGS-6). Whether the texture data setInformHlmsOfTextureData passes
+            includes the SIZES: textureN_width / _height / _depth / _mipmaps and uavN_width_with_lod /
+            _height_with_lod. True (the default) is upstream's behaviour.
+        @par
+            Every property passed is part of the job's permutation, so a job whose source never
+            reads a size but binds textures of many sizes (a per-mip, per-volume clone, a clear of
+            whatever it is given) gets a new permutation per size while its code is the same: a
+            preprocess, a hash and a pipeline in the frame for nothing (measured at our startup
+            gate: 191 permutations for 61 shaders). Such a job passes false; the formats, types,
+            sRGB, MSAA and integer facts are still passed (a UAV's format qualifier is generated
+            from them). A job whose source reads a size must keep true.
+            Also read from JSON: "inform_shader_of_texture_size" : false
+        */
+        void setInformHlmsOfTextureSize( bool bInformHlms );
+        bool getInformHlmsOfTextureSize() const { return mInformHlmsOfTextureSize; }
 
         /** Sets the number of threads per group. Note the actual value may be
             changed by the shader template using the \@pset() function.

@@ -443,6 +443,11 @@ namespace Ogre
         if( itor != json.MemberEnd() && itor->value.IsBool() )
             job->setInformHlmsOfTextureData( itor->value.GetBool() );
 
+        // JAHSHAKA fork (BUGS-6): HlmsComputeJob::setInformHlmsOfTextureSize.
+        itor = json.FindMember( "inform_shader_of_texture_size" );
+        if( itor != json.MemberEnd() && itor->value.IsBool() )
+            job->setInformHlmsOfTextureSize( itor->value.GetBool() );
+
         itor = json.FindMember( "thread_groups_based_on_texture" );
         if( itor != json.MemberEnd() )
         {
