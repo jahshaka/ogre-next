@@ -8,6 +8,7 @@
 
             "source" : "SpecularIblIntegrator_cs",
             "pieces" : ["CrossPlatformSettings_piece_all", "UavCrossPlatform_piece_all", "sRGB.any", "SpecularIblIntegrator_piece_cs.any"],
+            "inform_shader_of_texture_size" : false,
             "inform_shader_of_texture_data_change" : true,
 
             "uav_units" : 1,

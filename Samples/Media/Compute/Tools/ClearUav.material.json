@@ -7,6 +7,7 @@
             "thread_groups" : [4, 4, 4],
 
             "source" : "ClearUav_cs",
+			"inform_shader_of_texture_size" : false,
 			"inform_shader_of_texture_data_change" : true,
 
             "thread_groups_based_on_uav" :
