@@ -409,9 +409,24 @@
 
 		@insertpiece( regularTexturePcfGlSampling )
 		@property( (syntax != glsl && syntax != glsles && syntax != glslvk) || hlms_shadow_uses_depth_texture )
+			@property( @m == 3 )
+				// A POINT LIGHT'S TAPS STAY IN ITS OWN RECTANGLE OF THE ATLAS. The dual paraboloid
+				// touches its rectangle's border at four points (straight below and above the
+				// light, and at the two seam ends), so a PCF kernel centred there read up to
+				// 1.5 texels past the border: another map of the atlas, or texels no pass ever
+				// wrote. Each tap's centre is held half a texel inside the rectangle, so the
+				// comparison sampler's 2x2 footprint never leaves it.
+				float2 uvTapMin = minUV.xy + 0.5 * invShadowMapSize.xy;
+				float2 uvTapMax = maxUV.xy - 0.5 * invShadowMapSize.xy;
+			@end
 			@foreach( pcf_iterations, n )
 				@property( pcf >= 3 )uv += offsets[@n] * invShadowMapSize.xy;@end
-				retVal += OGRE_SAMPLE_SHADOW( shadowMap, shadowSampler, uv, fDepth );@end
+				@property( @m == 3 )
+					retVal += OGRE_SAMPLE_SHADOW( shadowMap, shadowSampler, clamp( uv, uvTapMin, uvTapMax ), fDepth );
+				@else
+					retVal += OGRE_SAMPLE_SHADOW( shadowMap, shadowSampler, uv, fDepth );
+				@end
+			@end
 		@end
 
 		@property( pcf == 3 )
