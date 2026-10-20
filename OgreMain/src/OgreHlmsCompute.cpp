@@ -375,8 +375,11 @@ namespace Ogre
         // still required (Metal needs them on the C++ side, and both back ends bake them into
         // the shader), so only the second half of the test is relaxed.
         const bool bIndirect = job->mIndirectDispatchBuffer != 0;
+        // JAHSHAKA fork (BUGS-6): a job not told its sizes carries its group counts to the dispatch
+        // (HlmsComputeJob::setInformHlmsOfTextureSize), so its permutation has none; dispatch checks.
+        const bool bJobSized = !job->getInformHlmsOfTextureSize();
         if( pso.mThreadsPerGroup[0] * pso.mThreadsPerGroup[1] * pso.mThreadsPerGroup[2] == 0u ||
-            ( !bIndirect &&
+            ( !bIndirect && !bJobSized &&
               pso.mNumThreadGroups[0] * pso.mNumThreadGroups[1] * pso.mNumThreadGroups[2] == 0u ) )
         {
             OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
@@ -513,6 +516,7 @@ namespace Ogre
         StringVector    mPieceTexts;
         RootLayout      mRootLayout;      ///< memset + setupRootLayout, as compileShader hashes it
         bool            mIndirect;
+        bool            mJobSized;  ///< (BUGS-6) the job carries its group counts to the dispatch
         String          mJobName;
 
         // ---- results ----
@@ -524,7 +528,8 @@ namespace Ogre
             HlmsAsyncJob( compute, job ),
             mCompute( compute ),
             mJob( job ),
-            mIndirect( false )
+            mIndirect( false ),
+            mJobSized( false )
         {
             memset( &mRootLayout, 0, sizeof( mRootLayout ) );
             mPso.initialize();
@@ -656,6 +661,7 @@ namespace Ogre
             request->mRootLayout.mCompute = true;
             job->setupRootLayout( request->mRootLayout );
             request->mIndirect = job->mIndirectDispatchBuffer != 0;
+            request->mJobSized = !job->getInformHlmsOfTextureSize();
         }
         catch( Exception &e )
         {
@@ -834,7 +840,7 @@ namespace Ogre
         pso.mNumThreadGroups[1] = (uint32)( getProperty( tid, ComputeProperty::NumThreadGroupsY ) );
         pso.mNumThreadGroups[2] = (uint32)( getProperty( tid, ComputeProperty::NumThreadGroupsZ ) );
         if( pso.mThreadsPerGroup[0] * pso.mThreadsPerGroup[1] * pso.mThreadsPerGroup[2] == 0u ||
-            ( !request.mIndirect &&
+            ( !request.mIndirect && !request.mJobSized &&
               pso.mNumThreadGroups[0] * pso.mNumThreadGroups[1] * pso.mNumThreadGroups[2] == 0u ) )
         {
             OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
@@ -1089,6 +1095,23 @@ namespace Ogre
         }
         else
         {
+            // JAHSHAKA fork (BUGS-6): a job not told its sizes is sized here, from its own counts
+            // (its permutation carries none: HlmsComputeJob::setInformHlmsOfTextureSize). The cache
+            // entry is this job's alone (ComputePsoCache compares the job), so it is written in place.
+            if( !job->getInformHlmsOfTextureSize() )
+            {
+                for( size_t i = 0u; i < 3u; ++i )
+                    psoCache.pso.mNumThreadGroups[i] = job->mNumThreadGroups[i];
+                if( psoCache.pso.mNumThreadGroups[0] * psoCache.pso.mNumThreadGroups[1] *
+                        psoCache.pso.mNumThreadGroups[2] ==
+                    0u )
+                {
+                    OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                                 job->getNameStr() + ": num_thread_groups not set (the job sizes its "
+                                                     "own dispatch: setInformHlmsOfTextureSize)",
+                                 "HlmsCompute::dispatch" );
+                }
+            }
             mRenderSystem->_dispatch( psoCache.pso );
         }
     }

@@ -185,6 +185,11 @@ namespace Ogre
             gate: 191 permutations for 61 shaders). Such a job passes false; the formats, types,
             sRGB, MSAA and integer facts are still passed (a UAV's format qualifier is generated
             from them). A job whose source reads a size must keep true.
+        @par
+            The DISPATCH'S size goes with them: num_thread_groups_x/y/z are not passed either (they
+            follow the textures' sizes or the caller's box), so the template may neither read nor
+            \@pset them, and HlmsCompute::dispatch takes this job's own counts. threads_per_group
+            is still passed (the shader bakes it).
             Also read from JSON: "inform_shader_of_texture_size" : false
         */
         void setInformHlmsOfTextureSize( bool bInformHlms );

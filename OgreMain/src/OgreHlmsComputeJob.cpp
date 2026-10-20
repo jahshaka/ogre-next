@@ -515,9 +515,22 @@ namespace Ogre
         setProperty( ComputeProperty::ThreadsPerGroupX, static_cast<int32>( mThreadsPerGroup[0] ) );
         setProperty( ComputeProperty::ThreadsPerGroupY, static_cast<int32>( mThreadsPerGroup[1] ) );
         setProperty( ComputeProperty::ThreadsPerGroupZ, static_cast<int32>( mThreadsPerGroup[2] ) );
-        setProperty( ComputeProperty::NumThreadGroupsX, static_cast<int32>( mNumThreadGroups[0] ) );
-        setProperty( ComputeProperty::NumThreadGroupsY, static_cast<int32>( mNumThreadGroups[1] ) );
-        setProperty( ComputeProperty::NumThreadGroupsZ, static_cast<int32>( mNumThreadGroups[2] ) );
+        // JAHSHAKA fork (BUGS-6): the DISPATCH'S size is a size too. A job that is not told its
+        // sizes (setInformHlmsOfTextureSize) is not told its group counts either - they follow its
+        // textures' sizes (thread_groups_based_on_*) or the caller's box - and HlmsCompute::dispatch
+        // sizes its dispatch from the job's own counts instead of the permutation's.
+        if( mInformHlmsOfTextureSize )
+        {
+            setProperty( ComputeProperty::NumThreadGroupsX, static_cast<int32>( mNumThreadGroups[0] ) );
+            setProperty( ComputeProperty::NumThreadGroupsY, static_cast<int32>( mNumThreadGroups[1] ) );
+            setProperty( ComputeProperty::NumThreadGroupsZ, static_cast<int32>( mNumThreadGroups[2] ) );
+        }
+        else
+        {
+            removeProperty( ComputeProperty::NumThreadGroupsX );
+            removeProperty( ComputeProperty::NumThreadGroupsY );
+            removeProperty( ComputeProperty::NumThreadGroupsZ );
+        }
 
         RenderSystem *renderSystem = mCreator->getRenderSystem();
         const bool typedUavs = renderSystem->getCapabilities()->hasCapability( RSC_TYPED_UAV_LOADS );
