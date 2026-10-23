@@ -3770,8 +3770,9 @@ namespace Ogre
                 const bool bIsDepth = PixelFormatGpuUtils::isDepth( texture->getPixelFormat() );
 
                 // If oldAccess == ResourceAccess::Undefined then this texture is used for
-                // the first time on a new frame (but not necessarily the first time ever)
-                // thus there are no caches needed to flush.
+                // the first time on a new frame (but not necessarily the first time ever):
+                // a kept content waits for every earlier command and memory write (Jahshaka,
+                // below), a discardable one for nothing.
                 //
                 // dstStage needs to wait for srcStage to finish for the transition to happen though.
                 if( itor->oldLayout != ResourceLayout::Texture &&
@@ -3794,19 +3795,29 @@ namespace Ogre
                         srcStage |= ogreToVkStageFlags( itor->oldStageMask );
                 }
                 else if( itor->oldLayout != ResourceLayout::Undefined &&
-                         texture->isAsyncComputeShared() &&
-                         mDevice->mAsyncCompute &&
-                         mDevice->mAsyncCompute->hasComputeQueue() )
+                         ( !texture->isDiscardableContent() ||
+                           ( texture->isAsyncComputeShared() && mDevice->mAsyncCompute &&
+                             mDevice->mAsyncCompute->hasComputeQueue() ) ) )
                 {
-                    // Jahshaka (ENGINE-UPGRADE-ASYNC): A TEXTURE THE OTHER QUEUE TOUCHED. The
-                    // solver forgets every use at the frame's start (RenderSystem::_beginFrame
-                    // resets it), so the first transition of a frame has no source stage -- TOP,
-                    // no execution dependency. On one queue the previous frame is behind the
-                    // ring's fences; across queues the last use (the async bracket's layout
-                    // transition, its writes) is ordered only by the timeline wait, and the
-                    // barrier must CHAIN to that wait: ALL_COMMANDS (measured:
-                    // SYNC-HAZARD-WRITE-AFTER-WRITE on this transition with TOP).
+                    // Jahshaka: A TEXTURE FIRST SEEN IN A FRAME WHOSE CONTENT IS KEPT WAITS FOR EVERYTHING
+                    // BEFORE IT. The solver forgets every use at the frame's reset (RenderSystem::_update), so
+                    // the first transition of a frame came here with no source stage and no source access --
+                    // TOP, no dependency on any earlier work. The frame's boundary orders the previous frame's
+                    // work (VulkanQueue::_jahOrderAfterEarlierWork), but not THIS frame's: measured, a scroll's
+                    // one-frame commit (its slab voxelised earlier in the same frame, the store first seen at
+                    // its in-place shift) loses cells with the boundary barrier alone and is exact with this
+                    // source (gi.scroll_slab H; PHOTON-7 stage 2's read D2 closed it at its one site by an
+                    // assumeTransition, stage 3's read F5 found three more sites of the class - the earlier
+                    // work it races is not a solver-tracked use of the store). A texture whose content is KEPT
+                    // is read for what earlier work wrote, so its source is every earlier command and every
+                    // memory write; a DISCARDABLE texture (its old content never read) keeps the TOP source.
+                    // Measured on gi.walk: no cost (a per-resource drain on first-seen BUFFERS cost the glass
+                    // walk +3.0 ms a steady frame - the boundary barrier covers those). (ENGINE-UPGRADE-ASYNC's
+                    // case, a texture the other queue touched, is the same rule: its last use is ordered only by
+                    // the timeline wait, which the barrier must chain to - SYNC-HAZARD-WRITE-AFTER-WRITE measured
+                    // with TOP.)
                     srcStage |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                    imageBarrier.srcAccessMask |= VK_ACCESS_MEMORY_WRITE_BIT & c_srcValidAccessFlags;
                 }
 
                 // Jahshaka: AN ATTACHMENT LAYOUT WAS WRITTEN BY ITS RENDER PASS, WHATEVER THE

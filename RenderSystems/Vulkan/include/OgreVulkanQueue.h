@@ -126,6 +126,8 @@ namespace Ogre
         /// buffer is open in between), never waits the graphics ring and never advances a
         /// frame. Off (every other queue): upstream's behaviour exactly.
         bool   mJahOwnSlots;
+        /// Jahshaka: _jahOrderAfterEarlierWork was asked while no command buffer was recording.
+        bool   mJahOrderOwed = false;
         size_t mJahSlot;
         /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): see _jahSetBlocked.
         bool   mJahBlocked;
@@ -356,6 +358,17 @@ namespace Ogre
         /// everything submitted from that slot.
         void _jahBeginSlot( size_t slot );
         bool _jahIsRecording() const { return mCurrentCmdBuffer != 0; }
+        /** Jahshaka: THE BARRIER SOLVER'S HISTORY ENDS HERE - order every later command after every earlier command
+            and memory write (one global memory barrier; into the next command buffer when none is recording).
+            VulkanVaoManager::_update calls it at the frame's boundary, where RenderSystem::_update has just reset the
+            solver: a resource's first transition of the next frame has no source, on upstream's premise that the
+            previous frame is behind the ring's fences - false for the work recorded just before (the same command
+            buffer, or a submission ordered by nothing but the submission order). A first-seen BUFFER gets no
+            transition at all ("nothing to wait for", BarrierSolver::resolveTransition): this barrier is what orders
+            it after the previous frame (the voxel feedback's per-brick state lives in UAV buffers across frames). A
+            first-seen KEPT texture also waits for every earlier command of its own frame
+            (VulkanRenderSystem::executeResourceTransition). Measured on gi.walk (unlocked clocks): no cost. */
+        void _jahOrderAfterEarlierWork();
         size_t _jahNumSlots() const { return mPerFrameData.size(); }
         /// Counts for the rows: every command buffer ever allocated (all slots), and every
         /// fence this queue owns (available + protecting + externally referenced).

@@ -2160,6 +2160,14 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void VulkanVaoManager::_update()
     {
+        // Jahshaka: THE FRAME'S BOUNDARY IS ITS BARRIER SOLVER'S (RenderSystem::_update resets the solver just before
+        // this): every later command is ordered after every earlier command and memory write, so the next frame's
+        // first-seen buffers (which get no transition) and textures are ordered after this frame's work whatever
+        // command buffer it is in - the premise the solver's first transitions assume
+        // (VulkanQueue::_jahOrderAfterEarlierWork). (The texture manager's loading waits call this too: an extra drain
+        // there, never a missing one.)
+        mDevice->mGraphicsQueue._jahOrderAfterEarlierWork();
+
         if( mFenceFlushed == FenceUnflushed )
         {
             // We could only reach here if _update() was called

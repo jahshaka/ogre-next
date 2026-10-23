@@ -304,6 +304,18 @@ namespace Ogre
             newCommandBuffer();
     }
     //-------------------------------------------------------------------------
+    /// Jahshaka (VulkanQueue::_jahOrderAfterEarlierWork): every earlier command and memory write before every later
+    /// command - one global memory barrier.
+    static void jahGlobalBarrier( VkCommandBuffer cmdBuffer )
+    {
+        VkMemoryBarrier memBarrier;
+        makeVkStruct( memBarrier, VK_STRUCTURE_TYPE_MEMORY_BARRIER );
+        memBarrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        memBarrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        vkCmdPipelineBarrier( cmdBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1u,
+                              &memBarrier, 0u, 0, 0u, 0 );
+    }
+    //-------------------------------------------------------------------------
     void VulkanQueue::newCommandBuffer()
     {
         // Jahshaka (ENGINE-UPGRADE-ASYNC): an own-slot queue takes its owner's slot and never
@@ -316,6 +328,27 @@ namespace Ogre
         beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VkResult result = vkBeginCommandBuffer( mCurrentCmdBuffer, &beginInfo );
         checkVkResult( mOwnerDevice, result, "vkBeginCommandBuffer" );
+
+        // Jahshaka: an order owed when no command buffer was recording (_jahOrderAfterEarlierWork) opens this one.
+        if( mJahOrderOwed )
+        {
+            mJahOrderOwed = false;
+            jahGlobalBarrier( mCurrentCmdBuffer );
+        }
+    }
+    //-------------------------------------------------------------------------
+    void VulkanQueue::_jahOrderAfterEarlierWork()
+    {
+        // (a graphics queue an async bracket blocks records nothing now: the next command buffer starts with it)
+        if( mCurrentCmdBuffer && !mJahBlocked )
+        {
+            endAllEncoders();
+            jahGlobalBarrier( mCurrentCmdBuffer );
+        }
+        else
+        {
+            mJahOrderOwed = true;   // the next command buffer starts with it
+        }
     }
     //-------------------------------------------------------------------------
     void VulkanQueue::endCommandBuffer()
