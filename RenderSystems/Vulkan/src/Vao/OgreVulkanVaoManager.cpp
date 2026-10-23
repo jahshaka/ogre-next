@@ -2164,8 +2164,8 @@ namespace Ogre
         // this): every later command is ordered after every earlier command and memory write, so the next frame's
         // first-seen buffers (which get no transition) and textures are ordered after this frame's work whatever
         // command buffer it is in - the premise the solver's first transitions assume
-        // (VulkanQueue::_jahOrderAfterEarlierWork). (The texture manager's loading waits call this too: an extra drain
-        // there, never a missing one.)
+        // (VulkanQueue::_jahOrderAfterEarlierWork). (The texture manager's loading waits call this too, inside a frame:
+        // an extra drain there, or nothing inside an async bracket, which blocks the queue - neither resets the solver.)
         mDevice->mGraphicsQueue._jahOrderAfterEarlierWork();
 
         if( mFenceFlushed == FenceUnflushed )

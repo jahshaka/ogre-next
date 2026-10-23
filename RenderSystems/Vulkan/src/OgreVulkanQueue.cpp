@@ -329,26 +329,25 @@ namespace Ogre
         VkResult result = vkBeginCommandBuffer( mCurrentCmdBuffer, &beginInfo );
         checkVkResult( mOwnerDevice, result, "vkBeginCommandBuffer" );
 
-        // Jahshaka: an order owed when no command buffer was recording (_jahOrderAfterEarlierWork) opens this one.
-        if( mJahOrderOwed )
-        {
-            mJahOrderOwed = false;
-            jahGlobalBarrier( mCurrentCmdBuffer );
-        }
     }
     //-------------------------------------------------------------------------
     void VulkanQueue::_jahOrderAfterEarlierWork()
     {
-        // (a graphics queue an async bracket blocks records nothing now: the next command buffer starts with it)
+        // THE FRAME'S BOUNDARY (RenderSystem::_update: the solver's reset, TextureGpuManager::_update, then
+        // VaoManager::_update) always finds the graphics queue recording and unblocked: it opens a new command buffer
+        // after every commit, and no async bracket spans RenderSystem::_update.
         if( mCurrentCmdBuffer && !mJahBlocked )
         {
             endAllEncoders();
             jahGlobalBarrier( mCurrentCmdBuffer );
+            return;
         }
-        else
-        {
-            mJahOrderOwed = true;   // the next command buffer starts with it
-        }
+        // THE ONE OTHER CALLER - a texture wait's VaoManager::_update inside an async bracket - is blocked and owes
+        // nothing: it resets no barrier solver, so nothing is first-seen after it (the boundary's own barrier comes at the
+        // next RenderSystem::_update). A graphics queue that is neither recording nor blocked here is the device's loss
+        // (getCurrentCmdBuffer's own rule).
+        if( !mJahBlocked )
+            checkVkResult( mOwnerDevice, VK_ERROR_DEVICE_LOST, "_jahOrderAfterEarlierWork" );
     }
     //-------------------------------------------------------------------------
     void VulkanQueue::endCommandBuffer()

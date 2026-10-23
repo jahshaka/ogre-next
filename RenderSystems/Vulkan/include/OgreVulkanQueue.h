@@ -126,8 +126,6 @@ namespace Ogre
         /// buffer is open in between), never waits the graphics ring and never advances a
         /// frame. Off (every other queue): upstream's behaviour exactly.
         bool   mJahOwnSlots;
-        /// Jahshaka: _jahOrderAfterEarlierWork was asked while no command buffer was recording.
-        bool   mJahOrderOwed = false;
         size_t mJahSlot;
         /// Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): see _jahSetBlocked.
         bool   mJahBlocked;
