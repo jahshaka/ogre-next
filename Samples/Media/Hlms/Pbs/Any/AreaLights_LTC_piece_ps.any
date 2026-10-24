@@ -331,6 +331,12 @@ for( int i=0; i<floatBitsToInt( light2Buf.numAreaLtcLights ); ++i )
 		ltcDiffuse	*= ltcWindow;
 		ltcSpecular	*= ltcWindow;
 
+		// Jahshaka (PHOTON-7 7-A): THE LIGHT'S VISIBILITY. A hook a GI piece may define - the traced area
+		// visibility of this pass's forward LTC light i (Photon's screen product, the ratio of its strata's
+		// visible form factor) - multiplying both terms; empty wherever no piece defines it, and then the light
+		// is unshadowed as upstream draws it (Ogre-Next has no area shadow maps).
+		@insertpiece( custom_ps_areaLtcVisibility )
+
 		finalColour += midf3_c( light2Buf.areaLtcLights[i].diffuse.xyz ) * ltcDiffuse * pixelData.diffuse.xyz;
 		finalColour += midf3_c( light2Buf.areaLtcLights[i].specular.xyz ) * ltcSpecular * pixelData.specular.xyz;
 	}
