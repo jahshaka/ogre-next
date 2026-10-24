@@ -147,6 +147,8 @@ namespace Ogre
         uint64 mNumDeferredDispatches;
         /// (Jahshaka) dispatches refused because a PSO's parameters did not fit its program
         uint64 mJahParamsMisfits = 0u;
+        /// (Jahshaka) the misfit counter's NEGATIVE CONTROL: the next N dispatches are refused as misfits
+        uint32 mJahForceMisfits = 0u;
         /// (ASYNC-SHADERS-1) Every permutation this Hlms has built, by source + properties: a
         /// job CLONE (the voxeliser's per-cascade, per-mip jobs) is a new PSO over code already
         /// compiled, built in the frame from the code cache; only a permutation never built
@@ -273,6 +275,9 @@ namespace Ogre
         /// (Jahshaka) dispatches refused, their PSO's parameters not fitting its program (dispatch()):
         /// 0 on a sound build - a test asserts it.
         uint64 getJahParamsMisfits() const { return mJahParamsMisfits; }
+        /// (Jahshaka) A TEST DOOR, the counter's negative control: the next `n` dispatches are refused and
+        /// counted exactly as a misfit is (a row asserting the count 0 reads it non-zero under the door).
+        void _jahForceParamsMisfits( uint32 n ) { mJahForceMisfits = n; }
         /// Permutations the background compiler is building for this Hlms (requestAsync).
         size_t getNumAsyncInFlight() const;
 

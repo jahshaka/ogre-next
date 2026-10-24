@@ -1055,9 +1055,14 @@ namespace Ogre
         // (getJahParamsMisfits: a test asserts 0) - whatever made it (Jahshaka PHOTON-7 stage 5: the
         // doubled definitions of a program two service threads built at once read past the lists, and
         // a compute loop bounded by the garbage ran until the GPU lost its context).
-        if( !psoCache.jahParamsFit )
+        // (the counter's negative control, _jahForceParamsMisfits: a dispatch refused as a misfit is)
+        const bool jahForced = mJahForceMisfits > 0u;
+        if( jahForced )
+            --mJahForceMisfits;
+        if( !psoCache.jahParamsFit || jahForced )
         {
-            if( psoCache.pso.computeParams && !mRenderSystem->_jahComputeParamsFit( psoCache.pso ) )
+            if( jahForced ||
+                ( psoCache.pso.computeParams && !mRenderSystem->_jahComputeParamsFit( psoCache.pso ) ) )
             {
                 if( mJahParamsMisfits++ < 4u )
                 {
