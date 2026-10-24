@@ -2022,6 +2022,15 @@ namespace Ogre
         return retVal;
     }
     //-------------------------------------------------------------------------
+    bool VulkanRenderSystem::_jahComputeParamsFit( const HlmsComputePso &pso ) const
+    {
+        if( !pso.computeShader || !pso.computeParams )
+            return true;
+        const VulkanProgram *shader =
+            static_cast<const VulkanProgram *>( pso.computeShader->_getBindingDelegate() );
+        return !shader || shader->jahParamsFit( *pso.computeParams );
+    }
+    //-------------------------------------------------------------------------
     void VulkanRenderSystem::_hlmsComputePipelineStateObjectCreated( HlmsComputePso *newPso )
     {
 #if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM

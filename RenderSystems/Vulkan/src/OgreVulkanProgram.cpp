@@ -1567,6 +1567,20 @@ namespace Ogre
     //-----------------------------------------------------------------------
     uint32 VulkanProgram::getBufferRequiredSize() const { return mConstantsBytesToWrite; }
     //-----------------------------------------------------------------------
+    bool VulkanProgram::jahParamsFit( const GpuProgramParameters &params ) const
+    {
+        for( const GpuConstantDefinition &def : mConstantDefsSorted )
+        {
+            const size_t end = def.physicalIndex + def.elementSize * def.arraySize;
+            const size_t have = def.isFloat()         ? params.getFloatConstantList().size()
+                                : def.isUnsignedInt() ? params.getUnsignedIntConstantList().size()
+                                                      : params.getIntConstantList().size();
+            if( end > have )
+                return false;
+        }
+        return true;
+    }
+    //-----------------------------------------------------------------------
     void VulkanProgram::updateBuffers( const GpuProgramParametersSharedPtr &params,
                                        uint8 *RESTRICT_ALIAS dstData )
     {

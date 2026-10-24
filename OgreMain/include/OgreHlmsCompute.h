@@ -90,6 +90,8 @@ namespace Ogre
             HlmsComputePso  pso;
             uint32          paramsUpdateCounter;
             uint32          paramsProfileUpdateCounter;
+            /// (Jahshaka) the parameters were checked to fit the program (dispatch()'s first dispatch)
+            bool            jahParamsFit = false;
 
             ComputePsoCache() : job( 0 ), paramsUpdateCounter( ~0u ), paramsProfileUpdateCounter( ~0u )
             {
@@ -143,6 +145,8 @@ namespace Ogre
         static bool msInAsyncWorkspace;
         bool   mDeferredDispatch;      ///< setDeferredDispatch
         uint64 mNumDeferredDispatches;
+        /// (Jahshaka) dispatches refused because a PSO's parameters did not fit its program
+        uint64 mJahParamsMisfits = 0u;
         /// (ASYNC-SHADERS-1) Every permutation this Hlms has built, by source + properties: a
         /// job CLONE (the voxeliser's per-cascade, per-mip jobs) is a new PSO over code already
         /// compiled, built in the frame from the code cache; only a permutation never built
@@ -260,6 +264,9 @@ namespace Ogre
         static bool _getInAsyncWorkspace() { return msInAsyncWorkspace; }
         bool getDeferredDispatch() const { return mDeferredDispatch; }
         uint64 getNumDeferredDispatches() const { return mNumDeferredDispatches; }
+        /// (Jahshaka) dispatches refused, their PSO's parameters not fitting its program (dispatch()):
+        /// 0 on a sound build - a test asserts it.
+        uint64 getJahParamsMisfits() const { return mJahParamsMisfits; }
         /// Permutations the background compiler is building for this Hlms (requestAsync).
         size_t getNumAsyncInFlight() const;
 

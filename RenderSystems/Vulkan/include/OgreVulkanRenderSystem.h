@@ -338,6 +338,7 @@ namespace Ogre
         RenderPassDescriptor *createRenderPassDescriptor() override;
 
         void _hlmsComputePipelineStateObjectCreated( HlmsComputePso *newPso ) override;
+        bool _jahComputeParamsFit( const HlmsComputePso &pso ) const override;
         void _hlmsComputePipelineStateObjectDestroyed( HlmsComputePso *newPso ) override;
 
         void setStencilBufferParams( uint32 refValue, const StencilParams &stencilParams ) override;
