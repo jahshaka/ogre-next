@@ -832,7 +832,11 @@ namespace Ogre
 
         HlmsComputePso &pso = request.mPso;
         pso.computeShader = request.mShader;
-        pso.computeParams = request.mShader->createParameters();
+        // (Jahshaka) NO computeParams HERE: the program may be SHARED (mCompiledShaderCache, above) with
+        // another service thread, and HighLevelGpuProgram::createParameters builds its definitions lazily
+        // without a lock (OGRE_LOCK_AUTO_MUTEX is a no-op at OGRE_THREAD_SUPPORT 0) - two workers built one
+        // program's definitions at once into one object, doubled, and a dispatch read past its parameters.
+        // asyncComputePublished makes them on the main thread.
         pso.mThreadsPerGroup[0] = (uint32)( getProperty( tid, ComputeProperty::ThreadsPerGroupX ) );
         pso.mThreadsPerGroup[1] = (uint32)( getProperty( tid, ComputeProperty::ThreadsPerGroupY ) );
         pso.mThreadsPerGroup[2] = (uint32)( getProperty( tid, ComputeProperty::ThreadsPerGroupZ ) );
@@ -879,6 +883,9 @@ namespace Ogre
 
         // dispatch()'s filing of a freshly compiled PSO, with the job's shader params applied
         // now (the job may have changed them since the request).
+        // (Jahshaka) ITS PARAMETERS ARE MADE HERE, ON THE MAIN THREAD (compileAsync's note): the only
+        // thread that builds a program's definitions.
+        request.mPso.computeParams = request.mShader->createParameters();
         HlmsComputeJob *job = request.mJob;
         ShaderParams *shaderParams = job->_getShaderParams( "default" );
         if( shaderParams )
