@@ -918,6 +918,8 @@ namespace Ogre
         }
     }
     //-----------------------------------------------------------------------------------
+    void ( *HlmsCompute::msJahDispatchHook )( const HlmsComputeJob *job ) = 0;
+    //-----------------------------------------------------------------------------------
     void HlmsCompute::dispatch( HlmsComputeJob *job, SceneManager *sceneManager, Camera *camera )
     {
         job->_calculateNumThreadGroupsBasedOnSetting();
@@ -1087,6 +1089,8 @@ namespace Ogre
 
         // Jahshaka fork 1bccc3f93+a98e2b0af (was 0032): a job that has been given an indirect buffer is sized by
         // the GPU, not by mNumThreadGroups.
+        if( msJahDispatchHook )
+            msJahDispatchHook( job );   // Jahshaka: THE GPU CHECKPOINTS (the declaration)
         if( job->mIndirectDispatchBuffer )
         {
             mRenderSystem->_dispatchIndirect( psoCache.pso, job->mIndirectDispatchBuffer,

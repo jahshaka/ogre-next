@@ -225,6 +225,12 @@ namespace Ogre
         /// Main function for dispatching a compute job.
         void dispatch( HlmsComputeJob *job, SceneManager *sceneManager, Camera *camera );
 
+        /// Jahshaka (THE GPU CHECKPOINTS, PHOTON-7 stage 5): called with the job right before its dispatch is
+        /// recorded (its PSO, descriptors and parameters bound; the indirect and the direct route alike), so a
+        /// host can mark the command stream with the job's name (VK_NV_device_diagnostic_checkpoints) and, after a
+        /// device loss, name the dispatch the GPU never finished. Null (the default): nothing is called.
+        static void ( *msJahDispatchHook )( const HlmsComputeJob *job );
+
         enum AsyncReadiness
         {
             AsyncReady,    ///< the permutation is built: dispatch() will not compile
