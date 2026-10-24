@@ -266,8 +266,14 @@ namespace Ogre
         _dirtyState();
 
         // Notify manager
+        // (Jahshaka) ...unless the notification is deferred to the main thread (mJahDeferLoadNotify)
         if( mCreator )
-            mCreator->_notifyResourceLoaded( this );
+        {
+            if( mJahDeferLoadNotify )
+                mJahLoadNotifyPending = true;
+            else
+                mCreator->_notifyResourceLoaded( this );
+        }
 
         // Fire events, if not background
         if( !background )
@@ -338,8 +344,10 @@ namespace Ogre
         // Notify manager
         // Note if we have gone from PREPARED to UNLOADED, then we haven't actually
         // unloaded, i.e. there is no memory freed on the GPU.
-        if( old == LOADSTATE_LOADED && mCreator )
+        // (Jahshaka) a load whose notification is still pending was never counted: nothing to take back
+        if( old == LOADSTATE_LOADED && mCreator && !mJahLoadNotifyPending )
             mCreator->_notifyResourceUnloaded( this );
+        mJahLoadNotifyPending = false;
 
         _fireUnloadingComplete();
     }

@@ -223,11 +223,18 @@ namespace Ogre
         HighLevelGpuProgramPtr prg = std::static_pointer_cast<HighLevelGpuProgram>( ret );
         prg->setType( gptype );
         prg->setSyntaxCode( language );
+        // (Jahshaka) ITS LOAD RUNS ON THE SERVICE THREAD: the manager's notification (its memory count and
+        // budget check, main-thread state) waits for _registerDetachedProgram.
+        prg->_jahDeferCreatorLoadNotify();
         return prg;
     }
     //---------------------------------------------------------------------------
     bool HighLevelGpuProgramManager::_registerDetachedProgram( const HighLevelGpuProgramPtr &program )
     {
+        // (Jahshaka) THE MAIN THREAD: the load the service thread made is counted now (registered or not -
+        // a program left detached is loaded memory all the same)
+        if( program->_jahTakeDeferredLoadNotify() )
+            _notifyResourceLoaded( program.get() );
         // A name or a HANDLE already registered leaves the program detached (its owners'
         // references keep it). Measured: a handle the detached program drew collided with a
         // registered one ("Resource with the handle 346 already exists") in gi.card_lighting_

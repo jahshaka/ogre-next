@@ -167,6 +167,13 @@ namespace Ogre
         size_t mSize;
         /// Is this file manually loaded?
         bool mIsManual;
+        /// (Jahshaka) a load does not notify mCreator while this is set - a resource loaded on a
+        /// service thread (HighLevelGpuProgramManager::createProgramDetached): the manager's memory
+        /// count and its budget check are main-thread state (an AtomicScalar is a plain integer at
+        /// OGRE_THREAD_SUPPORT 0). The pending notification is taken on the main thread
+        /// (_jahTakeDeferredLoadNotify, HighLevelGpuProgramManager::_registerDetachedProgram).
+        bool mJahDeferLoadNotify = false;
+        bool mJahLoadNotifyPending = false;
         /// Origin of this resource (e.g. script name) - optional
         String mOrigin;
         /// Optional manual loader; if provided, data is loaded from here instead of a file
@@ -445,6 +452,18 @@ namespace Ogre
             objects to think this object has changed. @see getStateCount.
         */
         virtual void _dirtyState();
+
+        /// (Jahshaka) from now until _jahTakeDeferredLoadNotify, a load leaves its creator's
+        /// notification pending instead of making it (call before the resource is shared).
+        void _jahDeferCreatorLoadNotify() { mJahDeferLoadNotify = true; }
+        /// (Jahshaka) MAIN THREAD: ends the deferral; true when a load's notification is owed (the
+        /// caller makes it: mCreator->_notifyResourceLoaded).
+        bool _jahTakeDeferredLoadNotify()
+        {
+            const bool owed = mJahLoadNotifyPending;
+            mJahDeferLoadNotify = mJahLoadNotifyPending = false;
+            return owed;
+        }
 
         /** Firing of loading complete event
         @remarks
