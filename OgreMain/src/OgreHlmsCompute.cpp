@@ -1049,6 +1049,28 @@ namespace Ogre
 
         ComputePsoCache &psoCache = mComputeShaderCache[job->mPsoCacheHash];
 
+        // (Jahshaka) THE PARAMETERS FIT THEIR PROGRAM, checked at a PSO's first dispatch and until it holds:
+        // every definition the render system copies (VulkanProgram::updateBuffers) lies inside the
+        // parameters object's lists. A misfit is never dispatched - it is deferred and counted
+        // (getJahParamsMisfits: a test asserts 0) - whatever made it (Jahshaka PHOTON-7 stage 5: the
+        // doubled definitions of a program two service threads built at once read past the lists, and
+        // a compute loop bounded by the garbage ran until the GPU lost its context).
+        if( !psoCache.jahParamsFit )
+        {
+            if( psoCache.pso.computeParams && !mRenderSystem->_jahComputeParamsFit( psoCache.pso ) )
+            {
+                if( mJahParamsMisfits++ < 4u )
+                {
+                    LogManager::getSingleton().logMessage(
+                        "HlmsCompute: job '" + job->getNameStr() +
+                            "' NOT dispatched: its program's parameter definitions do not fit its parameters",
+                        LML_CRITICAL );
+                }
+                return;
+            }
+            psoCache.jahParamsFit = true;
+        }
+
         {
             // Update dirty parameters, if necessary
             ShaderParams *shaderParams = job->_getShaderParams( "default" );

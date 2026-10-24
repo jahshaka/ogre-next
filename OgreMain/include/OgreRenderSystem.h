@@ -969,6 +969,10 @@ namespace Ogre
         virtual void _setIndirectBuffer( IndirectBufferPacked *indirectBuffer ) = 0;
 
         virtual void _hlmsComputePipelineStateObjectCreated( HlmsComputePso *newPso ) {}
+        /// (Jahshaka) true when every parameter definition `pso`'s program copies at bind time lies
+        /// inside `pso.computeParams`' lists (HlmsCompute::dispatch's first-dispatch check). The
+        /// default answers true: a render system that copies by name has nothing to check.
+        virtual bool _jahComputeParamsFit( const HlmsComputePso &pso ) const { return true; }
         virtual void _hlmsComputePipelineStateObjectDestroyed( HlmsComputePso *newPso ) {}
 
         /** Binds a texture to a vertex, geometry, compute, tessellation hull

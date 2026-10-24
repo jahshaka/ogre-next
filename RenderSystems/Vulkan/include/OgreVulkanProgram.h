@@ -117,6 +117,8 @@ namespace Ogre
 
         /// In bytes.
         uint32 getBufferRequiredSize() const;
+        /// (Jahshaka) every definition updateBuffers copies lies inside `params`' lists
+        bool jahParamsFit( const GpuProgramParameters &params ) const;
         /// dstData must be able to hold at least getBufferRequiredSize
         void updateBuffers( const GpuProgramParametersSharedPtr &params, uint8 *RESTRICT_ALIAS dstData );
 
