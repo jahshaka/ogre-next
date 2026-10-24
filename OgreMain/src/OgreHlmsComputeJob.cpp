@@ -72,6 +72,7 @@ namespace Ogre
         mMaxTexUnitReached( 0 ),
         mMaxUavUnitReached( 0 ),
         mPsoCacheHash( std::numeric_limits<size_t>::max() ),
+        mJahStoodDown( false ),
         mIndirectDispatchBuffer( 0 ),
         mIndirectDispatchOffset( 0u ),
         mIndirectDispatchBarrier( true )

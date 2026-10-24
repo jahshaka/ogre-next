@@ -123,6 +123,9 @@ namespace Ogre
         PiecesMap mPieces;
         size_t    mPsoCacheHash;
 
+        /// See setStoodDown (Jahshaka fork). False = upstream's behaviour.
+        bool mJahStoodDown;
+
         /// See setIndirectDispatchBuffer (Jahshaka fork 1bccc3f93+a98e2b0af (was 0032)). Null = CPU-sized dispatch.
         BufferPacked *mIndirectDispatchBuffer;
         size_t        mIndirectDispatchOffset;
@@ -194,6 +197,19 @@ namespace Ogre
         */
         void setInformHlmsOfTextureSize( bool bInformHlms );
         bool getInformHlmsOfTextureSize() const { return mInformHlmsOfTextureSize; }
+
+        /** JAHSHAKA fork. A job STOOD DOWN for its next uses: a CompositorPassCompute running it
+            skips its resource bindings, its barrier analysis and transitions and its dispatch
+            (its early pre-execute listeners - the ones that decide this - and its post-execute
+            listeners still run), and HlmsCompute::dispatch returns without dispatching. For a
+            job SHARED by several passes (found by name, uncloned) whose binder finds this
+            pass's inputs missing: the job then holds another pass's bindings, which may name a
+            texture or buffer since destroyed or resized - nothing of them is touched. The
+            binder sets it before every use (true to stand down, false to run). A zero-group
+            dispatch of a job NOT stood down still throws (BUGS-6's guard: a count never set).
+        */
+        void setStoodDown( bool bStoodDown ) { mJahStoodDown = bStoodDown; }
+        bool getStoodDown() const { return mJahStoodDown; }
 
         /** Sets the number of threads per group. Note the actual value may be
             changed by the shader template using the \@pset() function.

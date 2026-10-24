@@ -275,6 +275,16 @@ namespace Ogre
         RenderSystem *renderSystem = mParentNode->getRenderSystem();
         renderSystem->endRenderPassDescriptor();
 
+        // JAHSHAKA fork: a job its binder STOOD DOWN (HlmsComputeJob::setStoodDown, in the early
+        // pre-execute above) runs nothing of this pass - no bindings set, no barriers, no
+        // dispatch: its slots may hold another pass's resources, since destroyed or resized.
+        if( mComputeJob->getStoodDown() )
+        {
+            notifyPassPosExecuteListeners();
+            profilingEnd();
+            return;
+        }
+
         // Set textures/uavs every frame
         setResourcesToJob();
 

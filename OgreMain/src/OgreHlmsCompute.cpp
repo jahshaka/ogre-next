@@ -929,6 +929,12 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void HlmsCompute::dispatch( HlmsComputeJob *job, SceneManager *sceneManager, Camera *camera )
     {
+        // JAHSHAKA fork: a job STOOD DOWN (HlmsComputeJob::setStoodDown) dispatches nothing - and
+        // reads nothing of its slots or its counts: BUGS-6's zero-group guard below throws for a
+        // job that is not.
+        if( job->getStoodDown() )
+            return;
+
         job->_calculateNumThreadGroupsBasedOnSetting();
 
         if( job->mPsoCacheHash >= mComputeShaderCache.size() )
