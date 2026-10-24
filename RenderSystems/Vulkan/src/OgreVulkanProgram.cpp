@@ -1049,6 +1049,16 @@ namespace Ogre
         // const_cast to get around the fact that buildConstantDefinitions() is const.
         VulkanProgram *vp = const_cast<VulkanProgram *>( this );
 
+        // (Jahshaka) A BUILD STARTS FROM NOTHING, as GLSLShader's does (createParameterMappingStructures before
+        // it reflects): the logical-to-physical maps, the named definitions, the sorted list, the binding params
+        // and the bytes to write are this build's alone. Without it a second build appended a second set whose
+        // PHYSICAL indices continued past the first's buffer sizes, and updateBuffers copied it from past the
+        // end of a parameters object made from the first.
+        vp->createParameterMappingStructures( true );
+        vp->mConstantDefsSorted.clear();
+        vp->mConstantDefsBindingParams.clear();
+        vp->mConstantsBytesToWrite = 0u;
+
         size_t paramSetIdx = 0u;
         size_t paramBindingIdx = 0u;
         if( !mRootLayout->findParamsBuffer( mType, paramSetIdx, paramBindingIdx ) )
