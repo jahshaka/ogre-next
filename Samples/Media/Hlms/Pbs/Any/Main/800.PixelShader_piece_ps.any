@@ -712,14 +712,14 @@
 @piece( CubemapManualPcc )
 	midf3 posInProbSpace = toProbeLocalSpace( inPs.pos, @insertpiece( pccProbeSource ) );
 	midf probeFade = getProbeFade( posInProbSpace, @insertpiece( pccProbeSource ) );
-@property( vct_num_probes )
+@property( vct_num_probes || jah_screen_cone )
 	if( probeFade > _h( 0 ) && (pixelData.roughness < _h( 1.0f ) || vctSpecular.w == 0) )
 @else
 	if( probeFade > _h( 0 ) )
 @end
 	{
 		probeFade = saturate( probeFade * _h( 200.0 ) );
-		@property( vct_num_probes )
+		@property( vct_num_probes || jah_screen_cone )
 			midf4 reflDirLS_dist = localCorrect( pixelData.reflDir, posInProbSpace, @insertpiece( pccProbeSource ) );
 			midf3 reflDirLS = reflDirLS_dist.xyz;
 		@else
@@ -746,7 +746,7 @@
 			clearCoatEnvS *= probeFade;
 		@end
 
-		@property( vct_num_probes )
+		@property( vct_num_probes || jah_screen_cone )
 			float vctLerp = getPccVctBlendWeight( inPs.pos, pixelData.reflDir, reflDirLS_dist.w,
 												  pixelData.roughness,
 												  @insertpiece( pccProbeSource ).cubemapPosVS.xyz,

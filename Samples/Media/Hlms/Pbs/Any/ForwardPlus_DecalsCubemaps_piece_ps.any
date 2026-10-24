@@ -171,7 +171,7 @@
 		midf3 clearCoatPccEnvS = midf3_c( 0, 0, 0 );
 	@end
 
-	@property( vct_num_probes )
+	@property( vct_num_probes || jah_screen_cone )
 	if( pixelData.roughness < 1.0f || vctSpecular.w == 0 )
 	{
 		// Jahshaka fork 4d5fbef16 (was 0017): accumVctLerp is now the probeFade-WEIGHTED sum of
@@ -328,7 +328,7 @@
 			midf probeFadeFull = probeFade;
 			probeFade = probeFade * probeVisible;
 
-			@property( vct_num_probes )
+			@property( vct_num_probes || jah_screen_cone )
 				midf4 reflDirLS_dist = localCorrect( pixelData.reflDir, posInProbSpace, probe );
 				midf3 reflDirLS = reflDirLS_dist.xyz;
 			@else
@@ -385,7 +385,7 @@
 				pccSingleEnvS.xyz *= midf_c( passBuf.ambientUpperHemi.w );
 			@end
 
-			@property( vct_num_probes )
+			@property( vct_num_probes || jah_screen_cone )
 				float vctLerp = getPccVctBlendWeight( inPs.pos, pixelData.reflDir, reflDirLS_dist.w,
 													  pixelData.roughness,
 													  probe.cubemapPosVS.xyz,
@@ -422,7 +422,7 @@
 		clearCoatPccEnvS *= cubemapAccumWeight == 0.0f ? 1.0f : ( 1.0f / cubemapAccumWeight );
 	@end
 
-	@property( vct_num_probes )
+	@property( vct_num_probes || jah_screen_cone )
 		// Jahshaka fork 4d5fbef16 (was 0017) -- the overlapping-probe division fix.
 		//
 		// Upstream divided the finished blend by numProbesVctLerp, the COUNT of
@@ -516,7 +516,7 @@
 	// irradiance field and the cones; cubemaps_as_diffuse_gi stays masked off on
 	// our side.
 	@property( jah_env )
-		@property( vct_num_probes )
+		@property( vct_num_probes || jah_screen_cone )
 			const bool jahNoCone = vctSpecular.w == 0;
 		@else
 			const bool jahNoCone = true;
@@ -547,7 +547,7 @@
 		}
 	@end
 
-	@property( vct_num_probes )
+	@property( vct_num_probes || jah_screen_cone )
 	}
 	@end
 @end
