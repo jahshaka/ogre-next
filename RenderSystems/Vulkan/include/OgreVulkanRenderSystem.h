@@ -29,6 +29,7 @@ THE SOFTWARE.
 #ifndef _OgreVulkanRenderSystem_H_
 #define _OgreVulkanRenderSystem_H_
 
+#include <atomic>
 #include "OgreVulkanPrerequisites.h"
 
 #include "OgreHlmsPso.h"
@@ -142,7 +143,9 @@ namespace Ogre
         bool                        mInterruptedRenderCommandEncoder;
         // clang-format on
 
-        bool mValidationError;
+        /// (Jahshaka) atomic: the validation callback sets it on whatever thread made the Vulkan call -
+        /// a compile service thread creating a pipeline among them - and the creator reads it
+        std::atomic<bool> mValidationError;
 
         /// Declared here to avoid constant reallocations
         FastArray<VkImageMemoryBarrier> mImageBarriers;
