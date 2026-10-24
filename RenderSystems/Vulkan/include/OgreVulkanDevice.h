@@ -335,6 +335,14 @@ namespace Ogre
         /// system. Default true.
         static bool msRayQueryAllowed;
 
+        /// Jahshaka (THE GPU CHECKPOINTS, PHOTON-7 stage 5): true = createDevice() requests
+        /// VK_NV_device_diagnostic_checkpoints when the driver advertises it, so a host can mark the
+        /// command stream (vkCmdSetCheckpointNV) and, after a device loss, read the last mark each queue's
+        /// pipeline reached (vkGetQueueCheckpointDataNV): the dispatch that hung, named in ONE run. A
+        /// process-wide static like msRayQueryAllowed (set before the render system loads). Default
+        /// false: the device is the one every process gets (the marks cost a command each).
+        static bool msDiagnosticCheckpointsAllowed;
+
         /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the device-extension names createDevice()
         /// would request on this physical device, in its exact order.
         static void fillDeviceExtensionRequest(

@@ -63,6 +63,7 @@ THE SOFTWARE.
 namespace Ogre
 {
     bool VulkanDevice::msRayQueryAllowed = true;  // see the declaration
+    bool VulkanDevice::msDiagnosticCheckpointsAllowed = false;  // see the declaration
 
     FastArray<const char *> VulkanInstance::enabledExtensions;  // sorted
     FastArray<const char *> VulkanInstance::enabledLayers;      // sorted
@@ -1339,6 +1340,11 @@ namespace Ogre
                 outExtensions.push_back( VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME );
             else if( msRayQueryAllowed && extensionName == VK_KHR_RAY_QUERY_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_RAY_QUERY_EXTENSION_NAME );
+            // Jahshaka (THE GPU CHECKPOINTS): requested only when the host asks
+            // (msDiagnosticCheckpointsAllowed) and the driver advertises it.
+            else if( msDiagnosticCheckpointsAllowed &&
+                     extensionName == VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME )
+                outExtensions.push_back( VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME );
             else if( msRayQueryAllowed &&
                      extensionName == VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME );
