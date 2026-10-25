@@ -256,6 +256,8 @@ namespace Ogre
         void endCommandBuffer();
         /// Jahshaka (PHOTON-7's walk hitch): the command buffer being opened follows a FlushOnly submission.
         bool mJahAfterFlushOnly = false;
+        /// ...and the slot's flush fences already SIGNALLED are recycled then (no wait: vkGetFenceStatus).
+        void _jahRecycleSignalledFlushFences( uint8 slot );
 
     public:
         /// Jahshaka (PHOTON-7's walk hitch): THE GRAPHICS QUEUE's MID-FRAME SUBMISSIONS, cumulative, read by the

@@ -323,6 +323,25 @@ namespace Ogre
     //-------------------------------------------------------------------------
     uint64 VulkanQueue::msJahCounters[VulkanQueue::JahQueueNumCounters] = {};
     //-------------------------------------------------------------------------
+    void VulkanQueue::_jahRecycleSignalledFlushFences( uint8 slot )
+    {
+        FastArray<VkFence> &flushed = mPerFrameData[slot].mJahFlushFences;
+        if( flushed.empty() )
+            return;
+        FastArray<VkFence> done;
+        size_t keep = 0u;
+        for( size_t i = 0u; i < flushed.size(); ++i )
+        {
+            if( vkGetFenceStatus( mDevice, flushed[i] ) == VK_SUCCESS )
+                done.push_back( flushed[i] );
+            else
+                flushed[keep++] = flushed[i];
+        }
+        flushed.resize( keep );
+        if( !done.empty() )
+            recycleFences( done );   // (an externally held one is recycled at its release)
+    }
+    //-------------------------------------------------------------------------
     void VulkanQueue::newCommandBuffer()
     {
         // Jahshaka (PHOTON-7's walk hitch): after a FlushOnly submission the slot is the one being recorded; a wait
@@ -331,6 +350,10 @@ namespace Ogre
         {
             mJahAfterFlushOnly = false;
             const uint8 slot = mVaoManager->_getDynamicBufferCurrentFrameNoWait();
+            // THE FRAME's OWN FLUSH FENCES THAT ARE DONE GO BACK TO THE POOL (4aba495cc's own defect: a loop of accurate
+            // read-backs inside one frame - gi.card_lamp_shadow's 5,043 card reads - parked one fence each, none recycled
+            // before the frame's end, and every read created a new VkFence: the row went from 6 s to past its 60 s).
+            _jahRecycleSignalledFlushFences( slot );
             if( !mPerFrameData[slot].mProtectingFences.empty() )
             {
                 const auto t0 = std::chrono::steady_clock::now();
