@@ -57,6 +57,11 @@ namespace Ogre
             FastArray<VkCommandBuffer> mCommands;
             size_t mCurrentCmdIdx;
             FastArray<VkFence> mProtectingFences;
+            /// Jahshaka (PHOTON-7's walk hitch): the fences of the frame's OWN FlushOnly submissions while it is being
+            /// recorded. They are not the slot's tail (the frame that used it before): parked in mProtectingFences
+            /// they made the very next command buffer, and every dynamic map, wait the frame's own submitted work.
+            /// The frame's NewFrameIdx submission moves them into mProtectingFences.
+            FastArray<VkFence> mJahFlushFences;
         };
 
         enum EncoderState

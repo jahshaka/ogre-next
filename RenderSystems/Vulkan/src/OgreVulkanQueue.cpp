@@ -90,6 +90,9 @@ namespace Ogre
                 for( VkFence fence : perFrameData.mProtectingFences )
                     vkDestroyFence( mDevice, fence, 0 );
                 perFrameData.mProtectingFences.clear();
+                for( VkFence fence : perFrameData.mJahFlushFences )
+                    vkDestroyFence( mDevice, fence, 0 );
+                perFrameData.mJahFlushFences.clear();
 
                 vkDestroyCommandPool( mDevice, perFrameData.mCmdPool, 0 );
                 perFrameData.mCommands.clear();
@@ -1448,7 +1451,7 @@ namespace Ogre
     {
         size_t n = mAvailableFences.size() + mRefCountedFences.size() + ( mCurrentFence ? 1u : 0u );
         for( const PerFrameData &f : mPerFrameData )
-            n += f.mProtectingFences.size();
+            n += f.mProtectingFences.size() + f.mJahFlushFences.size();
         return n;
     }
     //-------------------------------------------------------------------------
@@ -1656,8 +1659,26 @@ namespace Ogre
 
         mCurrentFence = 0;
 
+        // Jahshaka (PHOTON-7's walk hitch): A MID-FRAME FLUSH NEVER WAITS ITS OWN WORK. A FlushOnly submission's fence
+        // belongs to the frame being recorded, not to the slot's tail: it waits in mJahFlushFences until the frame's
+        // NewFrameIdx submission makes it part of the slot's protection (waited when the slot is reused). Upstream
+        // parks it in mProtectingFences at once, and newCommandBuffer()'s waitForTailFrameToFinish() - or any dynamic
+        // map's - then blocks the CPU on everything submitted so far (measured: 69 / 86 drains on the Bistro walks,
+        // up to 42.6 ms a frame). An own-slot queue keeps its own protection (unchanged).
         if( fence )
-            mPerFrameData[dynBufferFrame].mProtectingFences.push_back( fence );
+        {
+            if( submissionType == SubmissionType::FlushOnly && !mJahOwnSlots )
+                mPerFrameData[dynBufferFrame].mJahFlushFences.push_back( fence );
+            else
+                mPerFrameData[dynBufferFrame].mProtectingFences.push_back( fence );
+        }
+        if( submissionType >= SubmissionType::NewFrameIdx )
+        {
+            FastArray<VkFence> &flushed = mPerFrameData[dynBufferFrame].mJahFlushFences;
+            FastArray<VkFence> &protecting = mPerFrameData[dynBufferFrame].mProtectingFences;
+            protecting.appendPOD( flushed.begin(), flushed.end() );
+            flushed.clear();
+        }
 
         mPendingCmds.clear();
 

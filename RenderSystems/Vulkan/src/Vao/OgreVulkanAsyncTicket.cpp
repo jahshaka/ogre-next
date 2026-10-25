@@ -52,9 +52,9 @@ namespace Ogre
         if( accurateTracking )
         {
             mFenceName = queue->acquireCurrentFence();
-            // Flush now for accuracy with downloads. NOTE (Jahshaka): this flush parks the fence
-            // on the frame slot being recorded and newCommandBuffer() then waits on that slot,
-            // i.e. the CPU waits for everything submitted so far: a full queue drain.
+            // Flush now for accuracy with downloads. (Jahshaka: the flush's fence waits in the slot's
+            // mJahFlushFences until the frame ends - it no longer drains the queue, VulkanQueue's
+            // commitAndNextCommandBuffer.)
             mQueue->commitAndNextCommandBuffer();
         }
         // else: nothing flushed, nothing fenced: the frame's own submission carries the copy.
