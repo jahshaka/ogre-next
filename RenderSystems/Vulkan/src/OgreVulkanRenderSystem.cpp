@@ -57,6 +57,7 @@ THE SOFTWARE.
 #include "Vao/OgreIndirectBufferPacked.h"
 #include "Vao/OgreVulkanBufferInterface.h"
 #include "Vao/OgreVulkanConstBufferPacked.h"
+#include "Vao/OgreVulkanStagingBuffer.h"
 #include "Vao/OgreVulkanTexBufferPacked.h"
 
 #include "OgreVulkanHardwareBufferManager.h"
@@ -3225,6 +3226,13 @@ namespace Ogre
         else if( name == "JahGpuFrameBegin" )
         {
             jahGpuFrameBegin();
+            return;
+        }
+        else if( name == "JahStagingCounters" )
+        {
+            // Jahshaka (PHOTON-7's walk hitch): the upload staging's cumulative events
+            // (VulkanStagingBuffer::JahStagingCounter), as a pointer to the live array.
+            *(const uint64 **)pData = VulkanStagingBuffer::msJahCounters;
             return;
         }
         else if( name == "JahGpuSamplesTruncated" )

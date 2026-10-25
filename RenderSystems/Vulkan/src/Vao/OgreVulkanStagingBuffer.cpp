@@ -39,6 +39,8 @@ THE SOFTWARE.
 #include "OgreVulkanAsyncComputeQueue.h"
 #include "OgreVulkanDevice.h"
 #include "OgreVulkanHardwareBufferCommon.h"
+
+#include <chrono>
 #include "OgreVulkanQueue.h"
 #include "OgreVulkanUtils.h"
 
@@ -57,6 +59,8 @@ namespace Ogre
         mUnfencedBytes( 0 )
     {
     }
+    //-----------------------------------------------------------------------------------
+    uint64 VulkanStagingBuffer::msJahCounters[VulkanStagingBuffer::JahStagingNumCounters] = {};
     //-----------------------------------------------------------------------------------
     VulkanStagingBuffer::~VulkanStagingBuffer()
     {
@@ -164,7 +168,10 @@ namespace Ogre
             // inside an async bracket - the graphics queue is blocked there; its fence is signalled
             // by its next submission, and wait() refuses an unsubmitted one instead of hanging.
             if( !onCompute )
+            {
                 device->commitAndNextCommandBuffer();
+                ++msJahCounters[JahStagingFenceFlushes];
+            }
             mFences.push_back( fence );
 
             mUnfencedHazards.clear();
@@ -211,9 +218,15 @@ namespace Ogre
                              "VulkanStagingBuffer::wait" );
             }
             device->commitAndNextCommandBuffer();
+            ++msJahCounters[JahStagingWaitSubmits];
         }
+        ++msJahCounters[JahStagingWaits];
+        const auto t0 = std::chrono::steady_clock::now();
         VkResult result = vkWaitForFences( device->mDevice, 1, &syncObj, VK_TRUE,
                                            UINT64_MAX );  // You can't wait forever in Vulkan?!?
+        msJahCounters[JahStagingWaitNs] += uint64( std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                       std::chrono::steady_clock::now() - t0 )
+                                                       .count() );
         checkVkResult( device, result, "VulkanStagingBuffer::wait" );
     }
     //-----------------------------------------------------------------------------------
@@ -235,6 +248,7 @@ namespace Ogre
             // Wraps around the ring buffer. Sadly we can't do advanced virtual memory
             // manipulation to keep the virtual space contiguous, so we'll have to reset to 0
             mappingStart = 0;
+            ++msJahCounters[JahStagingWraps];
         }
 
         VulkanFence regionToMap( mappingStart, mappingStart + sizeBytes );
@@ -279,6 +293,7 @@ namespace Ogre
         OGRE_ASSERT_MEDIUM( mUnmapTicket == std::numeric_limits<size_t>::max() &&
                             "VulkanStagingBuffer still mapped!" );
 
+        msJahCounters[JahStagingBytes] += uint64( sizeBytes );
         waitIfNeeded();  // Will fill mMappingStart
 
         mMappedPtr =

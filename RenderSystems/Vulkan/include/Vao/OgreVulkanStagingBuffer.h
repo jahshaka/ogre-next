@@ -114,6 +114,21 @@ namespace Ogre
         const void *_mapForReadImpl( size_t offset, size_t sizeBytes ) override;
 
     public:
+        /// Jahshaka (PHOTON-7's walk hitch): THE UPLOAD STAGING's EVENTS, cumulative over every upload staging
+        /// buffer, read by the engine's frame monitor through the render system (JahStagingCounters, a pointer to
+        /// this array): what makes an upload SUBMIT the graphics queue mid-frame, and what makes it WAIT.
+        enum JahStagingCounter
+        {
+            JahStagingFenceFlushes,  ///< addFence submitted to fence its region (the unfenced bytes past the threshold, or a wrap)
+            JahStagingWraps,         ///< a map wrapped the ring back to 0 (a forced fence)
+            JahStagingWaits,         ///< a map waited on a graphics fence (vkWaitForFences: the CPU waits on the GPU)
+            JahStagingWaitSubmits,   ///< ...whose fence was not submitted yet (wait() submitted first)
+            JahStagingWaitNs,        ///< the nanoseconds spent in those waits
+            JahStagingBytes,         ///< the bytes mapped for upload
+            JahStagingNumCounters
+        };
+        static uint64 msJahCounters[JahStagingNumCounters];
+
         VulkanStagingBuffer( size_t vboIdx, size_t internalBufferStart, size_t sizeBytes,
                              VaoManager *vaoManager, bool uploadOnly, VkBuffer vboName,
                              VulkanDynamicBuffer *dynamicBuffer );
