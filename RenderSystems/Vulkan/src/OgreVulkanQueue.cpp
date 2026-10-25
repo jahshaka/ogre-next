@@ -43,6 +43,8 @@ THE SOFTWARE.
 
 #include "vulkan/vulkan_core.h"
 
+#include <chrono>
+
 #define TODO_findRealPresentQueue
 #define TODO_we_assume_has_stencil
 
@@ -316,8 +318,34 @@ namespace Ogre
                               &memBarrier, 0u, 0, 0u, 0 );
     }
     //-------------------------------------------------------------------------
+    uint64 VulkanQueue::msJahCounters[VulkanQueue::JahQueueNumCounters] = {};
+    //-------------------------------------------------------------------------
     void VulkanQueue::newCommandBuffer()
     {
+        // Jahshaka (PHOTON-7's walk hitch): after a FlushOnly submission the slot is the one being recorded; a wait
+        // on its fences here is the CPU waiting on the frame's own submitted work - counted and timed.
+        if( mJahAfterFlushOnly && !mJahOwnSlots )
+        {
+            mJahAfterFlushOnly = false;
+            const uint8 slot = mVaoManager->_getDynamicBufferCurrentFrameNoWait();
+            if( !mPerFrameData[slot].mProtectingFences.empty() )
+            {
+                const auto t0 = std::chrono::steady_clock::now();
+                const size_t currFrame = mVaoManager->waitForTailFrameToFinish();
+                ++msJahCounters[JahQueueSelfDrains];
+                msJahCounters[JahQueueSelfDrainNs] += uint64(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::steady_clock::now() - t0 )
+                        .count() );
+                mCurrentCmdBuffer = getCmdBuffer( currFrame );
+                VkCommandBufferBeginInfo beginInfo;
+                makeVkStruct( beginInfo, VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO );
+                beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                VkResult result = vkBeginCommandBuffer( mCurrentCmdBuffer, &beginInfo );
+                checkVkResult( mOwnerDevice, result, "vkBeginCommandBuffer" );
+                return;
+            }
+        }
+        mJahAfterFlushOnly = false;
         // Jahshaka (ENGINE-UPGRADE-ASYNC): an own-slot queue takes its owner's slot and never
         // waits the graphics ring (its owner proved the slot free on the queue's own timeline).
         const size_t currFrame = mJahOwnSlots ? mJahSlot : mVaoManager->waitForTailFrameToFinish();
@@ -1600,6 +1628,13 @@ namespace Ogre
                                                   : mVaoManager->waitForTailFrameToFinish();
         VkFence fence = mCurrentFence;  // Note: mCurrentFence may be nullptr
 
+        if( submissionType == SubmissionType::FlushOnly && !mJahOwnSlots )
+        {
+            ++msJahCounters[JahQueueFlushes];
+            if( fence )
+                ++msJahCounters[JahQueueFencedFlushes];
+            mJahAfterFlushOnly = true;
+        }
         VkResult result = vkQueueSubmit( mQueue, 1u, &submitInfo, fence );
         // we need some cleanup before checking result
 

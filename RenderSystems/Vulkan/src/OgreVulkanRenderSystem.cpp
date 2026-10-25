@@ -3228,6 +3228,13 @@ namespace Ogre
             jahGpuFrameBegin();
             return;
         }
+        else if( name == "JahQueueCounters" )
+        {
+            // Jahshaka (PHOTON-7's walk hitch): the graphics queue's mid-frame submissions
+            // (VulkanQueue::JahQueueCounter), as a pointer to the live array.
+            *(const uint64 **)pData = VulkanQueue::msJahCounters;
+            return;
+        }
         else if( name == "JahStagingCounters" )
         {
             // Jahshaka (PHOTON-7's walk hitch): the upload staging's cumulative events

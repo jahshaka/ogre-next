@@ -249,8 +249,24 @@ namespace Ogre
     protected:
         void newCommandBuffer();
         void endCommandBuffer();
+        /// Jahshaka (PHOTON-7's walk hitch): the command buffer being opened follows a FlushOnly submission.
+        bool mJahAfterFlushOnly = false;
 
     public:
+        /// Jahshaka (PHOTON-7's walk hitch): THE GRAPHICS QUEUE's MID-FRAME SUBMISSIONS, cumulative, read by the
+        /// engine's frame monitor through the render system (JahQueueCounters, a pointer to this array): the FlushOnly
+        /// submissions, those that parked a FENCE on the frame slot being recorded, and the times the command buffer
+        /// opened after one WAITED that slot's fences (vkWaitForFences on the CPU) with the nanoseconds waited.
+        enum JahQueueCounter
+        {
+            JahQueueFlushes,
+            JahQueueFencedFlushes,
+            JahQueueSelfDrains,
+            JahQueueSelfDrainNs,
+            JahQueueNumCounters
+        };
+        static uint64 msJahCounters[JahQueueNumCounters];
+
         VkCommandBuffer getCurrentCmdBuffer()
         {
             if( mJahBlocked )
