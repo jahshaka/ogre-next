@@ -93,6 +93,13 @@ namespace Ogre
         /// named "jah.frame.head" -- what a Nsight capture needs to see a pre-frame job on its
         /// own. Off (the default): no extension, no label, no extra submission.
         static bool jahPassLabelsRequested();
+        /// Jahshaka (THE DEVICE FAULT REPORT, PHOTON-7 stage 10-3): a host's VK_EXT_device_address_binding_report
+        /// receiver. When set before the instance is created (and VulkanDevice::msDeviceFaultAllowed is true, which
+        /// enables VK_EXT_debug_utils at any OGRE_DEBUG_MODE), the instance installs a debug-utils messenger of the
+        /// DEVICE_ADDRESS_BINDING type with it right after vkCreateInstance, so every memory bind and unbind of the
+        /// process is seen from the first one - the host maps a device-fault address to the resource that holds it.
+        static PFN_vkDebugUtilsMessengerCallbackEXT msJahAddressBindingCallback;
+        static void *msJahAddressBindingUserData;
 
         VulkanInstance( const String &appName, VulkanExternalInstance *externalInstance,
                         PFN_vkDebugReportCallbackEXT debugCallback, RenderSystem *renderSystem );
@@ -122,6 +129,8 @@ namespace Ogre
 
         PFN_vkCmdBeginDebugUtilsLabelEXT CmdBeginDebugUtilsLabelEXT;
         PFN_vkCmdEndDebugUtilsLabelEXT CmdEndDebugUtilsLabelEXT;
+        /// Jahshaka (THE DEVICE FAULT REPORT): the address-binding messenger (msJahAddressBindingCallback), or null.
+        VkDebugUtilsMessengerEXT mJahAddressBindingMessenger = VK_NULL_HANDLE;
 
         static FastArray<const char *> enabledExtensions;  // sorted
         static FastArray<const char *> enabledLayers;      // sorted
@@ -342,6 +351,19 @@ namespace Ogre
         /// process-wide static like msRayQueryAllowed (set before the render system loads). Default
         /// false: the device is the one every process gets (the marks cost a command each).
         static bool msDiagnosticCheckpointsAllowed;
+
+        /// Jahshaka (THE DEVICE FAULT REPORT, PHOTON-7 stage 10-3): true = createDevice() requests
+        /// VK_EXT_device_fault and VK_EXT_device_address_binding_report when the driver advertises them, and enables
+        /// their features (deviceFault, deviceFaultVendorBinary, reportAddressBinding) where supported, so that
+        /// after a device loss a host reads the driver's fault record (vkGetDeviceFaultInfoEXT) and maps each
+        /// faulting address to the resource bound there (VulkanInstance::msJahAddressBindingCallback). A
+        /// process-wide static like msDiagnosticCheckpointsAllowed, set before the render system loads; default
+        /// false (the device every process gets is unchanged). mJahDeviceFault* / mJahAddressBindingReport say what
+        /// the device really enabled.
+        static bool msDeviceFaultAllowed;
+        bool mJahDeviceFault = false;
+        bool mJahDeviceFaultVendorBinary = false;
+        bool mJahAddressBindingReport = false;
 
         /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the device-extension names createDevice()
         /// would request on this physical device, in its exact order.

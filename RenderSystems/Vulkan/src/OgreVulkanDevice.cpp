@@ -64,6 +64,9 @@ namespace Ogre
 {
     bool VulkanDevice::msRayQueryAllowed = true;  // see the declaration
     bool VulkanDevice::msDiagnosticCheckpointsAllowed = false;  // see the declaration
+    bool VulkanDevice::msDeviceFaultAllowed = false;            // see the declaration
+    PFN_vkDebugUtilsMessengerCallbackEXT VulkanInstance::msJahAddressBindingCallback = nullptr;  // see the declaration
+    void *VulkanInstance::msJahAddressBindingUserData = nullptr;
 
     FastArray<const char *> VulkanInstance::enabledExtensions;  // sorted
     FastArray<const char *> VulkanInstance::enabledLayers;      // sorted
@@ -174,7 +177,8 @@ namespace Ogre
 #if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM
                 if( extensionName == VK_EXT_DEBUG_UTILS_EXTENSION_NAME )
 #else
-                if( extensionName == VK_EXT_DEBUG_UTILS_EXTENSION_NAME && jahPassLabelsRequested() )
+                if( extensionName == VK_EXT_DEBUG_UTILS_EXTENSION_NAME &&
+                    ( jahPassLabelsRequested() || VulkanDevice::msDeviceFaultAllowed ) )
 #endif
                     enabledExtensions.push_back( VK_EXT_DEBUG_UTILS_EXTENSION_NAME );
                 if( extensionName == VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME )
@@ -404,11 +408,42 @@ namespace Ogre
         if( jahPassLabelsRequested() )
             initDebugFeatures( debugCallback, renderSystem, renderSystem->getRenderDocApi() );
 #endif
+        // Jahshaka (THE DEVICE FAULT REPORT): the host's address-binding receiver, from the first bind on.
+        if( msJahAddressBindingCallback && VulkanDevice::msDeviceFaultAllowed &&
+            hasExtension( VK_EXT_DEBUG_UTILS_EXTENSION_NAME ) )
+        {
+            PFN_vkCreateDebugUtilsMessengerEXT createMessenger =
+                (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr( mVkInstance,
+                                                                           "vkCreateDebugUtilsMessengerEXT" );
+            if( createMessenger )
+            {
+                VkDebugUtilsMessengerCreateInfoEXT mci;
+                makeVkStruct( mci, VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT );
+                mci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                                      VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+                                      VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                      VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+                mci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT;
+                mci.pfnUserCallback = msJahAddressBindingCallback;
+                mci.pUserData = msJahAddressBindingUserData;
+                if( createMessenger( mVkInstance, &mci, 0, &mJahAddressBindingMessenger ) != VK_SUCCESS )
+                    mJahAddressBindingMessenger = VK_NULL_HANDLE;
+            }
+        }
         initPhysicalDeviceList();
     }
     //-------------------------------------------------------------------------
     VulkanInstance::~VulkanInstance()
     {
+        if( mJahAddressBindingMessenger )
+        {
+            PFN_vkDestroyDebugUtilsMessengerEXT destroyMessenger =
+                (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr( mVkInstance,
+                                                                            "vkDestroyDebugUtilsMessengerEXT" );
+            if( destroyMessenger )
+                destroyMessenger( mVkInstance, mJahAddressBindingMessenger, 0 );
+            mJahAddressBindingMessenger = VK_NULL_HANDLE;
+        }
         if( mDebugReportCallback )
         {
             DestroyDebugReportCallback( mVkInstance, mDebugReportCallback, 0 );
@@ -1345,6 +1380,13 @@ namespace Ogre
             else if( msDiagnosticCheckpointsAllowed &&
                      extensionName == VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME )
                 outExtensions.push_back( VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME );
+            // Jahshaka (THE DEVICE FAULT REPORT): requested only when the host asks (msDeviceFaultAllowed) and the
+            // driver advertises them; the binding report also needs the instance's VK_EXT_debug_utils.
+            else if( msDeviceFaultAllowed && extensionName == VK_EXT_DEVICE_FAULT_EXTENSION_NAME )
+                outExtensions.push_back( VK_EXT_DEVICE_FAULT_EXTENSION_NAME );
+            else if( msDeviceFaultAllowed && VulkanInstance::hasExtension( VK_EXT_DEBUG_UTILS_EXTENSION_NAME ) &&
+                     extensionName == VK_EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME )
+                outExtensions.push_back( VK_EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME );
             else if( msRayQueryAllowed &&
                      extensionName == VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME )
                 outExtensions.push_back( VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME );
@@ -1539,6 +1581,40 @@ namespace Ogre
         }
         else
             createInfo.pEnabledFeatures = &mDeviceFeatures;
+
+        // Jahshaka (THE DEVICE FAULT REPORT): the two extensions' features, where the device supports them (queried
+        // first: enabling an unsupported feature fails the device). Only on the features2 route.
+        VkPhysicalDeviceFaultFeaturesEXT jahFaultFeatures;
+        VkPhysicalDeviceAddressBindingReportFeaturesEXT jahBindingFeatures;
+        makeVkStruct( jahFaultFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT );
+        makeVkStruct( jahBindingFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ADDRESS_BINDING_REPORT_FEATURES_EXT );
+        const bool jahFaultExt = hasDeviceExtension( VK_EXT_DEVICE_FAULT_EXTENSION_NAME );
+        const bool jahBindingExt = hasDeviceExtension( VK_EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME );
+        if( msDeviceFaultAllowed && createInfo.pNext == &deviceFeatures2 && ( jahFaultExt || jahBindingExt ) )
+        {
+            VkPhysicalDeviceFeatures2 query;
+            makeVkStruct( query, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 );
+            jahBindingFeatures.pNext = nullptr;
+            jahFaultFeatures.pNext = jahBindingExt ? &jahBindingFeatures : nullptr;
+            query.pNext = jahFaultExt ? (void *)&jahFaultFeatures : (void *)&jahBindingFeatures;
+            vkGetPhysicalDeviceFeatures2( mPhysicalDevice, &query );
+            mJahDeviceFault = jahFaultExt && jahFaultFeatures.deviceFault;
+            mJahDeviceFaultVendorBinary = mJahDeviceFault && jahFaultFeatures.deviceFaultVendorBinary;
+            mJahAddressBindingReport = jahBindingExt && jahBindingFeatures.reportAddressBinding;
+            jahFaultFeatures.deviceFault = mJahDeviceFault ? VK_TRUE : VK_FALSE;
+            jahFaultFeatures.deviceFaultVendorBinary = mJahDeviceFaultVendorBinary ? VK_TRUE : VK_FALSE;
+            jahBindingFeatures.reportAddressBinding = mJahAddressBindingReport ? VK_TRUE : VK_FALSE;
+            if( jahFaultExt )
+            {
+                jahFaultFeatures.pNext = deviceFeatures2.pNext;
+                deviceFeatures2.pNext = &jahFaultFeatures;
+            }
+            if( jahBindingExt )
+            {
+                jahBindingFeatures.pNext = deviceFeatures2.pNext;
+                deviceFeatures2.pNext = &jahBindingFeatures;
+            }
+        }
 
         VkResult result = vkCreateDevice( mPhysicalDevice, &createInfo, NULL, &mDevice );
         checkVkResult( this, result, "vkCreateDevice" );
