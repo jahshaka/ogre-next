@@ -156,13 +156,14 @@
 													OGRE_PHOTOMETRIC_ARG );
 			@end
 
-			//Point light (Jahshaka, PHOTON-7 stage 11: a sphere of its source radius - the glint toward its representative point)
-			float jahSpecNormFp;
+			//Point light (Jahshaka, PHOTON-7 stage 11: a sphere of its source radius - its glint widened, its energy the point's)
+			float jahSpecAlphaFp;
+			const float jahSpecNormFp = jahSphereLightWiden( float( pixelData.roughness ), attenuation.y, fDistance,
+																   saturate( dot( float3( pixelData.normal ), lightDir ) ), jahSpecAlphaFp );
 			midf3 tmpColour =
-				BRDF_Sphere( midf3_c( lightDir ),
-							 midf3_c( jahSphereLightSpecDir( float3( pixelData.normal ), float3( pixelData.viewDir ), lightDir * fDistance,
-																 attenuation.y, float( pixelData.roughness ), jahSpecNormFp ) ),
-							 midf_c( jahSpecNormFp ), midf3_c( lightDiffuse.xyz ), lightSpecular, pixelData PASSBUF_ARG );
+				BRDF_Sphere( midf3_c( lightDir ), midf_c( jahSpecAlphaFp ),
+							 midf_c( jahSpecNormFp ),
+							 midf3_c( lightDiffuse.xyz ), lightSpecular, pixelData PASSBUF_ARG );
 			finalColour += tmpColour * atten;
 		}
 	}
@@ -220,12 +221,13 @@
 
 			if( spotCosAngle >= spotParams.y )
 			{
-				float jahSpecNormFp;   // (Jahshaka: the spot is a sphere of its source radius too)
+				float jahSpecAlphaFp;   // (Jahshaka: the spot is a sphere of its source radius too)
+				const float jahSpecNormFp = jahSphereLightWiden( float( pixelData.roughness ), attenuation.y, fDistance,
+																	   saturate( dot( float3( pixelData.normal ), lightDir ) ), jahSpecAlphaFp );
 				midf3 tmpColour =
-					BRDF_Sphere( midf3_c( lightDir ),
-								 midf3_c( jahSphereLightSpecDir( float3( pixelData.normal ), float3( pixelData.viewDir ), lightDir * fDistance,
-																	 attenuation.y, float( pixelData.roughness ), jahSpecNormFp ) ),
-								 midf_c( jahSpecNormFp ), midf3_c( lightDiffuse.xyz ), lightSpecular, pixelData PASSBUF_ARG );
+					BRDF_Sphere( midf3_c( lightDir ), midf_c( jahSpecAlphaFp ),
+								 midf_c( jahSpecNormFp ),
+								 midf3_c( lightDiffuse.xyz ), lightSpecular, pixelData PASSBUF_ARG );
 				finalColour += tmpColour * atten;
 			}
 		}

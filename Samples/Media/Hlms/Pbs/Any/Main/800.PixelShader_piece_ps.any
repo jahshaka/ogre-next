@@ -586,12 +586,12 @@
 		if( fDistance <= light0Buf.lights[light_idx].attenuation.x @insertpiece( andObjLightMaskCmp_light_idx ) )
 		{
 			lightDir *= 1.0 / fDistance;
-			// Jahshaka (PHOTON-7 stage 11): the lamp is a sphere of its source radius - the glint toward its representative point
-			float jahSpecNorm;
-			const float3 jahSpecDir = jahSphereLightSpecDir( float3( pixelData.normal ), float3( pixelData.viewDir ),
-																 float3( lightDir ) * fDistance, light0Buf.lights[light_idx].attenuation.y,
-																 float( pixelData.roughness ), jahSpecNorm );
-			tmpColour = BRDF_Sphere( midf3_c( lightDir ), midf3_c( jahSpecDir ), midf_c( jahSpecNorm ),
+			// Jahshaka (PHOTON-7 stage 11): the lamp is a sphere of its source radius - its glint widened, its energy the point's
+			float jahSpecAlpha;
+			const float jahSpecNorm = jahSphereLightWiden( float( pixelData.roughness ), light0Buf.lights[light_idx].attenuation.y,
+																 fDistance, saturate( dot( float3( pixelData.normal ), float3( lightDir ) ) ),
+																 jahSpecAlpha );
+			tmpColour = BRDF_Sphere( midf3_c( lightDir ), midf_c( jahSpecAlpha ), midf_c( jahSpecNorm ),
 							  midf3_c( light0Buf.lights[light_idx].diffuse.xyz ),
 							  midf3_c( light0Buf.lights[light_idx].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadowPoint_cur_shadow_map );
@@ -607,12 +607,12 @@
 		if( fDistance <= light0Buf.lights[@n].attenuation.x @insertpiece( andObjLightMaskCmp ) )
 		{
 			lightDir *= 1.0 / fDistance;
-			// Jahshaka (PHOTON-7 stage 11): the lamp is a sphere of its source radius - the glint toward its representative point
-			float jahSpecNorm;
-			const float3 jahSpecDir = jahSphereLightSpecDir( float3( pixelData.normal ), float3( pixelData.viewDir ),
-																 float3( lightDir ) * fDistance, light0Buf.lights[@n].attenuation.y,
-																 float( pixelData.roughness ), jahSpecNorm );
-			tmpColour = BRDF_Sphere( midf3_c( lightDir ), midf3_c( jahSpecDir ), midf_c( jahSpecNorm ),
+			// Jahshaka (PHOTON-7 stage 11): the lamp is a sphere of its source radius - its glint widened, its energy the point's
+			float jahSpecAlpha;
+			const float jahSpecNorm = jahSphereLightWiden( float( pixelData.roughness ), light0Buf.lights[@n].attenuation.y,
+																 fDistance, saturate( dot( float3( pixelData.normal ), float3( lightDir ) ) ),
+																 jahSpecAlpha );
+			tmpColour = BRDF_Sphere( midf3_c( lightDir ), midf_c( jahSpecAlpha ), midf_c( jahSpecNorm ),
 							  midf3_c( light0Buf.lights[@n].diffuse.xyz ),
 							  midf3_c( light0Buf.lights[@n].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadowPoint );
@@ -647,12 +647,12 @@
 														OGRE_PHOTOMETRIC_ARG );
 			@end
 
-			// Jahshaka (PHOTON-7 stage 11): the lamp is a sphere of its source radius - the glint toward its representative point
-			float jahSpecNorm;
-			const float3 jahSpecDir = jahSphereLightSpecDir( float3( pixelData.normal ), float3( pixelData.viewDir ),
-																 float3( lightDir ) * fDistance, light0Buf.lights[light_idx].attenuation.y,
-																 float( pixelData.roughness ), jahSpecNorm );
-			tmpColour = BRDF_Sphere( midf3_c( lightDir ), midf3_c( jahSpecDir ), midf_c( jahSpecNorm ),
+			// Jahshaka (PHOTON-7 stage 11): the lamp is a sphere of its source radius - its glint widened, its energy the point's
+			float jahSpecAlpha;
+			const float jahSpecNorm = jahSphereLightWiden( float( pixelData.roughness ), light0Buf.lights[light_idx].attenuation.y,
+																 fDistance, saturate( dot( float3( pixelData.normal ), float3( lightDir ) ) ),
+																 jahSpecAlpha );
+			tmpColour = BRDF_Sphere( midf3_c( lightDir ), midf_c( jahSpecAlpha ), midf_c( jahSpecNorm ),
 							  midf3_c( light0Buf.lights[light_idx].diffuse.xyz ),
 							  midf3_c( light0Buf.lights[light_idx].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow_cur_shadow_map );
@@ -686,12 +686,12 @@
 														OGRE_PHOTOMETRIC_ARG );
 			@end
 
-			// Jahshaka (PHOTON-7 stage 11): the lamp is a sphere of its source radius - the glint toward its representative point
-			float jahSpecNorm;
-			const float3 jahSpecDir = jahSphereLightSpecDir( float3( pixelData.normal ), float3( pixelData.viewDir ),
-																 float3( lightDir ) * fDistance, light0Buf.lights[@n].attenuation.y,
-																 float( pixelData.roughness ), jahSpecNorm );
-			tmpColour = BRDF_Sphere( midf3_c( lightDir ), midf3_c( jahSpecDir ), midf_c( jahSpecNorm ),
+			// Jahshaka (PHOTON-7 stage 11): the lamp is a sphere of its source radius - its glint widened, its energy the point's
+			float jahSpecAlpha;
+			const float jahSpecNorm = jahSphereLightWiden( float( pixelData.roughness ), light0Buf.lights[@n].attenuation.y,
+																 fDistance, saturate( dot( float3( pixelData.normal ), float3( lightDir ) ) ),
+																 jahSpecAlpha );
+			tmpColour = BRDF_Sphere( midf3_c( lightDir ), midf_c( jahSpecAlpha ), midf_c( jahSpecNorm ),
 							  midf3_c( light0Buf.lights[@n].diffuse.xyz ),
 							  midf3_c( light0Buf.lights[@n].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow );
