@@ -1312,6 +1312,16 @@ namespace Ogre
             discoverGeneralTextures();
 
         RenderSystem *renderSystem = mCreator->getRenderSystem();
+        // (Jahshaka) THE COPY ENCODER IS CLOSED FIRST, as CompositorPass::analyzeBarriers does: a texture the
+        // copy encoder still owns sits in the solver as CopyEncoderManaged, and the encoder's end - which
+        // executeResourceTransition runs before it records these transitions - assumes its default layout
+        // into the solver, OVERWRITING what this job just resolved. Measured (Jahshaka BUGFIX-MAIN-1 stage 2):
+        // a raw compute dispatch reading the scene depth right after a depth copy (the Atom history
+        // pyramid) left the solver at RenderTarget while the image sat in SHADER_READ_ONLY, so the next render
+        // pass's barrier was RenderTarget -> RenderTarget from the fragment tests, unchained to the compute's
+        // layout transition: SYNC-HAZARD-READ-AFTER-WRITE on its depth LOAD, every frame on such a chain.
+        // A no-op when no copy encoder is open (every compositor compute pass ended it already).
+        renderSystem->endCopyEncoder();
         BarrierSolver &solver = renderSystem->getBarrierSolver();
 
         {
