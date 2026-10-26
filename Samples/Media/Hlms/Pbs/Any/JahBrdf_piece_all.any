@@ -133,4 +133,27 @@ vec3 jahSpecularLobe( vec3 N, vec3 L, vec3 V, float r, vec3 F0, float w )
 	const float fc = pow( 1.0 - VdotH, 5.0 );
 	return ( D * vis ) * ( F0 * ( 1.0 - fc ) + vec3( w * fc ) );
 }
+
+// A SPHERE LIGHT'S SPECULAR (Karis, "Real Shading in Unreal Engine 4", SIGGRAPH 2013): a lamp has a size, so its glint
+// is the lobe toward the sphere's REPRESENTATIVE POINT - the point of the sphere nearest the reflected ray R = reflect( -V,
+// N ) - with the lobe WIDENED by the sphere's angular size, alpha' = min( alpha + radius / ( 2 d ), 1 ), its peak scaled
+// back by ( alpha / alpha' )^2 so the widened lobe carries the same energy. A point light (radius 0) is the centre's
+// direction and 1 exactly. `toLight` = the light's centre less the shaded point (unnormalised), `alpha` the GGX alpha
+// (the lobe's, max( r^2, 0.001 )). The ONE function every reader of a punctual light's glint takes - the pixel's
+// BRDF_Default and the ray hits' (the hit's direct light, the card read's lights lobe): one answer for one light.
+vec3 jahSphereLightSpecDir( vec3 N, vec3 V, vec3 toLight, float radius, float alpha, out float norm )
+{
+	norm = 1.0;
+	const float d = length( toLight );
+	if( !( radius > 0.0 ) || !( d > radius ) )
+		return toLight / max( d, 1e-20 );
+	const vec3 R = reflect( -V, N );
+	const vec3 centreToRay = dot( toLight, R ) * R - toLight;
+	const float ctr = length( centreToRay );
+	const vec3 closest = toLight + centreToRay * clamp( radius / max( ctr, 1e-20 ), 0.0, 1.0 );
+	const float a = max( alpha, 0.001 );
+	const float aWide = min( a + radius / ( 2.0 * d ), 1.0 );
+	norm = ( a / aWide ) * ( a / aWide );
+	return normalize( closest );
+}
 @end

@@ -156,9 +156,13 @@
 													OGRE_PHOTOMETRIC_ARG );
 			@end
 
-			//Point light
+			//Point light (Jahshaka, PHOTON-7 stage 11: a sphere of its source radius - the glint toward its representative point)
+			float jahSpecNormFp;
 			midf3 tmpColour =
-				BRDF( midf3_c( lightDir ), midf3_c( lightDiffuse.xyz ), lightSpecular, pixelData PASSBUF_ARG );
+				BRDF_Sphere( midf3_c( lightDir ),
+							 midf3_c( jahSphereLightSpecDir( float3( pixelData.normal ), float3( pixelData.viewDir ), lightDir * fDistance,
+																 attenuation.y, float( pixelData.roughness ), jahSpecNormFp ) ),
+							 midf_c( jahSpecNormFp ), midf3_c( lightDiffuse.xyz ), lightSpecular, pixelData PASSBUF_ARG );
 			finalColour += tmpColour * atten;
 		}
 	}
@@ -216,8 +220,12 @@
 
 			if( spotCosAngle >= spotParams.y )
 			{
+				float jahSpecNormFp;   // (Jahshaka: the spot is a sphere of its source radius too)
 				midf3 tmpColour =
-					BRDF( midf3_c( lightDir ), midf3_c( lightDiffuse.xyz ), lightSpecular, pixelData PASSBUF_ARG );
+					BRDF_Sphere( midf3_c( lightDir ),
+								 midf3_c( jahSphereLightSpecDir( float3( pixelData.normal ), float3( pixelData.viewDir ), lightDir * fDistance,
+																	 attenuation.y, float( pixelData.roughness ), jahSpecNormFp ) ),
+								 midf_c( jahSpecNormFp ), midf3_c( lightDiffuse.xyz ), lightSpecular, pixelData PASSBUF_ARG );
 				finalColour += tmpColour * atten;
 			}
 		}

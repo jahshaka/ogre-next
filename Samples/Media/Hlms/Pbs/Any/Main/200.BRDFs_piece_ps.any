@@ -70,6 +70,12 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
     return NdotL * (pixelData.specular.xyz * lightSpecular * Rs +
                     pixelData.diffuse.xyz * lightDiffuse * fresnelD);
 }
+// Jahshaka: the light loops call BRDF_Sphere (BRDF_Default's sphere light); this BRDF takes the light as a point.
+INLINE midf3 BRDF_Sphere( midf3 lightDir, midf3 specDir, midf specNorm, midf3 lightDiffuse, midf3 lightSpecular,
+						  PixelData pixelData PASSBUF_ARG_DECL )
+{
+	return BRDF( lightDir, lightDiffuse, lightSpecular, pixelData PASSBUF_ARG );
+}
 @end
 @end
 
@@ -141,6 +147,12 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
 	return NdotL * (pixelData.specular.xyz * lightSpecular * Rs +
 					pixelData.diffuse.xyz * lightDiffuse * fresnelD);
 }
+// Jahshaka: the light loops call BRDF_Sphere (BRDF_Default's sphere light); this BRDF takes the light as a point.
+INLINE midf3 BRDF_Sphere( midf3 lightDir, midf3 specDir, midf specNorm, midf3 lightDiffuse, midf3 lightSpecular,
+						  PixelData pixelData PASSBUF_ARG_DECL )
+{
+	return BRDF( lightDir, lightDiffuse, lightSpecular, pixelData PASSBUF_ARG );
+}
 @end
 @end
 
@@ -152,24 +164,32 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
 // DoSpotLights) call its attenuation and spot-cone functions whatever the BRDF.
 @insertpiece( JahBrdf )
 //Default BRDF
-INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, PixelData pixelData PASSBUF_ARG_DECL )
+// Jahshaka (PHOTON-7 stage 11): A LIGHT HAS A SIZE. The specular lobe is evaluated toward `specDir` - a sphere light's
+// representative point (JahBrdf's jahSphereLightSpecDir, the one function the ray hits take too) - and scaled by
+// `specNorm`, the widened lobe's energy normalisation; the diffuse lobe and the irradiance's cosine stay the centre's
+// `lightDir`. BRDF() below is the point form (specDir = lightDir, specNorm = 1: the same arithmetic as before).
+INLINE midf3 BRDF_Sphere( midf3 lightDir, midf3 specDir, midf specNorm, midf3 lightDiffuse, midf3 lightSpecular,
+						  PixelData pixelData PASSBUF_ARG_DECL )
 {
-	midf3 halfWay = normalize( lightDir + pixelData.viewDir );
+	midf3 halfWay = normalize( specDir + pixelData.viewDir );
 	midf NdotL = saturate( dot( pixelData.normal, lightDir ) );
+	midf NdotLs = saturate( dot( pixelData.normal, specDir ) );
 	midf NdotH = saturate( dot( pixelData.normal, halfWay ) );
 	midf VdotH = saturate( dot( pixelData.viewDir, halfWay ) );
+	// (the diffuse lobe's own half vector: the centre's)
+	midf VdotHd = saturate( dot( pixelData.viewDir, normalize( lightDir + pixelData.viewDir ) ) );
 
 	midf sqR = pixelData.roughness * pixelData.roughness;
 
 	//Geometric/Visibility term (Smith GGX Height-Correlated)
 @property( GGX_height_correlated )
-	midf Lambda_GGXV = NdotL * sqrt( (-pixelData.NdotV * sqR + pixelData.NdotV) * pixelData.NdotV + sqR );
-	midf Lambda_GGXL = pixelData.NdotV * sqrt( (-NdotL * sqR + NdotL) * NdotL + sqR );
+	midf Lambda_GGXV = NdotLs * sqrt( (-pixelData.NdotV * sqR + pixelData.NdotV) * pixelData.NdotV + sqR );
+	midf Lambda_GGXL = pixelData.NdotV * sqrt( (-NdotLs * sqR + NdotLs) * NdotLs + sqR );
 
 	midf G = _h( 0.5 ) / (( Lambda_GGXV + Lambda_GGXL + _h( 1e-6f ) ) * _h( 3.141592654 ));
 @else
 	midf k = ( pixelData.perceptualRoughness + _h( 1 ) ) * ( pixelData.perceptualRoughness + _h( 1 ) ) * _h( 0.125 );
-	midf gL = NdotL * ( _h( 1 ) - k ) + k;
+	midf gL = NdotLs * ( _h( 1 ) - k ) + k;
 	midf gV = pixelData.NdotV * ( _h( 1 ) - k ) + k;
 	midf G = _h( 1.0 ) / (( gL * gV + _h( 1e-4f ) ) * _h( 4 * 3.141592654 ) );
 @end
@@ -203,12 +223,12 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
     float_fresnel fresnelS = @insertpiece( getSpecularFresnel );
 
 	//We should divide Rs by PI, but it was done inside G for performance
-	midf3 Rs = ( fresnelS * RG ) * pixelData.specular.xyz;
+	midf3 Rs = ( fresnelS * ( RG * specNorm ) ) * pixelData.specular.xyz;
 
 	//Diffuse BRDF (*Normalized* Disney, see course_notes_moving_frostbite_to_pbr.pdf
 	//"Moving Frostbite to Physically Based Rendering" Sebastien Lagarde & Charles de Rousiers)
 	//lightScatter * viewScatter * energyFactor: jahDisneyDiffuse (JahBrdf).
-	midf diffuseLobe	= _h( jahDisneyDiffuse( float( NdotL ), float( pixelData.NdotV ), float( VdotH ),
+	midf diffuseLobe	= _h( jahDisneyDiffuse( float( NdotL ), float( pixelData.NdotV ), float( VdotHd ),
 											float( pixelData.perceptualRoughness ) ) );
 
 	@property( fresnel_has_diffuse )
@@ -252,6 +272,11 @@ INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, Pixe
 	@else
 		return NdotL * (Rs * lightSpecular + Rd * lightDiffuse);
 	@end
+}
+// The point form: a light of no size.
+INLINE midf3 BRDF( midf3 lightDir, midf3 lightDiffuse, midf3 lightSpecular, PixelData pixelData PASSBUF_ARG_DECL )
+{
+	return BRDF_Sphere( lightDir, lightDir, _h( 1.0 ), lightDiffuse, lightSpecular, pixelData PASSBUF_ARG );
 }
 @end
 @end
