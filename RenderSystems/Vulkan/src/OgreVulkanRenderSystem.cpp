@@ -2940,6 +2940,8 @@ namespace Ogre
         mJahOverflowedLastFrame = 0u;
         mJahSampleStack.clear();
         mJahResults.clear();
+        mJahOpenFlushes.clear();
+        mJahBubbleResults.clear();
         mJahGpuProfiling = true;
 #endif
     }
@@ -2964,6 +2966,8 @@ namespace Ogre
         mJahPoolIdx = 0xFFFFFFFFu;
         mJahSampleStack.clear();
         mJahResults.clear();
+        mJahOpenFlushes.clear();
+        mJahBubbleResults.clear();
 #endif
     }
     //-------------------------------------------------------------------------
@@ -2984,6 +2988,7 @@ namespace Ogre
         // 6 faces x 22 passes before the view and the planar arms are counted.
         JahGpuSample sample;
         sample.hash = hashCache ? *hashCache : 0u;
+        sample.queue = 0;
         // Jahshaka (ENGINE-UPGRADE-ASYNC stage 2): inside an async compute bracket the sample is
         // timed on the compute queue -- when its family has timestamps; else it is LOST.
         const bool bNoTimestampsHere = &mDevice->_jahRecordQueue() != &mDevice->mGraphicsQueue &&
@@ -2997,6 +3002,7 @@ namespace Ogre
             return;
         }
         sample.query = mJahNextQuery;
+        sample.queue = &mDevice->_jahRecordQueue();
         mJahNextQuery += 2u;
         // A timestamp write is legal inside a render pass, which is where most
         // of these land.
@@ -3044,11 +3050,19 @@ namespace Ogre
     //-------------------------------------------------------------------------
     bool VulkanRenderSystem::jahGpuResolvePool( JahGpuPool &p, bool force )
     {
-        if( !p.samples.empty() && !force )
+        bool anyBubblePair = false;
+        for( size_t i = 0u; i < p.bubbles.size(); ++i )
+            anyBubblePair = anyBubblePair || p.bubbles[i].complete;
+        if( ( !p.samples.empty() || anyBubblePair ) && !force )
         {
             uint32 highest = 0u;
             for( size_t i = 0u; i < p.samples.size(); ++i )
                 highest = std::max( highest, p.samples[i].query + 2u );
+            for( size_t i = 0u; i < p.bubbles.size(); ++i )
+            {
+                if( p.bubbles[i].complete )
+                    highest = std::max( highest, p.bubbles[i].query + 2u );
+            }
             // Sized to what was actually written, not to the pool.
             mJahRawResults.resize( (size_t)highest * 2u );
             uint64 *raw = mJahRawResults.begin();
@@ -3067,6 +3081,15 @@ namespace Ogre
                 if( b[1] == 0u || e[1] == 0u )
                     return false;   // still in flight: the whole pool waits
             }
+            for( size_t i = 0u; i < p.bubbles.size(); ++i )
+            {
+                if( !p.bubbles[i].complete )
+                    continue;
+                const uint64 *t0 = raw + (size_t)p.bubbles[i].query * 2u;
+                const uint64 *t1 = raw + (size_t)( p.bubbles[i].query + 1u ) * 2u;
+                if( t0[1] == 0u || t1[1] == 0u )
+                    return false;
+            }
             for( size_t i = 0u; i < p.samples.size(); ++i )
             {
                 const uint64 *b = raw + (size_t)p.samples[i].query * 2u;
@@ -3077,6 +3100,28 @@ namespace Ogre
                                                       double( mJahTimestampPeriodNs ) * 1e-6 );
                 mJahResults.push_back( std::pair<uint32, float>( p.samples[i].hash, ms ) );
             }
+            for( size_t i = 0u; i < p.bubbles.size(); ++i )
+            {
+                const JahGpuBubble &bb = p.bubbles[i];
+                float ms = -1.0f;   // a pair never completed: LOST, never 0
+                if( bb.complete )
+                {
+                    const uint64 t0 = raw[(size_t)bb.query * 2u];
+                    const uint64 t1 = raw[(size_t)( bb.query + 1u ) * 2u];
+                    // THE IDLE IS max( 0, t1 - t0 ), NEVER NEGATIVE. t0 is BOTTOM_OF_PIPE: written
+                    // once every command of the flushed buffer has completed. t1 is TOP_OF_PIPE:
+                    // written as soon as the next buffer's first command is reached, which the GPU
+                    // may do BEFORE the flushed buffer has drained (consecutive submissions on one
+                    // queue overlap unless a semaphore or a barrier orders them). Then t1 < t0:
+                    // the queue never ran dry, the idle is 0. (A semaphore wait of the next buffer
+                    // at a later stage holds its work, not its TOP_OF_PIPE: that is a dependency
+                    // on other work, not the submission's bubble.)
+                    ms = t1 > t0 ? float( double( t1 - t0 ) * double( mJahTimestampPeriodNs ) * 1e-6 )
+                                 : 0.0f;
+                }
+                for( size_t h = 0u; h < bb.hashes.size(); ++h )
+                    mJahBubbleResults.push_back( std::pair<uint32, float>( bb.hashes[h], ms ) );
+            }
         }
         else
         {
@@ -3084,12 +3129,77 @@ namespace Ogre
             // sample in it is reported lost rather than kept waiting forever.
             for( size_t i = 0u; i < p.samples.size(); ++i )
                 mJahResults.push_back( std::pair<uint32, float>( p.samples[i].hash, -1.0f ) );
+            for( size_t i = 0u; i < p.bubbles.size(); ++i )
+            {
+                for( size_t h = 0u; h < p.bubbles[i].hashes.size(); ++h )
+                    mJahBubbleResults.push_back( std::pair<uint32, float>( p.bubbles[i].hashes[h], -1.0f ) );
+            }
         }
         for( size_t i = 0u; i < p.lost.size(); ++i )
             mJahResults.push_back( std::pair<uint32, float>( p.lost[i], -1.0f ) );
         p.samples.clear();
         p.lost.clear();
+        p.bubbles.clear();
         return true;
+    }
+    //-------------------------------------------------------------------------
+    void VulkanRenderSystem::_jahGpuFlushEnd( VulkanQueue &queue, VkCommandBuffer cmd, bool canWrite )
+    {
+        if( !mJahGpuProfiling || mJahSampleStack.empty() || !cmd )
+            return;
+        JahGpuBubble bubble;
+        bubble.query = kJahOverflowQuery;
+        bubble.complete = false;
+        for( size_t i = 0u; i < mJahSampleStack.size(); ++i )
+        {
+            if( mJahSampleStack[i].queue == &queue )
+                bubble.hashes.push_back( mJahSampleStack[i].hash );
+        }
+        if( bubble.hashes.empty() )
+            return;   // nothing open on this queue: nothing written
+        if( mJahPoolIdx >= mJahPools.size() )
+            return;   // no pool open: no sample with a query can be open either (frame begin clears both)
+        JahGpuPool &pool = mJahPools[mJahPoolIdx];
+        if( canWrite && mJahNextQuery + 2u <= kJahMaxGpuQueries )
+        {
+            bubble.query = mJahNextQuery;
+            mJahNextQuery += 2u;
+            // After the buffer's encoders end, so BOTTOM_OF_PIPE follows its render pass's stores.
+            queue.endAllEncoders();
+            vkCmdWriteTimestamp( cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool.pool, bubble.query );
+            JahGpuOpenFlush open;
+            open.queue = &queue;
+            open.pool = mJahPoolIdx;
+            open.bubble = uint32( pool.bubbles.size() );
+            mJahOpenFlushes.push_back( open );
+        }
+        else
+        {
+            ++mJahOverflowed;   // the capture's numbers are incomplete: said, never hidden
+        }
+        pool.bubbles.push_back( bubble );
+    }
+    //-------------------------------------------------------------------------
+    void VulkanRenderSystem::_jahGpuFlushNext( const VulkanQueue &queue, VkCommandBuffer cmd )
+    {
+        for( size_t i = 0u; i < mJahOpenFlushes.size(); ++i )
+        {
+            if( mJahOpenFlushes[i].queue != &queue )
+                continue;
+            const JahGpuOpenFlush open = mJahOpenFlushes[i];
+            mJahOpenFlushes.erase( mJahOpenFlushes.begin() + (ptrdiff_t)i );
+            // The same pool only: a pool turned over since phase 0 is no longer this frame's
+            // (its reset is recorded): the pair stays incomplete and its pool reports it LOST.
+            if( !cmd || open.pool != mJahPoolIdx || open.pool >= mJahPools.size() )
+                return;
+            JahGpuPool &pool = mJahPools[open.pool];
+            if( open.bubble >= pool.bubbles.size() )
+                return;
+            JahGpuBubble &bb = pool.bubbles[open.bubble];
+            vkCmdWriteTimestamp( cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool.pool, bb.query + 1u );
+            bb.complete = true;
+            return;
+        }
     }
     //-------------------------------------------------------------------------
     void VulkanRenderSystem::jahGpuFrameBegin()
@@ -3104,6 +3214,9 @@ namespace Ogre
         // one's nesting.
         mJahSampleStack.clear();
         mJahResults.clear();
+        mJahBubbleResults.clear();
+        // A phase 0 whose next buffer never opened in its frame: its pair stays incomplete (LOST).
+        mJahOpenFlushes.clear();
         // The answers parked while no pool was open go out with this resolve.
         for( size_t i = 0u; i < mJahParked.size(); ++i )
             mJahResults.push_back( std::pair<uint32, float>( mJahParked[i], -1.0f ) );
@@ -3262,6 +3375,20 @@ namespace Ogre
                 (std::vector<std::pair<uint32, float> > *)pData;
             out->insert( out->end(), mJahResults.begin(), mJahResults.end() );
             mJahResults.clear();
+            return;
+        }
+        else if( name == "JahGpuBubbleResults" )
+        {
+            // Jahshaka (PHOTON-7 stage 10, urgent #64): (sample id, milliseconds) for every
+            // FLUSH's bubble that resolved at the last JahGpuFrameBegin, one pair per sample open
+            // across the flush (a sample across two flushes has two). A NEGATIVE time is a bubble
+            // that will never be known (no room, a blocked queue, a pair never completed, a pool
+            // lost). A sample no flush crossed has none: its bubble is exactly 0. Read it BEFORE
+            // JahGpuSampleResults (the same pools resolve both). Appended, never cleared.
+            std::vector<std::pair<uint32, float> > *out =
+                (std::vector<std::pair<uint32, float> > *)pData;
+            out->insert( out->end(), mJahBubbleResults.begin(), mJahBubbleResults.end() );
+            mJahBubbleResults.clear();
             return;
         }
 #endif

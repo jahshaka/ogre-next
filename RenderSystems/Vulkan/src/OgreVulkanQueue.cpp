@@ -368,6 +368,9 @@ namespace Ogre
                 beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
                 VkResult result = vkBeginCommandBuffer( mCurrentCmdBuffer, &beginInfo );
                 checkVkResult( mOwnerDevice, result, "vkBeginCommandBuffer" );
+#ifdef JAH_GPU_TIMESTAMPS
+                mRenderSystem->_jahGpuFlushNext( *this, mCurrentCmdBuffer );   // a flush's phase 1
+#endif
                 return;
             }
         }
@@ -382,7 +385,11 @@ namespace Ogre
         beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VkResult result = vkBeginCommandBuffer( mCurrentCmdBuffer, &beginInfo );
         checkVkResult( mOwnerDevice, result, "vkBeginCommandBuffer" );
-
+#ifdef JAH_GPU_TIMESTAMPS
+        // Jahshaka (PHOTON-7 stage 10, urgent #64): A FLUSH's PHASE 1, TOP_OF_PIPE, the new buffer's
+        // first command (VulkanRenderSystem's JahGpuBubble: a no-op unless this queue owes one).
+        mRenderSystem->_jahGpuFlushNext( *this, mCurrentCmdBuffer );
+#endif
     }
     //-------------------------------------------------------------------------
     void VulkanQueue::_jahOrderAfterEarlierWork()
@@ -1520,6 +1527,13 @@ namespace Ogre
     //-------------------------------------------------------------------------
     void VulkanQueue::commitAndNextCommandBuffer( SubmissionType::SubmissionType submissionType )
     {
+#ifdef JAH_GPU_TIMESTAMPS
+        // Jahshaka (PHOTON-7 stage 10, urgent #64): A FLUSH's PHASE 0, BOTTOM_OF_PIPE, the flushed
+        // buffer's last command - a no-op unless a GPU sample is open on this queue (a blocked
+        // queue cannot record it: its open samples' bubbles are reported lost).
+        if( mCurrentCmdBuffer )
+            mRenderSystem->_jahGpuFlushEnd( *this, mCurrentCmdBuffer, !mJahBlocked );
+#endif
         endCommandBuffer();
 
         mRenderSystem->flushPendingNonCoherentFlushes( submissionType );

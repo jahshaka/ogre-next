@@ -203,13 +203,49 @@ namespace Ogre
         {
             uint32 hash;   ///< the caller's id for this sample (hashCache)
             uint32 query;  ///< the begin query index; end is query + 1
+            /// The queue its timestamps went to: a flush credits ITS OWN queue's open samples
+            /// (the graphics queue's, or the compute queue's under its own flushes).
+            const VulkanQueue *queue;
+        };
+        // ---- Jahshaka (PHOTON-7 stage 10, urgent #64): A FLUSH's BUBBLE, MEASURED ----------------
+        //
+        // A sample open across a mid-frame submission holds the GPU's idle between the end of
+        // the flushed command buffer and the start of the next one (the CPU submits, then
+        // records): time no work of the sample's made. The host must tell it from the sample's
+        // own work, and it must MEASURE it, never estimate it from the CPU's side. So every
+        // flush with a sample open on its queue writes ONE PAIR of timestamps on that queue:
+        // phase 0, BOTTOM_OF_PIPE, the last command of the flushed buffer (after its encoders
+        // end: everything it holds is done); phase 1, TOP_OF_PIPE, the first command of the
+        // next buffer. The bubble is max( 0, t1 - t0 ), credited to every sample open on the
+        // queue across the flush. Nothing else is written per flush, and nothing at all while
+        // no sample is open (the stack is empty outside a monitor capture).
+        //
+        // ROOM: the pair takes two queries from the frame's pool, out of the same
+        // kJahMaxGpuQueries as the samples (a flush inside a sample is one more pair beside
+        // it). A flush with no room, a blocked queue, or a next buffer that opens in another
+        // frame's pool (a pair never completed) is reported LOST: each open sample's bubble
+        // answer is negative, never 0.
+        struct JahGpuBubble
+        {
+            uint32 query;      ///< phase 0's query; phase 1 is query + 1
+            bool complete;     ///< phase 1 was written (the queue's next buffer, the same pool)
+            std::vector<uint32> hashes;   ///< every sample open on the queue across the flush
+        };
+        struct JahGpuOpenFlush
+        {
+            const VulkanQueue *queue;   ///< the queue whose next buffer writes phase 1
+            uint32 pool;                ///< the pool phase 0 went to
+            uint32 bubble;              ///< its index in that pool's bubbles
         };
         struct JahGpuPool
         {
             VkQueryPool               pool;
             std::vector<JahGpuSample> samples;   ///< complete pairs written into it
             std::vector<uint32>       lost;      ///< ids that will never have a time
+            std::vector<JahGpuBubble> bubbles;   ///< the flushes' pairs written into it
         };
+        std::vector<JahGpuOpenFlush> mJahOpenFlushes;   ///< phase 0 written, phase 1 owed
+        std::vector<std::pair<uint32, float> > mJahBubbleResults;
         std::vector<JahGpuPool>   mJahPools;     ///< every pool created (index = id)
         std::vector<uint32>       mJahPending;   ///< written pools, oldest first
         std::vector<uint32>       mJahFree;      ///< pools ready for a reset + reuse
@@ -235,6 +271,17 @@ namespace Ogre
         /// Reads a written pool without waiting: true (and its results
         /// appended) when every sample in it is back.
         bool jahGpuResolvePool( JahGpuPool &p, bool force );
+
+    public:
+        /// THE FLUSH's PHASE 0 (VulkanQueue::commitAndNextCommandBuffer, before endCommandBuffer):
+        /// `cmd` is the buffer about to be submitted; `canWrite` false for a queue an async
+        /// bracket blocks. A no-op unless a sample is open on `queue`.
+        void _jahGpuFlushEnd( VulkanQueue &queue, VkCommandBuffer cmd, bool canWrite );
+        /// THE FLUSH's PHASE 1 (VulkanQueue::newCommandBuffer, after vkBeginCommandBuffer): `cmd`
+        /// is the queue's new buffer. A no-op unless the queue has a phase 0 owed.
+        void _jahGpuFlushNext( const VulkanQueue &queue, VkCommandBuffer cmd );
+
+    private:
 #endif
 
     public:
