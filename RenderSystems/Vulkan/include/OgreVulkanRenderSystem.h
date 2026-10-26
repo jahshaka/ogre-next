@@ -418,6 +418,24 @@ namespace Ogre
         /// the count is read by the plugin's own code.
         uint64 _jahGetNumDispatches() const;
 
+        /** Jahshaka (PHOTON-7 stage 10): A BUFFER FILLED ON THE GPU - vkCmdFillBuffer, a transfer
+            command on the record queue, through the copy encoder (the same barriers as a GPU copy
+            into the buffer: whatever read or wrote it before is waited for, whatever reads it
+            after sees the value). Ogre-Next has no GPU clear for a buffer; without one a buffer
+            that must start at zero is created with host zeros, which go up through the staging
+            buffer (4 MB of them forced a fenced flush and a 13.5 ms GPU idle on one frame).
+        @param buffer
+            A BT_DEFAULT buffer with no shadow copy (a dynamic one is the host's to write; an
+            immutable one is never written after its creation; a shadow copy would go stale):
+            refused otherwise.
+        @param elemStart, numElems
+            The range, in the buffer's elements; numElems is clamped to the buffer's end. The
+            byte offset and size must be multiples of 4 (vkCmdFillBuffer's rule): refused
+            otherwise.
+        @param value
+            The 32-bit word every 4 bytes of the range receive. */
+        void jahFillBuffer( BufferPacked *buffer, size_t elemStart, size_t numElems, uint32 value );
+
     private:
         uint64 mJahDispatches = 0u;
 

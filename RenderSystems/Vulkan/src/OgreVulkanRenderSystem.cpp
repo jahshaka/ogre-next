@@ -2269,6 +2269,46 @@ namespace Ogre
     //-------------------------------------------------------------------------
     uint64 VulkanRenderSystem::_jahGetNumDispatches() const { return mJahDispatches; }
     //-------------------------------------------------------------------------
+    void VulkanRenderSystem::jahFillBuffer( BufferPacked *buffer, size_t elemStart, size_t numElems,
+                                            uint32 value )
+    {
+        if( !buffer || buffer->getBufferType() != BT_DEFAULT || buffer->getShadowCopy() )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                         "only a BT_DEFAULT buffer with no shadow copy is filled on the GPU (a dynamic "
+                         "one is the host's to write, an immutable one is never written after its "
+                         "creation, a shadow copy would go stale)",
+                         "VulkanRenderSystem::jahFillBuffer" );
+        }
+        const size_t numElements = buffer->getNumElements();
+        if( elemStart >= numElements )
+            return;
+        numElems = std::min( numElems, numElements - elemStart );
+        const size_t bytesPerElement = buffer->getBytesPerElement();
+        const size_t offsetBytes = ( buffer->_getFinalBufferStart() + elemStart ) * bytesPerElement;
+        const size_t sizeBytes = numElems * bytesPerElement;
+        if( ( offsetBytes % 4u ) != 0u || ( sizeBytes % 4u ) != 0u )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS,
+                         "vkCmdFillBuffer fills whole 32-bit words: the byte offset and size must be "
+                         "multiples of 4",
+                         "VulkanRenderSystem::jahFillBuffer" );
+        }
+        if( !sizeBytes )
+            return;
+        buffer->getBufferInterface()->_ensureDelayedImmutableBuffersAreReady();
+        OGRE_ASSERT_HIGH( dynamic_cast<VulkanBufferInterface *>( buffer->getBufferInterface() ) );
+        VulkanBufferInterface *bufferVk =
+            static_cast<VulkanBufferInterface *>( buffer->getBufferInterface() );
+        // The record queue, as a GPU copy into the buffer goes (VulkanBufferInterface::copyTo):
+        // a routed copy is legal on a compute family.
+        VulkanDevice::JahRoutedCopy routed( mDevice );
+        VulkanQueue &queue = mDevice->_jahRecordQueue();
+        queue.getCopyEncoder( buffer, 0, false, CopyEncTransitionMode::Auto );
+        vkCmdFillBuffer( queue.getCurrentCmdBuffer(), bufferVk->getVboName(), offsetBytes, sizeBytes,
+                         value );
+    }
+    //-------------------------------------------------------------------------
     void VulkanRenderSystem::_dispatch( const HlmsComputePso &pso )
     {
         ++mJahDispatches;   // Jahshaka (ENGINE-UPGRADE-ASYNC-3)
