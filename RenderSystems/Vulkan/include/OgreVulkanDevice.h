@@ -364,6 +364,10 @@ namespace Ogre
         bool mJahDeviceFault = false;
         bool mJahDeviceFaultVendorBinary = false;
         bool mJahAddressBindingReport = false;
+        /// ...and VK_NV_device_diagnostics_config under the same switch (shader debug info, resource tracking,
+        /// AUTOMATIC CHECKPOINTS and shader error reporting): the driver's own markers at draw / dispatch / copy
+        /// granularity, read back beside the host's through vkGetQueueCheckpointDataNV. True when enabled.
+        bool mJahDiagnosticsConfig = false;
 
         /// Jahshaka (fork d014b064f+1bccc3f93 (was 0068)): the device-extension names createDevice()
         /// would request on this physical device, in its exact order.

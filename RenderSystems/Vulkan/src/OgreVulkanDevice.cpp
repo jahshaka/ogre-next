@@ -1384,6 +1384,8 @@ namespace Ogre
             // driver advertises them; the binding report also needs the instance's VK_EXT_debug_utils.
             else if( msDeviceFaultAllowed && extensionName == VK_EXT_DEVICE_FAULT_EXTENSION_NAME )
                 outExtensions.push_back( VK_EXT_DEVICE_FAULT_EXTENSION_NAME );
+            else if( msDeviceFaultAllowed && extensionName == VK_NV_DEVICE_DIAGNOSTICS_CONFIG_EXTENSION_NAME )
+                outExtensions.push_back( VK_NV_DEVICE_DIAGNOSTICS_CONFIG_EXTENSION_NAME );
             else if( msDeviceFaultAllowed && VulkanInstance::hasExtension( VK_EXT_DEBUG_UTILS_EXTENSION_NAME ) &&
                      extensionName == VK_EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME )
                 outExtensions.push_back( VK_EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME );
@@ -1590,6 +1592,31 @@ namespace Ogre
         makeVkStruct( jahBindingFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ADDRESS_BINDING_REPORT_FEATURES_EXT );
         const bool jahFaultExt = hasDeviceExtension( VK_EXT_DEVICE_FAULT_EXTENSION_NAME );
         const bool jahBindingExt = hasDeviceExtension( VK_EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME );
+        const bool jahDiagExt = hasDeviceExtension( VK_NV_DEVICE_DIAGNOSTICS_CONFIG_EXTENSION_NAME );
+        VkPhysicalDeviceDiagnosticsConfigFeaturesNV jahDiagFeatures;
+        VkDeviceDiagnosticsConfigCreateInfoNV jahDiagConfig;
+        makeVkStruct( jahDiagFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DIAGNOSTICS_CONFIG_FEATURES_NV );
+        makeVkStruct( jahDiagConfig, VK_STRUCTURE_TYPE_DEVICE_DIAGNOSTICS_CONFIG_CREATE_INFO_NV );
+        if( msDeviceFaultAllowed && createInfo.pNext == &deviceFeatures2 && jahDiagExt )
+        {
+            VkPhysicalDeviceFeatures2 query;
+            makeVkStruct( query, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 );
+            query.pNext = &jahDiagFeatures;
+            vkGetPhysicalDeviceFeatures2( mPhysicalDevice, &query );
+            mJahDiagnosticsConfig = jahDiagFeatures.diagnosticsConfig == VK_TRUE;
+            if( mJahDiagnosticsConfig )
+            {
+                jahDiagFeatures.pNext = deviceFeatures2.pNext;
+                deviceFeatures2.pNext = &jahDiagFeatures;
+                jahDiagConfig.flags = VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_SHADER_DEBUG_INFO_BIT_NV |
+                                      VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_RESOURCE_TRACKING_BIT_NV |
+                                      VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_AUTOMATIC_CHECKPOINTS_BIT_NV |
+                                      VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_SHADER_ERROR_REPORTING_BIT_NV;
+                // (a VkDeviceCreateInfo extension: after the features, ahead of what the chain already holds)
+                jahDiagConfig.pNext = deviceFeatures2.pNext;
+                deviceFeatures2.pNext = &jahDiagConfig;
+            }
+        }
         if( msDeviceFaultAllowed && createInfo.pNext == &deviceFeatures2 && ( jahFaultExt || jahBindingExt ) )
         {
             VkPhysicalDeviceFeatures2 query;
