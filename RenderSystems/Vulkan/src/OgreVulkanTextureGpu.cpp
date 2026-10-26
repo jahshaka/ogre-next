@@ -894,11 +894,16 @@ namespace Ogre
         VkResult result = vkCreateImageView( device->mDevice, &imageViewCi, 0, &imageView );
         checkVkResult( device, result, "vkCreateImageView" );
 
-#if OGRE_DEBUG_MODE >= OGRE_DEBUG_HIGH
-        const String textureName = getNameStr() + "(View)";
-        setObjectName( device->mDevice, (uint64_t)imageView, VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT,
-                       textureName.c_str() );
+        // Jahshaka: named under the pass-label switch too (a synchronization hazard names its attachment by
+        // the VIEW: "attachment 0 (VkImageView 0x... [jahDepth(View)])").
+#if OGRE_DEBUG_MODE < OGRE_DEBUG_HIGH
+        if( VulkanInstance::jahPassLabelsRequested() )
 #endif
+        {
+            const String textureName = getNameStr() + "(View)";
+            setObjectName( device->mDevice, (uint64_t)imageView, VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT,
+                           textureName.c_str() );
+        }
 
         return imageView;
     }

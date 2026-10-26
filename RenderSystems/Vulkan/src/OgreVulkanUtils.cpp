@@ -39,6 +39,9 @@ namespace Ogre
     PFN_vkCmdDebugMarkerBeginEXT pfnCmdDebugMarkerBegin;
     PFN_vkCmdDebugMarkerEndEXT pfnCmdDebugMarkerEnd;
     PFN_vkCmdDebugMarkerInsertEXT pfnCmdDebugMarkerInsert;
+    // Jahshaka: the object names through VK_EXT_debug_utils (the pass-label switch's extension), for a
+    // device without VK_EXT_debug_marker - what the validation layer prints beside a handle.
+    static PFN_vkSetDebugUtilsObjectNameEXT pfnJahSetDebugUtilsObjectName;
 
     String vkResultToString( VkResult result )
     {
@@ -91,6 +94,16 @@ namespace Ogre
             (PFN_vkCmdDebugMarkerEndEXT)vkGetDeviceProcAddr( device, "vkCmdDebugMarkerEndEXT" );
         pfnCmdDebugMarkerInsert =
             (PFN_vkCmdDebugMarkerInsertEXT)vkGetDeviceProcAddr( device, "vkCmdDebugMarkerInsertEXT" );
+        // Jahshaka: VK_EXT_debug_utils is enabled only under the pass-label switch (or OGRE_DEBUG_MODE >=
+        // MEDIUM, where the instance enables it too); its name call is then the one the validation layer
+        // reads, so a synchronization hazard names its image ("VkImage 0x... [jahDepth]").
+        pfnJahSetDebugUtilsObjectName = 0;
+        if( VulkanInstance::hasExtension( VK_EXT_DEBUG_UTILS_EXTENSION_NAME ) &&
+            ( OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM || VulkanInstance::jahPassLabelsRequested() ) )
+        {
+            pfnJahSetDebugUtilsObjectName = (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(
+                device, "vkSetDebugUtilsObjectNameEXT" );
+        }
     }
 
     void setObjectName( VkDevice device, uint64_t object, VkDebugReportObjectTypeEXT objectType,
@@ -105,6 +118,22 @@ namespace Ogre
             nameInfo.object = object;
             nameInfo.pObjectName = name;
             pfnDebugMarkerSetObjectName( device, &nameInfo );
+        }
+        else if( pfnJahSetDebugUtilsObjectName && name && objectType > VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT &&
+                 objectType <= VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_POOL_EXT )
+        {
+            // (Jahshaka) the core object types 1-25 carry the same numbers in both enums
+            // (VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT == VK_OBJECT_TYPE_IMAGE == 10, ...)
+            static_assert( (int)VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT == (int)VK_OBJECT_TYPE_IMAGE &&
+                               (int)VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT == (int)VK_OBJECT_TYPE_IMAGE_VIEW &&
+                               (int)VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_POOL_EXT == (int)VK_OBJECT_TYPE_COMMAND_POOL,
+                           "the debug-report and core object types share their numbers" );
+            VkDebugUtilsObjectNameInfoEXT nameInfo = {};
+            nameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+            nameInfo.objectType = static_cast<VkObjectType>( objectType );
+            nameInfo.objectHandle = object;
+            nameInfo.pObjectName = name;
+            pfnJahSetDebugUtilsObjectName( device, &nameInfo );
         }
     }
 
