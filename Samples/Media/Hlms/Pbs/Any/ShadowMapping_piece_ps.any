@@ -559,17 +559,32 @@
 
 @property( hlms_static_branch_shadow_map_lights )
 
+	/// JAHSHAKA (PHOTON-7 10-4 R8): every CASTING directional after the first is shaded by DarkenWithShadow in
+	/// both branches (800.PixelShader's directional loop), which this branch never defined: with static branching
+	/// such a light drew unshadowed, and the map counter it never advanced handed its map to the first point/spot
+	/// light (cur_shadow_map starts where the directionals' maps end). The same piece as the other branch's.
+	@piece( DarkenWithShadow )
+		* getShadow( hlms_shadowmap@value(CurrentShadowMap), @insertpiece( UseSamplerShadow )
+					 inPs_posL@value(CurrentShadowMap),
+					 passBuf.shadowRcv[@value(CurrentShadowMap)].invShadowMapSize
+					 hlms_shadowmap@counter(CurrentShadowMap)_uv_param )
+	@end
+
 	// All point and spot lights must share the same hlms_shadowmap atlas
 	// See HlmsPbs::setStaticBranchingLights
+	/// JAHSHAKA (PHOTON-7 10-4 R8): the shared atlas is named by the LAST declared map - a point or spot map whenever
+	/// any exists, and a declared texture always - not by the counter, which the directional maps have advanced to
+	/// the first point/spot map: one past the last declared map when no point or spot light casts.
+	@psub( static_branch_shadow_atlas_map, hlms_num_shadow_map_lights, 1 )
 	@piece( DarkenWithShadow_cur_shadow_map )
-		* getShadow( hlms_shadowmap@value(CurrentShadowMap), @insertpiece( UseSamplerShadow )
+		* getShadow( hlms_shadowmap@value(static_branch_shadow_atlas_map), @insertpiece( UseSamplerShadow )
 					 inPs_posL_cur_shadow_map,
 					 passBuf.shadowRcv[cur_shadow_map].invShadowMapSize
 					 , shadowmap_uv_min[cur_shadow_map], shadowmap_uv_max[cur_shadow_map] )
 	@end
 
 	@piece( DarkenWithShadowPoint_cur_shadow_map )
-		* getShadowPoint( hlms_shadowmap@value(CurrentShadowMap), @insertpiece( UseSamplerShadow )
+		* getShadowPoint( hlms_shadowmap@value(static_branch_shadow_atlas_map), @insertpiece( UseSamplerShadow )
 						  pixelData.geomNormal,
 						  passBuf.shadowRcv[cur_shadow_map].normalOffsetBias,
 						  inPs.pos.xyz, light0Buf.lights[light_idx].position.xyz,
