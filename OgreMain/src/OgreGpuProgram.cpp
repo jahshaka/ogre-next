@@ -37,10 +37,19 @@ THE SOFTWARE.
 #include "OgreRootLayout.h"
 #include "OgreStringConverter.h"
 
+#include <atomic>
 #include <sstream>
 
 namespace Ogre
 {
+    namespace
+    {
+        /// (Jahshaka) every failed program load of the process (getJahCompileErrors)
+        std::atomic<uint64> sJahCompileErrors{ 0u };
+    }  // namespace
+    uint64 GpuProgram::getJahCompileErrors() { return sJahCompileErrors.load( std::memory_order_relaxed ); }
+    void GpuProgram::_jahNoteCompileError() { sJahCompileErrors.fetch_add( 1u, std::memory_order_relaxed ); }
+
     //-----------------------------------------------------------------------------
     GpuProgram::CmdType GpuProgram::msTypeCmd;
     GpuProgram::CmdSyntax GpuProgram::msSyntaxCmd;
@@ -249,6 +258,7 @@ namespace Ogre
                                                 << "during loading and is thus not supported.";
 
             mCompileError = true;
+            _jahNoteCompileError();
         }
     }
     //-----------------------------------------------------------------------------
