@@ -590,6 +590,14 @@
 							  midf3_c( light0Buf.lights[light_idx].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadowPoint_cur_shadow_map );
 			midf atten = midf_c( jahLightAttenuation( fDistance, light0Buf.lights[light_idx].attenuation ) );
+			@property( light_profiles_texture )
+				// JAHSHAKA (PHOTON-7 10-4 R8): A PROFILE SHAPES A SHADOWED POINT LIGHT TOO - the Forward+ loop's
+				// term, over the pass buffer's own direction and profile row (written for every light type)
+				atten *= getPhotometricAttenuation( float( dot( midf3_c( -lightDir ),
+														 midf3_c( light0Buf.lights[light_idx].spotDirection.xyz ) ) ),
+													light0Buf.lights[light_idx].lightTexProfileIdx
+													OGRE_PHOTOMETRIC_ARG );
+			@end
 			finalColour += tmpColour * atten;
 		}
 		cur_shadow_map++;
@@ -605,6 +613,14 @@
 							  midf3_c( light0Buf.lights[@n].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadowPoint );
 			midf atten = midf_c( jahLightAttenuation( fDistance, light0Buf.lights[@n].attenuation ) );
+			@property( light_profiles_texture )
+				// JAHSHAKA (PHOTON-7 10-4 R8): A PROFILE SHAPES A SHADOWED POINT LIGHT TOO - the Forward+ loop's
+				// term, over the pass buffer's own direction and profile row (written for every light type)
+				atten *= getPhotometricAttenuation( float( dot( midf3_c( -lightDir ),
+														 midf3_c( light0Buf.lights[@n].spotDirection.xyz ) ) ),
+													light0Buf.lights[@n].lightTexProfileIdx
+													OGRE_PHOTOMETRIC_ARG );
+			@end
 			finalColour += tmpColour * atten;
 		}
 	@end
