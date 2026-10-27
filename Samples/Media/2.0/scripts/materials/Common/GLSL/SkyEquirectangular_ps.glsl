@@ -10,6 +10,8 @@ vulkan( layout( ogre_s0 ) uniform sampler samplerState );
 
 vulkan( layout( ogre_P0 ) uniform Params { )
 	uniform float sliceIdx;
+	// Jahshaka (PHOTON-7 10-3 R5): THE SKY's GAIN - the scene's sky exposure, applied where the picture is formed
+	uniform vec4 skyGain;
 vulkan( }; )
 
 vulkan_layout( location = 0 )
@@ -34,4 +36,5 @@ void main()
 	longlat.y = acos( cameraDir.y );
 	float2 uv = longlat / float2( 2.0f * PI, PI );
 	fragColour = texture( vkSampler2DArray( skyEquirectangular, samplerState ), vec3( uv.xy, sliceIdx ) );
+	fragColour.xyz *= skyGain.xyz;
 }

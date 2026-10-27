@@ -56,6 +56,8 @@ material Ogre/Sky/Cubemap
 
 			fragment_program_ref Ogre/Sky/Cubemap_ps
 			{
+				// Jahshaka (PHOTON-7 10-3 R5): the sky's gain, 1 unless the scene sets its exposure
+				param_named	skyGain	float4 1.0 1.0 1.0 1.0
 			}
 
 			texture_unit
@@ -125,6 +127,8 @@ material Ogre/Sky/Equirectangular
 			fragment_program_ref Ogre/Sky/Equirectangular_ps
 			{
 				param_named	sliceIdx	float 0.0
+				// Jahshaka (PHOTON-7 10-3 R5): the sky's gain, 1 unless the scene sets its exposure
+				param_named	skyGain	float4 1.0 1.0 1.0 1.0
 			}
 
 			texture_unit
