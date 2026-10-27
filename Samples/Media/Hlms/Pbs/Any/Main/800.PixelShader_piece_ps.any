@@ -1107,15 +1107,12 @@
 			@insertpiece( applyRefractions )
 
 			@property( hlms_fog )
+				// Jahshaka: the fog's transmittance is its optical depth alone (no luminance breakthrough: a bright
+				// surface does not punch through a medium), and its in-scatter is what lights the medium - the host's
+				// custom_ps_fogLitFactor scales the fog colour by the share of the fog's light that reaches it.
 				const float distToCamera = length( inPs.pos.xyz );
-				const midf luminance = dot( finalColour.xyz,
-											midf3_c( _h( 0.212655 ), _h( 0.715158 ), _h( 0.072187 ) ) );
-				const midf lumFogWeight = max( exp2( atmoSettings.fogBreakFalloff * luminance +
-													 atmoSettings.fogBreakMinBrightness ),
-											   _h( 0.0 ) );
-				midf fogWeight = midf_c( exp2( -distToCamera * atmoSettings.fogDensity ) );
-				fogWeight = lerp( _h( 1.0 ), fogWeight, lumFogWeight );
-				finalColour.xyz = lerp( inPs.fog.xyz, finalColour.xyz, fogWeight );
+				const midf fogWeight = midf_c( exp2( -distToCamera * atmoSettings.fogDensity ) );
+				finalColour.xyz = lerp( inPs.fog.xyz @insertpiece( custom_ps_fogLitFactor ), finalColour.xyz, fogWeight );
 			@end
 		@end ///!hlms_prepass
 
