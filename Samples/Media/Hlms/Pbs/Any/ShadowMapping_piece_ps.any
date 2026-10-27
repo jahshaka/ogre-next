@@ -318,6 +318,7 @@
 
 		@property( @m == 3 )uv.xy = uv.xy * lengthUV.xy + minUV.xy;@end
 	@end
+	@insertpiece( custom_shadow_transmit_uv )
 
 	@property( !exponential_shadow_maps )
 		midf retVal = _h( 0. );
@@ -450,6 +451,8 @@
 		retVal = (uv.x <= 0.0h || uv.x >= 1.0h ||
 				  uv.y <= 0.0h || uv.y >= 1.0h) ? _h( 1.0 ) : retVal;
 	@end
+
+	@insertpiece( custom_shadow_transmit )
 
 	@property( @m == 1 || @m == 3 )
 		retVal = (uv.x <= minUV.x || uv.x >= maxUV.x ||
