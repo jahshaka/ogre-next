@@ -545,7 +545,10 @@
 		@insertpiece( ObjLightMaskCmp )
 			finalColour += BRDF( midf3_c( light0Buf.lights[@n].position.xyz ),
 								 midf3_c( light0Buf.lights[@n].diffuse.xyz ),
-								 midf3_c( light0Buf.lights[@n].specular ), pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow );@end
+								 midf3_c( light0Buf.lights[@n].specular ), pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow )@insertpiece( custom_ps_darkenCasterDirectional );@end
+	/// JAHSHAKA (PHOTON-7 10-4 R8): custom_ps_darkenCasterDirectional is the same kind of factor on every CASTING
+	/// directional after the first (each shaded from one shadow map, DarkenWithShadow): what the first light's
+	/// DarkenWithShadowFirstLight and the non-caster loop's hook below let the host add. Upstream defines none.
 
 	/// JAHSHAKA (CLOUDS-2D-1): custom_ps_darkenNonCasterDirectional is a factor on
 	/// EVERY directional light that holds no shadow map, in both loops below -- the
