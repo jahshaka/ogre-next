@@ -7,16 +7,22 @@
 // envMapNumMipmaps is N, the COUNT. Upstream read N r (2 - r): one mip rougher
 // than the convolution put the roughness (12.5 % of a 9-mip chain), and a
 // specular step against every reader that maps the chain exactly.
-@piece( envSpecularRoughness ) pixelData.perceptualRoughness * ( midf_c( passBuf.envMapNumMipmaps ) - _h( 1.0 ) ) * ( _h( 2.0 ) - pixelData.perceptualRoughness ) @end
-// Jahshaka (PHOTON-7 11-2, the lead's ruling (i)): THE LOBE'S PERCEPTUAL ROUGHNESS - the one the lobe the pixel
-// shades with has, after the geometric specular anti-aliasing widened its GGX alpha (DefaultBodyPS, normal-mapped
-// surfaces only): every term that integrates that lobe reads it, or the surface's energy is split between two lobes that
-// do not exist together. sqrt of the alpha the lobe and the G-buffer hold (the ray-traced reflection's normaliser derives
-// its roughness the same way from the G-buffer: rq_reflect.comp reflectGainAt); a perceptual pixelData.roughness as is.
-@property( perceptual_roughness )
-@piece( jahLobePerceptualRoughness )sqrt( float( pixelData.roughness ) )@end
+@piece( envSpecularRoughness ) ( @insertpiece( jahLobePerceptualRoughness ) ) * ( midf_c( passBuf.envMapNumMipmaps ) - _h( 1.0 ) ) * ( _h( 2.0 ) - ( @insertpiece( jahLobePerceptualRoughness ) ) ) @end
+// Jahshaka (PHOTON-7 11-2, the lead's rulings (i) and the mip's): THE LOBE'S PERCEPTUAL ROUGHNESS - the one the lobe
+// the pixel shades with has, after the geometric specular anti-aliasing widened its GGX alpha (DefaultBodyPS, under
+// normal_map_tex only): every term that integrates that lobe reads it - the environment's split DFG and the prefiltered
+// map's mip - or the surface's energy is split between two lobes that do not exist together. It expresses THE WIDENING
+// ONLY: the material's own perceptual roughness off a kernel (never the evaluator's alpha floor 0.001, a numerical guard,
+// not the material - a mirror reads its own mip); under normal_map_tex the larger of it and the widened lobe's (sqrt of
+// the alpha the lobe and the G-buffer hold, as the ray-traced reflection's normaliser derives it).
+@property( normal_map_tex )
+	@property( perceptual_roughness )
+@piece( jahLobePerceptualRoughness )max( pixelData.perceptualRoughness, midf_c( sqrt( float( pixelData.roughness ) ) ) )@end
+	@else
+@piece( jahLobePerceptualRoughness )max( pixelData.perceptualRoughness, pixelData.roughness )@end
+	@end
 @else
-@piece( jahLobePerceptualRoughness )float( pixelData.roughness )@end
+@piece( jahLobePerceptualRoughness )pixelData.perceptualRoughness@end
 @end
 @piece( envSpecularRoughnessClearCoat ) pixelData.clearCoatPerceptualRoughness * ( midf_c( passBuf.envMapNumMipmaps ) - _h( 1.0 ) ) * ( _h( 2.0 ) - pixelData.clearCoatPerceptualRoughness ) @end
 
