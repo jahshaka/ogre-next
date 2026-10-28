@@ -2882,26 +2882,16 @@ namespace Ogre
         OgreProfileExhaustive( "Hlms::createShaderCacheEntry" );
 
         // (ASYNC-SHADERS-1) A permutation built on the MAIN thread while the background compiler
-        // runs is a frame that waited for a compile: name the pass, so the host's live-compile
-        // sentry has a culprit to point at.
-        // The SceneManager's compile workers (a blocking pass's ParallelHlmsCompileQueue) are the
-        // frame waiting too, and are named the same way; only the service's own slots are not.
-        if( ( tid == kNoTid || tid < kAsyncTidBase ) && mHlmsManager &&
-            mHlmsManager->getAsyncCompiler()->isRunning() )
-        {
-            const SceneManager *sm =
-                queuedRenderable.movableObject ? queuedRenderable.movableObject->_getManager() : 0;
-            const Camera *cam = sm ? sm->getCamerasInProgress().renderingCamera : 0;
-            const HlmsDatablock *db =
-                queuedRenderable.renderable ? queuedRenderable.renderable->getDatablock() : 0;
-            LogManager::getSingleton().logMessage(
-                "Hlms: permutation " + StringConverter::toString( finalHash ) + " ('" + mTypeNameStr +
-                "', datablock '" + ( db && db->getNameStr() ? *db->getNameStr() : String( "?" ) ) +
-                "') built in the frame (blocking pass, " +
-                ( tid == kNoTid ? String( "main thread" )
-                                : "compile worker " + StringConverter::toString( tid ) ) +
-                ", camera '" + ( cam ? cam->getName() : String( "?" ) ) + "')" );
-        }
+        // runs is a frame that waited: name the pass, so the host's live-compile sentry has a
+        // culprit to point at. The SceneManager's compile workers (a blocking pass's
+        // ParallelHlmsCompileQueue) are the frame waiting too, and are named the same way; only
+        // the service's own slots are not. The line is written AFTER the code-cache lookup below
+        // (URGENT #104): it says which of the two it was - a PSO built from cached shader code (no
+        // compile; every boot builds its PSOs, the disk cache restores code, never PSOs) or a
+        // shader compiled in the frame. Three reads took the first for the second (#88, #96, #104).
+        const bool jahLogInFrame = ( tid == kNoTid || tid < kAsyncTidBase ) && mHlmsManager &&
+                                   mHlmsManager->getAsyncCompiler()->isRunning();
+        bool jahFromCachedCode = false;
 
         // Set the properties by merging the cache from the pass, with the cache from renderable
         mT[tid].setProperties.clear();
@@ -2996,6 +2986,26 @@ namespace Ogre
                 // This can be done in parallel, as we've copied what itCodeCache needed
                 codeCache.mergedCache.setProperties.swap( mT[tid].setProperties );
             }
+            jahFromCachedCode = bIsInCache;
+        }
+
+        if( jahLogInFrame )
+        {
+            const SceneManager *sm =
+                queuedRenderable.movableObject ? queuedRenderable.movableObject->_getManager() : 0;
+            const Camera *cam = sm ? sm->getCamerasInProgress().renderingCamera : 0;
+            const HlmsDatablock *db =
+                queuedRenderable.renderable ? queuedRenderable.renderable->getDatablock() : 0;
+            LogManager::getSingleton().logMessage(
+                "Hlms: permutation " + StringConverter::toString( finalHash ) + " ('" + mTypeNameStr +
+                "', datablock '" + ( db && db->getNameStr() ? *db->getNameStr() : String( "?" ) ) +
+                "') built in the frame" +
+                ( jahFromCachedCode ? String( " from CACHED shader code - a PSO only, nothing compiled" )
+                                    : String( " - its shader COMPILED in the frame" ) ) +
+                " (blocking pass, " +
+                ( tid == kNoTid ? String( "main thread" )
+                                : "compile worker " + StringConverter::toString( tid ) ) +
+                ", camera '" + ( cam ? cam->getName() : String( "?" ) ) + "')" );
         }
 
         HlmsPso pso;
