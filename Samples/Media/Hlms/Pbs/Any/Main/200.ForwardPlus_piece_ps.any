@@ -156,6 +156,11 @@
 													OGRE_PHOTOMETRIC_ARG );
 			@end
 
+			/// JAHSHAKA (PHOTON-7 10-4 R9): custom_ps_fwdplus_lamp - a host statement on this lamp's term before its BRDF,
+			/// scaling atten by what reaches the pixel (posAndType.xyz the lamp, lightDir and fDistance toward it, all in
+			/// the pass's view space). A Forward+ lamp has no shadow map; upstream defines none.
+			@insertpiece( custom_ps_fwdplus_lamp )
+
 			//Point light (Jahshaka, PHOTON-7 stage 11: a sphere of its source radius - its glint widened, its energy the point's)
 			float jahSpecAlphaFp;
 			const float jahSpecNormFp = jahSphereLightWiden( float( pixelData.roughness ), attenuation.y, fDistance,
@@ -218,6 +223,9 @@
 				atten *= getPhotometricAttenuation( spotCosAngle, spotDirection.w
 													OGRE_PHOTOMETRIC_ARG );
 			@end
+
+			/// JAHSHAKA (PHOTON-7 10-4 R9): custom_ps_fwdplus_lamp, as in the point loop above
+			@insertpiece( custom_ps_fwdplus_lamp )
 
 			if( spotCosAngle >= spotParams.y )
 			{

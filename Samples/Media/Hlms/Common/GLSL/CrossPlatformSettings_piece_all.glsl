@@ -1,6 +1,12 @@
 @piece( SetCrossPlatformSettings )
 @property( syntax == glslvk )
-	#version 450 core
+	/// JAHSHAKA (PHOTON-7 10-4 R9): glslvk_460 - a host property raising the Vulkan shader's GLSL to 4.60, which the
+	/// ray query extension (GL_EXT_ray_query) requires; every other shader keeps 4.50. Upstream sets none.
+	@property( glslvk_460 )
+		#version 460 core
+	@else
+		#version 450 core
+	@end
 @else
 	@property( GL3+ >= 430 )
 		#version 430 core
