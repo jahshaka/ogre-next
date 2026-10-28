@@ -1121,6 +1121,10 @@
 
 			@insertpiece( DoAmbientLighting )
 
+			/// JAHSHAKA (PHOTON-7 11-2 (3), C2): a host's last word on the environment's specular before the split DFG
+			/// weighs it (upstream's custom-hook pattern; empty by default).
+			@insertpiece( custom_ps_preEnvBrdf )
+
 			@property( needs_env_brdf )
 				@insertpiece( BRDF_EnvMap )
 			@end
