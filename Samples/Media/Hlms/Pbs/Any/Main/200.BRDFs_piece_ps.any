@@ -364,7 +364,7 @@ midf3 BRDF_IR( midf3 lightDir, midf3 lightDiffuse, PixelData pixelData )
         float jahEnvA, jahEnvB;
         // (at THE LOBE'S roughness, jahLobePerceptualRoughness: the widened one where specular AA widened it - PHOTON-7
         // 11-2, the lead's ruling (i): the material's unwidened roughness normalised a lobe the pixel does not have)
-        jahSpecularAlbedo( float( pixelData.NdotV ), @insertpiece( jahLobePerceptualRoughness ), jahEnvA, jahEnvB );
+        jahSpecularAlbedo( float( pixelData.NdotV ), float( @insertpiece( jahLobePerceptualRoughness ) ), jahEnvA, jahEnvB );
         midf3 Rs = pixelData.envColourS * pixelData.specular.xyz *
                    ( pixelData.F0 * midf_c( jahEnvA ) + midf_c( jahEnvB ) );
 
