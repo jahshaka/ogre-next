@@ -2296,6 +2296,9 @@ namespace Ogre
             return true;
         if( !_l->getCastShadows() && _r->getCastShadows() )
             return false;
+        // JAHSHAKA (PHOTON-7 10-4 R8): a host-named priority before the id (Light::setShadowSortPriority)
+        if( _l->getShadowSortPriority() != _r->getShadowSortPriority() )
+            return _l->getShadowSortPriority() > _r->getShadowSortPriority();
 
         return _l->getId() < _r->getId();
     }

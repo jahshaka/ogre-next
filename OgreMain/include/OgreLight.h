@@ -258,6 +258,15 @@ namespace Ogre
         void   _setLightProfileIdx( uint16 profileIdx ) { mLightProfileIdx = profileIdx; }
         uint16 getLightProfileIdx() const { return mLightProfileIdx; }
 
+        /** JAHSHAKA (PHOTON-7 10-4 R8): the order SHADOW-CASTING DIRECTIONAL lights take the shadow node's
+            directional slots in - a higher priority first, then the light id, as before. The first slot is the
+            one HlmsPbs gives PSSM (every other casting directional is shaded from a single map), and the id is
+            creation order, which a host does not control across a reload: a host that names its primary
+            directional (the sun) gives it a higher priority and keeps it there. Default 0: upstream's order.
+        */
+        void  setShadowSortPriority( uint8 priority ) { mShadowSortPriority = priority; }
+        uint8 getShadowSortPriority() const { return mShadowSortPriority; }
+
         /** Sets the direction in which a light points.
         @remarks
             Applicable only to the spotlight and directional light types.
@@ -650,6 +659,8 @@ namespace Ogre
     protected:
         /// Used for IES photogametry
         uint16 mLightProfileIdx;
+        /// JAHSHAKA (PHOTON-7 10-4 R8): setShadowSortPriority
+        uint8 mShadowSortPriority;
         Real   mShadowFarDist;
         Real   mShadowFarDistSquared;
 

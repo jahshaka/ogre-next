@@ -561,7 +561,10 @@
 		@insertpiece( ObjLightMaskCmp )
 			finalColour += BRDF( midf3_c( light0Buf.lights[@n].position.xyz ),
 								 midf3_c( light0Buf.lights[@n].diffuse.xyz ),
-								 midf3_c( light0Buf.lights[@n].specular ), pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow );@end
+								 midf3_c( light0Buf.lights[@n].specular ), pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadow )@insertpiece( custom_ps_darkenCasterDirectional );@end
+	/// JAHSHAKA (PHOTON-7 10-4 R8): custom_ps_darkenCasterDirectional is the same kind of factor on every CASTING
+	/// directional after the first (each shaded from one shadow map, DarkenWithShadow): what the first light's
+	/// DarkenWithShadowFirstLight and the non-caster loop's hook below let the host add. Upstream defines none.
 
 	/// JAHSHAKA (CLOUDS-2D-1): custom_ps_darkenNonCasterDirectional is a factor on
 	/// EVERY directional light that holds no shadow map, in both loops below -- the
@@ -612,6 +615,14 @@
 							  midf3_c( light0Buf.lights[light_idx].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadowPoint_cur_shadow_map );
 			midf atten = midf_c( jahLightAttenuation( fDistance, light0Buf.lights[light_idx].attenuation ) );
+			@property( light_profiles_texture )
+				// JAHSHAKA (PHOTON-7 10-4 R8): A PROFILE SHAPES A SHADOWED POINT LIGHT TOO - the Forward+ loop's
+				// term, over the pass buffer's own direction and profile row (written for every light type)
+				atten *= getPhotometricAttenuation( float( dot( midf3_c( -lightDir ),
+														 midf3_c( light0Buf.lights[light_idx].spotDirection.xyz ) ) ),
+													light0Buf.lights[light_idx].lightTexProfileIdx
+													OGRE_PHOTOMETRIC_ARG );
+			@end
 			finalColour += tmpColour * atten;
 		}
 		cur_shadow_map++;
@@ -633,6 +644,14 @@
 							  midf3_c( light0Buf.lights[@n].specular ),
 							  pixelData PASSBUF_ARG )@insertpiece( DarkenWithShadowPoint );
 			midf atten = midf_c( jahLightAttenuation( fDistance, light0Buf.lights[@n].attenuation ) );
+			@property( light_profiles_texture )
+				// JAHSHAKA (PHOTON-7 10-4 R8): A PROFILE SHAPES A SHADOWED POINT LIGHT TOO - the Forward+ loop's
+				// term, over the pass buffer's own direction and profile row (written for every light type)
+				atten *= getPhotometricAttenuation( float( dot( midf3_c( -lightDir ),
+														 midf3_c( light0Buf.lights[@n].spotDirection.xyz ) ) ),
+													light0Buf.lights[@n].lightTexProfileIdx
+													OGRE_PHOTOMETRIC_ARG );
+			@end
 			finalColour += tmpColour * atten;
 		}
 	@end
@@ -1132,15 +1151,12 @@
 			@insertpiece( applyRefractions )
 
 			@property( hlms_fog )
+				// Jahshaka: the fog's transmittance is its optical depth alone (no luminance breakthrough: a bright
+				// surface does not punch through a medium), and its in-scatter is what lights the medium - the host's
+				// custom_ps_fogLitFactor scales the fog colour by the share of the fog's light that reaches it.
 				const float distToCamera = length( inPs.pos.xyz );
-				const midf luminance = dot( finalColour.xyz,
-											midf3_c( _h( 0.212655 ), _h( 0.715158 ), _h( 0.072187 ) ) );
-				const midf lumFogWeight = max( exp2( atmoSettings.fogBreakFalloff * luminance +
-													 atmoSettings.fogBreakMinBrightness ),
-											   _h( 0.0 ) );
-				midf fogWeight = midf_c( exp2( -distToCamera * atmoSettings.fogDensity ) );
-				fogWeight = lerp( _h( 1.0 ), fogWeight, lumFogWeight );
-				finalColour.xyz = lerp( inPs.fog.xyz, finalColour.xyz, fogWeight );
+				const midf fogWeight = midf_c( exp2( -distToCamera * atmoSettings.fogDensity ) );
+				finalColour.xyz = lerp( inPs.fog.xyz @insertpiece( custom_ps_fogLitFactor ), finalColour.xyz, fogWeight );
 			@end
 		@end ///!hlms_prepass
 

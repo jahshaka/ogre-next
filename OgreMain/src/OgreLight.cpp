@@ -60,6 +60,7 @@ namespace Ogre
         mTextureLightMaskIdx( std::numeric_limits<uint16>::max() ),
         mTexLightMaskDiffuseMipStart( (uint16)( 0.95f * 65535 ) ),
         mLightProfileIdx( 0u ),
+        mShadowSortPriority( 0u ),
         mShadowFarDist( 0 ),
         mShadowFarDistSquared( 0 ),
         mShadowNearClipDist( -1 ),

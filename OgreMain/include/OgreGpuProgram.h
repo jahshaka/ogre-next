@@ -549,6 +549,16 @@ namespace Ogre
          */
         virtual bool hasCompileError() const { return mCompileError; }
 
+        /** (Jahshaka) How many program loads, of every program of the process, have failed with a compile error
+            (a running total). A load that fails is caught and logged, never thrown (GpuProgram::loadImpl and
+            HighLevelGpuProgram::loadHighLevel), so the host could not see a dead shader - a compute job that never
+            dispatches, a material that never draws - except by reading the log. A sound build reads 0.
+        */
+        static uint64 getJahCompileErrors();
+
+        /// (Jahshaka) counts one failed load; called where the load's exception is caught
+        static void _jahNoteCompileError();
+
         /** Reset a compile error if it occurred, allowing the load to be retried
          */
         virtual void resetCompileError() { mCompileError = false; }

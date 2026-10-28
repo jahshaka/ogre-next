@@ -211,6 +211,7 @@ namespace Ogre
                     << e.getFullDescription();
 
                 mCompileError = true;
+                _jahNoteCompileError();
             }
         }
     }
