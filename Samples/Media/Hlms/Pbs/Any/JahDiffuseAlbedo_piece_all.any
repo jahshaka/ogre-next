@@ -12,33 +12,38 @@
 //     the irradiance field, the screen-probe gather) is reflected with
 //     jahDiffuseAlbedo( NdotV, r ) — the lobe integrated over the incoming
 //     hemisphere for a UNIFORM environment, by reciprocity the same function of
-//     the view angle. It replaces the constant energy factor that stood there
-//     (0.662 at r = 1, where the lobe reflects 0.688 at normal view and 0.97
-//     at a grazing one);
+//     the view angle (0.686 at r = 1 at normal view, 1.031 at a grazing one);
 //   * the LIGHT INJECTION (LightInjection_piece_cs.any): a voxel's surface lit by
 //     a lamp at cos theta_l re-emits jahDiffuseAlbedo( cos theta_l, r ) of the
 //     Lambertian answer, integrated over every outgoing direction — the voxel
-//     holds what its surface renders, not rho E / pi (which was 1.51x the
-//     floor's own picture at r = 1);
-//   * the BOUNCE (LightVctBounceInject_piece_cs.any): a voxel lit by the
-//     diffuse gather of its surroundings re-emits the HEMISPHERICAL mean,
-//     jahDiffuseAlbedoHemi( r ) = 2 * integral of jahDiffuseAlbedo( mu, r ) mu dmu.
+//     holds what its surface renders, not rho E / pi;
+//   * the BOUNCE (LightVctBounceInject_piece_cs.any) and the cards' relight: a
+//     surface lit by the diffuse gather of its surroundings re-emits the
+//     HEMISPHERICAL mean, jahDiffuseAlbedoHemi( r ) = 2 x the integral of
+//     jahDiffuseAlbedo( mu, r ) mu dmu.
 //
-// THE NUMBERS ARE A FIT TO OGRE'S OWN TABLE, not a new model: the third channel
-// of the DFG lookup HlmsPbs samples when it has one bound (brtfLutDfg.dds, z,
-// indexed ( NdotV, 1 - perceptual roughness )) IS this function — checked by
-// direct integration of the lobe at seven points (within 0.5 %). The table is
-// bound only while an area light exists (loadLtcMatrix is lazy, and it costs a
-// texture slot in every pass), so the function is carried as a 13-term
-// polynomial in r and t = 1 - v, least-squares over the table's 4,096 texels:
-// worst 0.0096, rms 0.0017. The hemispherical mean is a cubic in r over the
-// table's 64 rows: worst 0.0016 (0.702 at r = 1, 0.905 at r = 0).
+// THE INTEGRAL IN CLOSED FORM (REDS-1, 2026-10-29), not a fit. Because
+// (V.H)^2 = ( 1 + V.L ) / 2, fd90 - 1 = k = ( 1.5 r - 1 ) + r V.L is LINEAR in
+// the light direction, and the lobe is ef ( 1 + k a ) ( 1 + k b ) with
+// a = ( 1 - N.L )^5, b = ( 1 - N.V )^5. Its cosine-weighted mean over the light's
+// hemisphere needs only five moments of c = N.L under the weight 2c:
+// E[a] = 1/21, E[c a] = 1/84, E[c^2 a] = 1/252, E[(1 - c^2) a] = 11/252, E[c] = 2/3,
+// and E[cos^2 phi] = 1/2 for the azimuth (the odd powers vanish). With
+// al = 1.5 r - 1 and v = N.V:
+//     DA( v, r ) = ef [ 1 + b ( al + 2 r v / 3 ) + al / 21 + r v / 84
+//                       + b ( al^2 / 21 + al r v / 42 + r^2 ( 11 - 9 v^2 ) / 504 ) ]
+//     DA_hemi( r ) = ef [ 1 + 2 al / 21 + r / 63 + al^2 / 441 + al r / 3528 + 123 r^2 / 127008 ]
+// exact to the float's rounding (DA_hemi( 1 ) = 0.705410, DA_hemi( 0 ) = 0.907029 =
+// 400 / 441). The cubic this replaces was fitted to Ogre's DFG table
+// (brtfLutDfg.dds, z), which sits up to 0.5 % under the lobe's own integral
+// (0.701832 at r = 1): every bounce re-emitted 0.5 % too little, a room's
+// series limit 0.27 % short (gi.bounce_series, gi.card_closed_form).
+// Jahshaka's suites state the same function by their own quadrature of the
+// lobe (enginetest::disneyDiffuseAlbedo), never by copying this text.
 //
 // IT LIVES IN THE FORK'S OWN PBS MEDIA (Hlms/Pbs/Any, parsed by every HlmsPbs, and
 // listed by name by the two VCT jobs), so an HlmsPbs registered without
-// Jahshaka's library - the VR spike's - still compiles BRDF_EnvMap. Jahshaka's
-// suites state the same function by direct integration of the lobe
-// (enginetest::disneyDiffuseAlbedo), never by copying this fit.
+// Jahshaka's library - the VR spike's - still compiles BRDF_EnvMap.
 
 float jahDiffuseAlbedo( float v, float r )
 {
@@ -46,18 +51,21 @@ float jahDiffuseAlbedo( float v, float r )
 	r = clamp( r, 0.0, 1.0 );
 	float t = 1.0 - v;
 	float t2 = t * t;
-	float t5 = t2 * t2 * t;
-	float r2 = r * r;
-	float r3 = r2 * r;
-	return 0.950057 - 0.236510 * r - 0.029870 * r2 + 0.004401 * r3
-	     + t * ( -0.010296 - 0.066581 * r - 0.014983 * r2 )
-	     + t2 * ( 0.016806 + 0.175365 * r )
-	     + t5 * ( -0.934679 + 1.559543 * r - 0.308360 * r2 - 0.057401 * r3 );
+	float b = t2 * t2 * t;
+	float al = 1.5 * r - 1.0;
+	float rv = r * v;
+	float ef = mix( 1.0, 1.0 / 1.51, r );
+	return ef * ( 1.0 + al * ( 1.0 / 21.0 ) + rv * ( 1.0 / 84.0 )
+	              + b * ( al + rv * ( 2.0 / 3.0 ) + al * al * ( 1.0 / 21.0 ) + al * rv * ( 1.0 / 42.0 )
+	                      + r * r * ( 11.0 - 9.0 * v * v ) * ( 1.0 / 504.0 ) ) );
 }
 
 float jahDiffuseAlbedoHemi( float r )
 {
 	r = clamp( r, 0.0, 1.0 );
-	return 0.904896 + r * ( -0.155158 + r * ( -0.049610 + r * 0.001704 ) );
+	float al = 1.5 * r - 1.0;
+	float ef = mix( 1.0, 1.0 / 1.51, r );
+	return ef * ( 1.0 + al * ( 2.0 / 21.0 ) + r * ( 1.0 / 63.0 ) + al * al * ( 1.0 / 441.0 )
+	              + al * r * ( 1.0 / 3528.0 ) + r * r * ( 123.0 / 127008.0 ) );
 }
 @end
