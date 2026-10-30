@@ -3914,6 +3914,33 @@ namespace Ogre
         // Needs to be done now, as it may change layouts of textures we're about to change
         mDevice->_jahRecordQueue().endAllEncoders();
 
+        // Jahshaka (DETERMINISM-1): THE SOLVER KEEPS WHAT THE CALLER RESOLVED. Every caller resolves
+        // its transitions BEFORE this call (the solver's records already moved to the new states),
+        // and the endAllEncoders above can end a COPY encoder, whose end assumeTransition()s every
+        // texture it copied back to its pre-copy layout with access Undefined - overwriting a newer
+        // record with an older one. Measured: a depth-copy pass left the encoder open with the depth
+        // as its source; the HZB build resolved the depth -> Texture (read, compute) and called here;
+        // the encoder's end recorded it as a RenderTarget again while this barrier moved it to
+        // SHADER_READ_ONLY - and the next depth pass, analysed against the stale record, began its
+        // render pass with LOAD on an image in the wrong layout, unordered against the transition
+        // (synchronization validation: READ_AFTER_WRITE, the load at EARLY_FRAGMENT_TESTS). The
+        // barriers below put each texture exactly in its transition's new state, so that is the
+        // state the solver keeps.
+        {
+            ResourceTransitionArray::const_iterator itor = rstCollection.begin();
+            ResourceTransitionArray::const_iterator endt = rstCollection.end();
+            while( itor != endt )
+            {
+                if( itor->resource && itor->resource->isTextureGpu() )
+                {
+                    mBarrierSolver.assumeTransition( static_cast<TextureGpu *>( itor->resource ),
+                                                     itor->newLayout, itor->newAccess,
+                                                     itor->newStageMask );
+                }
+                ++itor;
+            }
+        }
+
         VkPipelineStageFlags srcStage = 0u;
         VkPipelineStageFlags dstStage = 0u;
 
