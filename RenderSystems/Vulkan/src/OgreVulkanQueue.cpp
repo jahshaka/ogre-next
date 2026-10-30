@@ -841,8 +841,6 @@ namespace Ogre
         }
     }
     //-------------------------------------------------------------------------
-    bool VulkanQueue::msJahUavDownloadBlocks = true;   // MEASURING ARM (DETERMINISM-1, to be reverted)
-    //-------------------------------------------------------------------------
     void VulkanQueue::prepareForDownload( const BufferPacked *buffer, TextureGpu *texture,
                                           CopyEncTransitionMode::CopyEncTransitionMode transitionMode )
     {
@@ -898,7 +896,7 @@ namespace Ogre
             // (endCopyEncoder: "we don't know if a subsequent stage will write to it"). Naming the
             // shader stages here makes endCopyEncoder emit TRANSFER -> those stages: an execution
             // dependency, all a write-after-read needs.
-            if( buffer->getBufferPackedType() == BP_TYPE_UAV && msJahUavDownloadBlocks )   // (MEASURING ARM)
+            if( buffer->getBufferPackedType() == BP_TYPE_UAV )
                 mCopyEndReadDstBufferFlags |= VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         }
 

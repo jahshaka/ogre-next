@@ -43,9 +43,6 @@ namespace Ogre
     class _OgreVulkanExport VulkanQueue
     {
     public:
-        /// MEASURING ARM (DETERMINISM-1, to be reverted): false = upstream's pure UAV download (no barrier at the copy's
-        /// end), for the barrier's cost by paired arms; the engine's arm vk.downloadWarBarrier sets it each frame.
-        static bool msJahUavDownloadBlocks;
         enum QueueFamily
         {
             Graphics,
