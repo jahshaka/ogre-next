@@ -884,6 +884,20 @@ namespace Ogre
             mCopyDownloadBuffers[buffer] = true;
 
             mCopyEndReadSrcBufferFlags |= VK_ACCESS_TRANSFER_READ_BIT;
+
+            // Jahshaka (DETERMINISM-1): A UAV BUFFER'S DOWNLOAD BLOCKS THE SHADERS THAT COME AFTER IT.
+            // A shader stage may WRITE this buffer right after the copy (a report cleared and refilled
+            // the frame after its read-back). Upstream's endCopyEncoder emits its barrier only for what
+            // the copy WROTE (mCopyEndReadDstBufferFlags), so a pure download of a UAV buffer ended with
+            // NO dependency and the next dispatch's write could land before the copy read it: a
+            // write-after-read race, the read-back holding part of the NEXT frame's contents on the
+            // GPU's pace (measured: the surface cache's indirect report read 16 or 28 listings at the
+            // same frame in two identical processes). The texture twin asserts the same hazard
+            // (endCopyEncoder: "we don't know if a subsequent stage will write to it"). Naming the
+            // shader stages here makes endCopyEncoder emit TRANSFER -> those stages: an execution
+            // dependency, all a write-after-read needs.
+            if( buffer->getBufferPackedType() == BP_TYPE_UAV )
+                mCopyEndReadDstBufferFlags |= VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         }
 
         OGRE_ASSERT_HIGH( !texture || dynamic_cast<VulkanTextureGpu *>( texture ) );
