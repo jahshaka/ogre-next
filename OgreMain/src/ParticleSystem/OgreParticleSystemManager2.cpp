@@ -488,7 +488,7 @@ void ParticleSystemManager2::_updateParallel02( const size_t threadIdx, const si
                            aabb );
 
             gpuAdvance += numParticlesToProcess;
-            totalThreadNumParticlesToProcess = particleExcess;
+            totalThreadNumParticlesToProcess -= numParticlesToProcess;
             // If threadAdvance < quota, then we are crossing the boundary and
             // must start processing from threadAdvance = 0
             //
@@ -563,7 +563,7 @@ void ParticleSystemManager2::_updateParallel02( const size_t threadIdx, const si
                            billboardSet, aabb );
 
             gpuAdvance += numParticlesToProcess;
-            totalThreadNumParticlesToProcess = particleExcess;
+            totalThreadNumParticlesToProcess -= numParticlesToProcess;
             // If threadAdvance < quota, then we are crossing the boundary and
             // must start processing from threadAdvance = 0
             //
