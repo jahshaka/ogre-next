@@ -57,6 +57,7 @@ ParticleSystemManager2::ParticleSystemManager2( SceneManager *sceneManager,
     mHighestPossibleQuota16( 0u ),
     mHighestPossibleQuota32( 0u ),
     mTimeSinceLast( 0 ),
+    mTimeScale( 1 ),
     mMaster( master ),
     mCameraPos( Vector3::ZERO )
 {
@@ -966,7 +967,7 @@ void ParticleSystemManager2::prepareForUpdate( const Real timeSinceLast )
     if( mActiveParticleSystemDefs.empty() && mBillboardSets.empty() )
         return;
 
-    mTimeSinceLast = timeSinceLast;
+    mTimeSinceLast = timeSinceLast * mTimeScale;
     mActiveParticlesLeftToSort.appendPOD( mActiveParticleSystemDefs.begin(),
                                           mActiveParticleSystemDefs.end() );
 
