@@ -67,6 +67,8 @@ namespace Ogre
         uint32             mHighestPossibleQuota32;
 
         float mTimeSinceLast;  // For threaded update.
+        /// Multiplies the time prepareForUpdate() is handed (default 1.0). See setTimeScale().
+        Real mTimeScale;
 
         // There's one ParticleSystemManager2 owned by Root (the 'master') which holds all templates.
         // And one ParticleSystemManager2 per SceneManager that reference Root's.
@@ -216,6 +218,17 @@ namespace Ogre
             Camera position
         */
         void setCameraPosition( const Vector3 &camPos ) { mCameraPos = camPos; }
+
+        /** Scales the time this manager's particle systems advance by: prepareForUpdate( t ) simulates
+            t * scale seconds (emission, ageing, motion, affectors). Per SceneManager, so a scene's particles
+            can run slower or faster than the scene's clock (the frame time source) without moving any other
+            reader of that clock. Default 1.0 (unchanged behaviour); negative values are treated as 0.
+        @param scale
+            The factor, >= 0.
+        */
+        void setTimeScale( Real scale ) { mTimeScale = scale > Real( 0 ) ? scale : Real( 0 ); }
+
+        Real getTimeScale() const { return mTimeScale; }
 
         const Vector3 &getCameraPosition() const { return mCameraPos; }
 
