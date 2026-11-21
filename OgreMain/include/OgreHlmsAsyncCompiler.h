@@ -173,8 +173,9 @@ namespace Ogre
         void cancelAll();
 
         /// Main thread. Drops every job with this key (see cancel): what a job points at is
-        /// about to die (a compute job being destroyed).
-        void cancelKey( const void *key );
+        /// about to die (a compute job being destroyed). (Jahshaka) True when a job with this
+        /// key was RUNNING and the call waited for it to finish (HlmsCompute counts those waits).
+        bool cancelKey( const void *key );
 
         /** Main thread. While set, Hlms::getMaterialAsync requests only PLACEHOLDERS: an object
             whose own permutation is not built requests the placeholder for the pass it is drawn

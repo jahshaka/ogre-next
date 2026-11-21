@@ -29,7 +29,7 @@ THE SOFTWARE.
 #define _OgreHlmsCompute_H_
 
 #include "OgreHlms.h"
-#include <set>
+#include <memory>
 
 #include "OgreHeaderPrefix.h"
 
@@ -114,6 +114,119 @@ namespace Ogre
         typedef vector<ComputePsoCache>::type  ComputePsoCacheVec;
         typedef map<Hash, GpuProgramPtr>::type CompiledShaderMap;
 
+    public:
+        /** (Jahshaka fork, THE COMPUTE CODE RECORDS: COLD-BOOT-1 stage 3, SHADER-SYSTEM-1 stage 3F.) What a built
+            permutation's code needs to come back WITHOUT its template parse: the generated source, the root layout it
+            was hashed and built with, and the parse's outputs a PSO needs. Filed under the INPUT KEY (msJahComputeKeyHook:
+            the content the parse reads) at both build sites - compileShader and an async publish - and by
+            jahPrewarmCode; a host persists them (getJahRecords) and hands them back at the next launch. */
+        struct JahFileHash
+        {
+            String name;      ///< a file the parse read (the template, a piece file), as opened
+            uint64 hash[2];   ///< MurmurHash3_x64_128 of its bytes, IdString::Seed
+        };
+        struct JahCodeRecord
+        {
+            uint64 inputKey[2];
+            uint64 programKey[2];  ///< mCompiledShaderCache's key: jahProgramKey( source, rootLayout, explicitApi )
+            String name;           ///< the job's name: logs only, never a key
+            String sourceFilename; ///< the template's file name (with its extension)
+            String source;         ///< the GENERATED source
+            String rootLayout;     ///< the RootLayout's bytes (memset + HlmsComputeJob::setupRootLayout)
+            bool   explicitApi;    ///< RSC_EXPLICIT_API: the root layout is part of the program key
+            bool   arrayBindings;  ///< uses_array_bindings: the program reflects its array bindings
+            bool   indirect;
+            bool   jobSized;
+            uint32 threadsPerGroup[3];
+            uint32 numThreadGroups[3];
+            vector<JahFileHash>::type files;
+            JahCodeRecord();
+        };
+        typedef std::shared_ptr<const JahCodeRecord> JahCodeRecordPtr;
+        /// What a compute template's parse READS, handed to msJahComputeKeyHook: the template's bytes, every piece
+        /// file's (name, bytes) in the job's order, the job's C++ pieces, the properties AFTER the render system's
+        /// set-up (what the parse starts from) and the root layout's bytes (two jobs of equal text whose slots differ
+        /// in type need two programs: the start preflight's F2).
+        struct JahKeyInputs
+        {
+            const String                                            *templateText;
+            const vector<std::pair<String, const String *> >::type *pieceFiles;
+            const PiecesMap                                         *cppPieces;
+            const HlmsPropertyVec                                   *properties;
+            const String                                            *rootLayout;
+        };
+        /** THE KEY HOOK (upstream's custom-hook pattern, as msJahDispatchHook): the host's content key of the inputs.
+            Null (the default): NO RECORDS - compileShader parses every permutation, exactly as upstream; nothing is
+            filed, nothing hits. */
+        static void ( *msJahComputeKeyHook )( const JahKeyInputs &in, uint64 outKey[2] );
+
+    private:
+        typedef std::map<Hash, JahCodeRecordPtr> JahRecordMap;
+        /// Main thread only (every build site files there; the host snapshots there).
+        JahRecordMap mJahRecords;
+        uint64       mJahRecordGeneration = 0u;  ///< bumps on every record filed or changed
+        /// The bytes of every file a parse or a key read, by file name (main thread): read once from the resource
+        /// system. Cleared by clearShaderCache (reloadFrom calls it).
+        std::map<String, String> mJahFileMemo;
+        /// (Jahshaka) THE IN-FRAME COUNTERS: a template parse run on the main thread (compileShader, or a queued
+        /// request the main thread ran itself), and a compute PSO built in compileShader (any path: a parse, a record's
+        /// hit, a clone). Main thread.
+        uint64 mJahParsedInFrame = 0u;
+        uint64 mJahPsoInFrame = 0u;
+        /// (Jahshaka) destroyComputeJob calls that WAITED for the job's running compile (HlmsAsyncCompiler::cancelKey),
+        /// and the time they waited: a stall of the render thread at a clone's teardown (the start preflight's F4).
+        uint64 mJahDestroyWaits = 0u;
+        uint64 mJahDestroyWaitUs = 0u;
+
+        class AsyncCodeJob;
+        friend class AsyncCodeJob;
+        /// What a parse reads, read once: the template's name and bytes, the piece files, the root layout's bytes.
+        struct JahParseInputs
+        {
+            String                                           sourceFilename;
+            const String                                    *templateText;
+            vector<std::pair<String, const String *> >::type pieceFiles;
+            String                                           rootLayout;
+        };
+        /// The render system's properties every parse starts from (mT[tid]: GL3Plus, the syntaxes, the precision...).
+        void jahSetRsProperties( size_t tid );
+        /// processPieces' extension rule: the file name a piece file is opened under.
+        String jahPieceFileName( const String &file ) const;
+        /// A file's bytes, through the memo.
+        const String &jahFileText( const String &filename );
+        void jahGatherInputs( HlmsComputeJob *job, JahParseInputs &out );
+        /// The input key of `in` under `properties` (mT[tid]'s, after jahSetRsProperties). False with no hook.
+        bool jahInputKey( const JahParseInputs &in, const PiecesMap &cppPieces, const HlmsPropertyVec &properties,
+                          Hash &outKey ) const;
+        /// THE HIT: the record filed under `inputKey`, built with this root layout on this kind of API, whose program
+        /// is compiled; null = a miss.
+        const JahCodeRecord *jahHit( const Hash &inputKey, const String &rootLayout, GpuProgramPtr &outProgram );
+        /// Files a record (main thread); the generation moves only when the map changes.
+        void jahFileRecord( const JahCodeRecordPtr &record );
+        /// dispatch()'s question for a permutation not built under this job: is its code compiled (a record hits)?
+        bool jahCodeKnown( HlmsComputeJob *job );
+
+    public:
+        /// mCompiledShaderCache's key of a generated source: its hash, and on an explicit API that hash paired with
+        /// the root layout's (compileShader's own steps).
+        static void jahProgramKey( const String &source, const String &rootLayout, bool explicitApi,
+                                   uint64 outKey[2] );
+        /// Bumps whenever a record is filed or changed (a host compares it to know its saved copy is stale).
+        uint64 getJahRecordGeneration() const { return mJahRecordGeneration; }
+        /// Every record, in the map's (stable) order. Main thread.
+        void getJahRecords( vector<JahCodeRecordPtr>::type &out ) const;
+        /** The records a launch read: FILED (the hit sees them at once), and each one's code compiled on the
+            HlmsAsyncCompiler - code only: no job, no PSO (its program lands in mCompiledShaderCache at the publish).
+            A record already filed under its key is skipped; with no service running the records are filed and their
+            code compiles at the first parse that needs it. Main thread. */
+        void jahPrewarmCode( vector<JahCodeRecord>::type &records );
+        uint64 getJahParsedInFrame() const { return mJahParsedInFrame; }
+        uint64 getJahPsoInFrame() const { return mJahPsoInFrame; }
+        uint64 getJahDestroyWaits() const { return mJahDestroyWaits; }
+        uint64 getJahDestroyWaitUs() const { return mJahDestroyWaitUs; }
+
+    private:
+
         AutoParamDataSource *mAutoParamDataSource;
         String const        *mComputeShaderTarget;
 
@@ -127,7 +240,6 @@ namespace Ogre
 
         HlmsComputeJobMap mComputeJobs;
 
-        void           processPieces( const StringVector &pieceFiles );
         HlmsComputePso compileShader( HlmsComputeJob *job, uint32 finalHash );
 
         // ---- ASYNC-SHADERS-1 (Jahshaka fork): compute permutations built off the frame ----
@@ -149,13 +261,6 @@ namespace Ogre
         uint64 mJahParamsMisfits = 0u;
         /// (Jahshaka) the misfit counter's NEGATIVE CONTROL: the next N dispatches are refused as misfits
         uint32 mJahForceMisfits = 0u;
-        /// (ASYNC-SHADERS-1) Every permutation this Hlms has built, by source + properties: a
-        /// job CLONE (the voxeliser's per-cascade, per-mip jobs) is a new PSO over code already
-        /// compiled, built in the frame from the code cache; only a permutation never built
-        /// defers (setDeferredDispatch).
-        std::set<uint64> mBuiltPermutations;
-        static uint64 permutationKey( const HlmsComputeJob *job );
-        static uint64 permutationKey( const HlmsComputeJob *job, const HlmsPropertyVec &properties );
         uint32               mAsyncProgramCounter;
 
         /// Index into mAsyncComputeEntries, or size() when none.

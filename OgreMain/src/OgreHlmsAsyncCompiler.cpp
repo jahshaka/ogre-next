@@ -373,9 +373,10 @@ namespace Ogre
             finish( job, false );
     }
     //-----------------------------------------------------------------------------------
-    void HlmsAsyncCompiler::cancelKey( const void *key )
+    bool HlmsAsyncCompiler::cancelKey( const void *key )
     {
         std::vector<HlmsAsyncJob *> dropped;
+        bool waited = false;
         {
             std::unique_lock<std::mutex> lock( mMutex );
             for( std::deque<HlmsAsyncJob *>::iterator it = mQueue.begin(); it != mQueue.end(); )
@@ -388,6 +389,8 @@ namespace Ogre
                 else
                     ++it;
             }
+            for( HlmsAsyncJob *job : mRunning )
+                waited |= job && job->mKey == key;
             mDoneCv.wait( lock, [this, key] {
                 for( HlmsAsyncJob *job : mRunning )
                 {
@@ -409,6 +412,7 @@ namespace Ogre
         }
         for( HlmsAsyncJob *job : dropped )
             finish( job, false );
+        return waited;
     }
     //-----------------------------------------------------------------------------------
     void HlmsAsyncCompiler::cancelAll()

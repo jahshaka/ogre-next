@@ -53,6 +53,7 @@ THE SOFTWARE.
 #    define OGRE_HASH128_FUNC MurmurHash3_x64_128
 #endif
 
+#include <chrono>
 #include <fstream>
 
 namespace Ogre
@@ -118,65 +119,199 @@ namespace Ogre
         }
     }
     //-----------------------------------------------------------------------------------
-    void HlmsCompute::processPieces( const StringVector &pieceFiles )
+    HlmsCompute::JahCodeRecord::JahCodeRecord() :
+        explicitApi( false ),
+        arrayBindings( false ),
+        indirect( false ),
+        jobSized( false )
     {
-        ResourceGroupManager &resourceGroupMgr = ResourceGroupManager::getSingleton();
+        inputKey[0] = inputKey[1] = programKey[0] = programKey[1] = 0u;
+        for( size_t i = 0u; i < 3u; ++i )
+            threadsPerGroup[i] = numThreadGroups[i] = 0u;
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::jahSetRsProperties( const size_t tid )
+    {
+        // (Jahshaka) compileShader's and compileAsync's own set-up, in one place: the key reads the same set.
+        for( const IdString &ext : mRsSpecificExtensions )
+            setProperty( tid, ext, 1 );
 
-        StringVector::const_iterator itor = pieceFiles.begin();
-        StringVector::const_iterator endt = pieceFiles.end();
+        if( mShaderProfile == "glsl" || mShaderProfile == "glslvk" )  // TODO: String comparision
+            setProperty( tid, HlmsBaseProp::GL3Plus, mRenderSystem->getNativeShadingLanguageVersion() );
 
-        while( itor != endt )
+        setProperty( tid, HlmsBaseProp::Syntax, static_cast<int32>( mShaderSyntax.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Hlsl, static_cast<int32>( HlmsBaseProp::Hlsl.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Glsl, static_cast<int32>( HlmsBaseProp::Glsl.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Glslvk,
+                     static_cast<int32>( HlmsBaseProp::Glslvk.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Hlslvk,
+                     static_cast<int32>( HlmsBaseProp::Hlslvk.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Metal, static_cast<int32>( HlmsBaseProp::Metal.getU32Value() ) );
+
+#if OGRE_PLATFORM == OGRE_PLATFORM_APPLE_IOS
+        setProperty( tid, HlmsBaseProp::iOS, 1 );
+#endif
+#if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
+        setProperty( tid, HlmsBaseProp::macOS, 1 );
+#endif
+        setProperty( tid, HlmsBaseProp::Full32,
+                     static_cast<int32>( HlmsBaseProp::Full32.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Midf16,
+                     static_cast<int32>( HlmsBaseProp::Midf16.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::Relaxed,
+                     static_cast<int32>( HlmsBaseProp::Relaxed.getU32Value() ) );
+        setProperty( tid, HlmsBaseProp::PrecisionMode, getSupportedPrecisionModeHash() );
+
+        if( mFastShaderBuildHack )
+            setProperty( tid, HlmsBaseProp::FastShaderBuildHack, 1 );
+    }
+    //-----------------------------------------------------------------------------------
+    String HlmsCompute::jahPieceFileName( const String &file ) const
+    {
+        // If it has an explicit extension, only open it if it matches the current
+        // render system's. If it doesn't, then we add it ourselves.
+        String filename = file;
+        String::size_type pos = filename.find_last_of( '.' );
+        if( pos == String::npos ||
+            ( filename.compare( pos + 1, String::npos, mShaderFileExt ) != 0 &&
+              filename.compare( pos + 1, String::npos, "any" ) != 0 &&
+              filename.compare( pos + 1, String::npos, "metal" ) != 0 &&
+              filename.compare( pos + 1, String::npos, "glsl" ) != 0 &&
+              filename.compare( pos + 1, String::npos, "hlsl" ) != 0 ) )
         {
-            String filename = *itor;
-
-            // If it has an explicit extension, only open it if it matches the current
-            // render system's. If it doesn't, then we add it ourselves.
-            String::size_type pos = filename.find_last_of( '.' );
-            if( pos == String::npos ||
-                ( filename.compare( pos + 1, String::npos, mShaderFileExt ) != 0 &&
-                  filename.compare( pos + 1, String::npos, "any" ) != 0 &&
-                  filename.compare( pos + 1, String::npos, "metal" ) != 0 &&
-                  filename.compare( pos + 1, String::npos, "glsl" ) != 0 &&
-                  filename.compare( pos + 1, String::npos, "hlsl" ) != 0 ) )
-            {
-                filename += mShaderFileExt;
-            }
-
-            DataStreamPtr inFile = resourceGroupMgr.openResource( filename );
-
-            String inString;
-            String outString;
-
-            inString.resize( inFile->size() );
-            inFile->read( &inString[0], inFile->size() );
-
-            this->parseMath( inString, outString, kNoTid );
-            while( outString.find( "@foreach" ) != String::npos )
-            {
-                this->parseForEach( outString, inString, kNoTid );
-                inString.swap( outString );
-            }
-            this->parseProperties( outString, inString, kNoTid );
-            this->parseUndefPieces( inString, outString, kNoTid );
-            this->collectPieces( outString, inString, kNoTid );
-            this->parseCounter( inString, outString, kNoTid );
-
-            ++itor;
+            filename += mShaderFileExt;
         }
+        return filename;
+    }
+    //-----------------------------------------------------------------------------------
+    const String &HlmsCompute::jahFileText( const String &filename )
+    {
+        std::map<String, String>::const_iterator itor = mJahFileMemo.find( filename );
+        if( itor == mJahFileMemo.end() )
+        {
+            itor = mJahFileMemo
+                       .insert( { filename,
+                                  ResourceGroupManager::getSingleton().openResource( filename )->getAsString() } )
+                       .first;
+        }
+        return itor->second;
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::jahGatherInputs( HlmsComputeJob *job, JahParseInputs &out )
+    {
+        out.sourceFilename = job->mSourceFilename + mShaderFileExt;
+        out.templateText = &jahFileText( out.sourceFilename );
+        out.pieceFiles.clear();
+        for( const String &file : job->mIncludedPieceFiles )
+        {
+            const String name = jahPieceFileName( file );
+            out.pieceFiles.push_back( { name, &jahFileText( name ) } );
+        }
+        // We MUST memset due to internal padding; otherwise we'll be hashing uninitialized values
+        RootLayout rootLayout;
+        memset( &rootLayout, 0, sizeof( rootLayout ) );
+        rootLayout.mCompute = true;
+        job->setupRootLayout( rootLayout );
+        out.rootLayout.assign( reinterpret_cast<const char *>( &rootLayout ), sizeof( rootLayout ) );
+    }
+    //-----------------------------------------------------------------------------------
+    bool HlmsCompute::jahInputKey( const JahParseInputs &in, const PiecesMap &cppPieces,
+                                   const HlmsPropertyVec &properties, Hash &outKey ) const
+    {
+        if( !msJahComputeKeyHook )
+            return false;
+        const JahKeyInputs keyIn = { in.templateText, &in.pieceFiles, &cppPieces, &properties, &in.rootLayout };
+        msJahComputeKeyHook( keyIn, outKey.hashVal );
+        return true;
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::jahProgramKey( const String &source, const String &rootLayout, const bool explicitApi,
+                                     uint64 outKey[2] )
+    {
+        Hash hashVal;
+        OGRE_HASH128_FUNC( source.c_str(), static_cast<int>( source.size() ), IdString::Seed, &hashVal );
+        if( explicitApi )
+        {
+            // If two shaders have the exact same source code but different
+            // Root Layout, we should treat them differently
+            Hash hashValTmp[2] = { hashVal, Hash() };
+            OGRE_HASH128_FUNC( rootLayout.data(), static_cast<int>( rootLayout.size() ), IdString::Seed,
+                               &hashValTmp[1] );
+            OGRE_HASH128_FUNC( hashValTmp, sizeof( hashValTmp ), IdString::Seed, &hashVal );
+        }
+        outKey[0] = hashVal.hashVal[0];
+        outKey[1] = hashVal.hashVal[1];
+    }
+    //-----------------------------------------------------------------------------------
+    const HlmsCompute::JahCodeRecord *HlmsCompute::jahHit( const Hash &inputKey, const String &rootLayout,
+                                                          GpuProgramPtr &outProgram )
+    {
+        JahRecordMap::iterator itor = mJahRecords.find( inputKey );
+        if( itor == mJahRecords.end() )
+            return 0;
+        const JahCodeRecord &r = *itor->second;
+        // ANOTHER ROOT LAYOUT IS ANOTHER PROGRAM (the start preflight's F2): the descriptor layout the program was
+        // built for must be the job's, whatever the key says; and a record of another kind of API is not ours.
+        const bool bExplicit = mRenderSystem->getCapabilities()->hasCapability( RSC_EXPLICIT_API );
+        if( r.rootLayout != rootLayout || r.explicitApi != bExplicit )
+            return 0;
+        // (A record pairs with a program only through its program key: one handed in whose source does not re-hash
+        // to it was refused at the door, jahPrewarmCode - the lead's condition 1; a parse files only true ones.)
+        Hash programKey;
+        programKey.hashVal[0] = r.programKey[0];
+        programKey.hashVal[1] = r.programKey[1];
+        ScopedLock lock( mMutex );
+        CompiledShaderMap::const_iterator program = mCompiledShaderCache.find( programKey );
+        if( program == mCompiledShaderCache.end() )
+            return 0;  // its code is not compiled (yet): the parse builds it
+        outProgram = program->second;
+        return &r;
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::jahFileRecord( const JahCodeRecordPtr &record )
+    {
+        Hash key;
+        key.hashVal[0] = record->inputKey[0];
+        key.hashVal[1] = record->inputKey[1];
+        JahCodeRecordPtr &slot = mJahRecords[key];
+        if( slot && slot->programKey[0] == record->programKey[0] &&
+            slot->programKey[1] == record->programKey[1] && slot->rootLayout == record->rootLayout )
+        {
+            return;  // the same code under the same key: nothing changed
+        }
+        slot = record;
+        ++mJahRecordGeneration;
+    }
+    //-----------------------------------------------------------------------------------
+    bool HlmsCompute::jahCodeKnown( HlmsComputeJob *job )
+    {
+        if( !msJahComputeKeyHook )
+            return false;
+        // compileShader's first steps, on the main thread's slot (compileShader sets it afresh).
+        mT[kNoTid].setProperties = job->mSetProperties;
+        jahSetRsProperties( kNoTid );
+        JahParseInputs in;
+        jahGatherInputs( job, in );
+        Hash key;
+        jahInputKey( in, job->mPieces, mT[kNoTid].setProperties, key );
+        GpuProgramPtr program;
+        return jahHit( key, in.rootLayout, program ) != 0;
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::getJahRecords( vector<JahCodeRecordPtr>::type &out ) const
+    {
+        out.clear();
+        out.reserve( mJahRecords.size() );
+        for( const JahRecordMap::value_type &r : mJahRecords )
+            out.push_back( r.second );
     }
     //-----------------------------------------------------------------------------------
     HlmsComputePso HlmsCompute::compileShader( HlmsComputeJob *job, uint32 finalHash )
     {
         // Assumes mSetProperties is already set
         // mSetProperties[kNoTid].clear();
-        {
-            // Add RenderSystem-specific properties
-            IdStringVec::const_iterator itor = mRsSpecificExtensions.begin();
-            IdStringVec::const_iterator endt = mRsSpecificExtensions.end();
-
-            while( itor != endt )
-                setProperty( kNoTid, *itor++, 1 );
-        }
+        // Add RenderSystem-specific properties (and the rest of the set every parse starts from)
+        jahSetRsProperties( kNoTid );
 
         GpuProgramPtr shader;
         // Generate the shader
@@ -187,171 +322,192 @@ namespace Ogre
         // Start with the pieces sent by the user
         mT[kNoTid].pieces = job->mPieces;
 
-        const String sourceFilename = job->mSourceFilename + mShaderFileExt;
+        // (Jahshaka) WHAT THE PARSE READS, read once (the memo): the template, the piece files, the root layout.
+        JahParseInputs inputs;
+        jahGatherInputs( job, inputs );
 
-        ResourceGroupManager &resourceGroupMgr = ResourceGroupManager::getSingleton();
-        DataStreamPtr inFile = resourceGroupMgr.openResource( sourceFilename );
+        // (Jahshaka) THE HIT BEFORE THE PARSE: a record filed under the content key of exactly these inputs, whose
+        // code is compiled, gives the program and the parse's outputs; the template is not parsed.
+        Hash inputKey;
+        const bool bKeyed = jahInputKey( inputs, job->mPieces, mT[kNoTid].setProperties, inputKey );
+        const JahCodeRecord *hit = bKeyed ? jahHit( inputKey, inputs.rootLayout, shader ) : 0;
 
-        if( mShaderProfile == "glsl" || mShaderProfile == "glslvk" )  // TODO: String comparision
+        uint32 threadsPerGroup[3];
+        uint32 numThreadGroups[3];
+        if( hit )
         {
-            setProperty( kNoTid, HlmsBaseProp::GL3Plus,
-                         mRenderSystem->getNativeShadingLanguageVersion() );
+            for( size_t i = 0u; i < 3u; ++i )
+            {
+                threadsPerGroup[i] = hit->threadsPerGroup[i];
+                numThreadGroups[i] = hit->numThreadGroups[i];
+            }
         }
-
-        setProperty( kNoTid, HlmsBaseProp::Syntax, static_cast<int32>( mShaderSyntax.getU32Value() ) );
-        setProperty( kNoTid, HlmsBaseProp::Hlsl,
-                     static_cast<int32>( HlmsBaseProp::Hlsl.getU32Value() ) );
-        setProperty( kNoTid, HlmsBaseProp::Glsl,
-                     static_cast<int32>( HlmsBaseProp::Glsl.getU32Value() ) );
-        setProperty( kNoTid, HlmsBaseProp::Glslvk,
-                     static_cast<int32>( HlmsBaseProp::Glslvk.getU32Value() ) );
-        setProperty( kNoTid, HlmsBaseProp::Hlslvk,
-                     static_cast<int32>( HlmsBaseProp::Hlslvk.getU32Value() ) );
-        setProperty( kNoTid, HlmsBaseProp::Metal,
-                     static_cast<int32>( HlmsBaseProp::Metal.getU32Value() ) );
-
-#if OGRE_PLATFORM == OGRE_PLATFORM_APPLE_IOS
-        setProperty( kNoTid, HlmsBaseProp::iOS, 1 );
-#endif
-#if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
-        setProperty( kNoTid, HlmsBaseProp::macOS, 1 );
-#endif
-        setProperty( kNoTid, HlmsBaseProp::Full32,
-                     static_cast<int32>( HlmsBaseProp::Full32.getU32Value() ) );
-        setProperty( kNoTid, HlmsBaseProp::Midf16,
-                     static_cast<int32>( HlmsBaseProp::Midf16.getU32Value() ) );
-        setProperty( kNoTid, HlmsBaseProp::Relaxed,
-                     static_cast<int32>( HlmsBaseProp::Relaxed.getU32Value() ) );
-        setProperty( kNoTid, HlmsBaseProp::PrecisionMode, getSupportedPrecisionModeHash() );
-
-        if( mFastShaderBuildHack )
-            setProperty( kNoTid, HlmsBaseProp::FastShaderBuildHack, 1 );
-
-        // Piece files
-        processPieces( job->mIncludedPieceFiles );
-
-        String inString;
-        String outString;
-
-        inString.resize( inFile->size() );
-        inFile->read( &inString[0], inFile->size() );
-
-        bool syntaxError = false;
-
-        syntaxError |= this->parseMath( inString, outString, kNoTid );
-        while( !syntaxError && outString.find( "@foreach" ) != String::npos )
+        else
         {
-            syntaxError |= this->parseForEach( outString, inString, kNoTid );
-            inString.swap( outString );
-        }
-        syntaxError |= this->parseProperties( outString, inString, kNoTid );
-        syntaxError |= this->parseUndefPieces( inString, outString, kNoTid );
-        while( !syntaxError && ( outString.find( "@piece" ) != String::npos ||
-                                 outString.find( "@insertpiece" ) != String::npos ) )
-        {
-            syntaxError |= this->collectPieces( outString, inString, kNoTid );
-            syntaxError |= this->insertPieces( inString, outString, kNoTid );
-        }
-        syntaxError |= this->parseCounter( outString, inString, kNoTid );
+            ++mJahParsedInFrame;
+            // THE COUNTER's LINE (it replaces the two "in the frame" lines dispatch logged from the permutation set):
+            // a template parsed on the frame's thread while the background compiler runs is named.
+            if( mHlmsManager && mHlmsManager->getAsyncCompiler()->isRunning() )
+            {
+                LogManager::getSingleton().logMessage(
+                    "HlmsCompute: job '" + job->getNameStr() + "' parsed its template in the frame (" +
+                    StringConverter::toString( mJahParsedInFrame ) + " this run)" );
+            }
 
-        outString.swap( inString );
+            // Piece files
+            StringVector pieceTexts;
+            for( const std::pair<String, const String *> &piece : inputs.pieceFiles )
+                pieceTexts.push_back( *piece.second );
+            processPieceTexts( pieceTexts, kNoTid );
 
-        if( syntaxError )
-        {
-            LogManager::getSingleton().logMessage( "There were HLMS syntax errors while parsing " +
-                                                   StringConverter::toString( finalHash ) +
-                                                   job->mSourceFilename + mShaderFileExt );
-        }
+            String inString = *inputs.templateText;
+            String outString;
 
-        String debugFilenameOutput;
+            bool syntaxError = false;
 
-        if( mDebugOutput )
-        {
-            debugFilenameOutput = mOutputPath + "./" + StringConverter::toString( finalHash ) +
-                                  job->mSourceFilename + mShaderFileExt;
-            std::ofstream outFile( Ogre::fileSystemPathFromString( debugFilenameOutput ).c_str(),
-                                   std::ios::out | std::ios::binary );
-            if( mDebugOutputProperties )
-                dumpProperties( outFile, kNoTid );
-            outFile.write( &outString[0], static_cast<std::streamsize>( outString.size() ) );
-        }
+            syntaxError |= this->parseMath( inString, outString, kNoTid );
+            while( !syntaxError && outString.find( "@foreach" ) != String::npos )
+            {
+                syntaxError |= this->parseForEach( outString, inString, kNoTid );
+                inString.swap( outString );
+            }
+            syntaxError |= this->parseProperties( outString, inString, kNoTid );
+            syntaxError |= this->parseUndefPieces( inString, outString, kNoTid );
+            while( !syntaxError && ( outString.find( "@piece" ) != String::npos ||
+                                     outString.find( "@insertpiece" ) != String::npos ) )
+            {
+                syntaxError |= this->collectPieces( outString, inString, kNoTid );
+                syntaxError |= this->insertPieces( inString, outString, kNoTid );
+            }
+            syntaxError |= this->parseCounter( outString, inString, kNoTid );
 
-        // Don't create and compile if template requested not to
-        if( !getProperty( kNoTid, HlmsBaseProp::DisableStage ) )
-        {
-            // Very similar to what the GpuProgramManager does with its microcode cache,
-            // but we **need** to know if two Compute Shaders share the same source code.
+            outString.swap( inString );
+
+            if( syntaxError )
+            {
+                LogManager::getSingleton().logMessage( "There were HLMS syntax errors while parsing " +
+                                                       StringConverter::toString( finalHash ) +
+                                                       job->mSourceFilename + mShaderFileExt );
+            }
+
+            String debugFilenameOutput;
+
+            if( mDebugOutput )
+            {
+                debugFilenameOutput = mOutputPath + "./" + StringConverter::toString( finalHash ) +
+                                      job->mSourceFilename + mShaderFileExt;
+                std::ofstream outFile( Ogre::fileSystemPathFromString( debugFilenameOutput ).c_str(),
+                                       std::ios::out | std::ios::binary );
+                if( mDebugOutputProperties )
+                    dumpProperties( outFile, kNoTid );
+                outFile.write( &outString[0], static_cast<std::streamsize>( outString.size() ) );
+            }
+
+            const bool bExplicitApi =
+                mRenderSystem->getCapabilities()->hasCapability( RSC_EXPLICIT_API );
             Hash hashVal;
-            OGRE_HASH128_FUNC( outString.c_str(), static_cast<int>( outString.size() ), IdString::Seed,
-                               &hashVal );
-
-            const RenderSystemCapabilities *capabilities = mRenderSystem->getCapabilities();
-
-            if( capabilities->hasCapability( RSC_EXPLICIT_API ) )
+            // Don't create and compile if template requested not to
+            if( !getProperty( kNoTid, HlmsBaseProp::DisableStage ) )
             {
-                // If two shaders have the exact same source code but different
-                // Root Layout, we should treat them differently
-                RootLayout rootLayout;
-                // We MUST memset due to internal padding;
-                // otherwise we'll be hashing uninitialized values
-                memset( &rootLayout, 0, sizeof( rootLayout ) );
-                rootLayout.mCompute = true;
-                job->setupRootLayout( rootLayout );
+                // Very similar to what the GpuProgramManager does with its microcode cache,
+                // but we **need** to know if two Compute Shaders share the same source code.
+                // (Jahshaka) the source's hash, paired with the root layout's on an explicit API: jahProgramKey.
+                jahProgramKey( outString, inputs.rootLayout, bExplicitApi, hashVal.hashVal );
 
-                Hash hashValTmp[2] = { hashVal, Hash() };
-                OGRE_HASH128_FUNC( &rootLayout, sizeof( rootLayout ), IdString::Seed, &hashValTmp[1] );
-                OGRE_HASH128_FUNC( hashValTmp, sizeof( hashValTmp ), IdString::Seed, &hashVal );
-            }
-
-            // ASYNC-SHADERS-1: the asynchronous compiler's threads read and add to this map.
-            bool bCached = false;
-            {
-                ScopedLock lock( mMutex );
-                CompiledShaderMap::const_iterator itor = mCompiledShaderCache.find( hashVal );
-                if( itor != mCompiledShaderCache.end() )
+                // ASYNC-SHADERS-1: the asynchronous compiler's threads read and add to this map.
+                bool bCached = false;
                 {
-                    shader = itor->second;
-                    bCached = true;
+                    ScopedLock lock( mMutex );
+                    CompiledShaderMap::const_iterator itor = mCompiledShaderCache.find( hashVal );
+                    if( itor != mCompiledShaderCache.end() )
+                    {
+                        shader = itor->second;
+                        bCached = true;
+                    }
+                }
+                if( !bCached )
+                {
+                    HighLevelGpuProgramManager *gpuProgramManager =
+                        HighLevelGpuProgramManager::getSingletonPtr();
+
+                    HighLevelGpuProgramPtr gp = gpuProgramManager->createProgram(
+                        StringConverter::toString( finalHash ) + job->mSourceFilename,
+                        ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME, mShaderProfile,
+                        GPT_COMPUTE_PROGRAM );
+                    gp->setSource( outString, debugFilenameOutput );
+
+                    {
+                        RootLayout rootLayout;
+                        rootLayout.mCompute = true;
+                        job->setupRootLayout( rootLayout );
+                        gp->setRootLayout( gp->getType(), rootLayout );
+                        if( getProperty( kNoTid, "uses_array_bindings" ) )
+                            gp->setAutoReflectArrayBindingsInRootLayout( true );
+                    }
+
+                    if( mComputeShaderTarget )
+                    {
+                        // D3D-specific
+                        gp->setParameter( "target", *mComputeShaderTarget );
+                        gp->setParameter( "entry_point", "main" );
+                    }
+
+                    gp->setSkeletalAnimationIncluded( getProperty( kNoTid, HlmsBaseProp::Skeleton ) !=
+                                                      0 );
+                    gp->setMorphAnimationIncluded( false );
+                    gp->setPoseAnimationIncluded( getProperty( kNoTid, HlmsBaseProp::Pose ) != 0 );
+                    gp->setVertexTextureFetchRequired( false );
+
+                    gp->load();
+
+                    shader = gp;
+
+                    ScopedLock lock( mMutex );
+                    mCompiledShaderCache[hashVal] = shader;
                 }
             }
-            if( !bCached )
+
+            threadsPerGroup[0] = (uint32)( getProperty( kNoTid, ComputeProperty::ThreadsPerGroupX ) );
+            threadsPerGroup[1] = (uint32)( getProperty( kNoTid, ComputeProperty::ThreadsPerGroupY ) );
+            threadsPerGroup[2] = (uint32)( getProperty( kNoTid, ComputeProperty::ThreadsPerGroupZ ) );
+            numThreadGroups[0] = (uint32)( getProperty( kNoTid, ComputeProperty::NumThreadGroupsX ) );
+            numThreadGroups[1] = (uint32)( getProperty( kNoTid, ComputeProperty::NumThreadGroupsY ) );
+            numThreadGroups[2] = (uint32)( getProperty( kNoTid, ComputeProperty::NumThreadGroupsZ ) );
+
+            // (Jahshaka) THE RECORD of what was built, under the key of what the parse read.
+            if( bKeyed && shader )
             {
-                HighLevelGpuProgramManager *gpuProgramManager =
-                    HighLevelGpuProgramManager::getSingletonPtr();
-
-                HighLevelGpuProgramPtr gp = gpuProgramManager->createProgram(
-                    StringConverter::toString( finalHash ) + job->mSourceFilename,
-                    ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME, mShaderProfile,
-                    GPT_COMPUTE_PROGRAM );
-                gp->setSource( outString, debugFilenameOutput );
-
+                std::shared_ptr<JahCodeRecord> record = std::make_shared<JahCodeRecord>();
+                record->inputKey[0] = inputKey.hashVal[0];
+                record->inputKey[1] = inputKey.hashVal[1];
+                record->programKey[0] = hashVal.hashVal[0];
+                record->programKey[1] = hashVal.hashVal[1];
+                record->name = job->getNameStr();
+                record->sourceFilename = inputs.sourceFilename;
+                record->source = outString;
+                record->rootLayout = inputs.rootLayout;
+                record->explicitApi = bExplicitApi;
+                record->arrayBindings = getProperty( kNoTid, "uses_array_bindings" ) != 0;
+                record->indirect = job->mIndirectDispatchBuffer != 0;
+                record->jobSized = !job->getInformHlmsOfTextureSize();
+                for( size_t i = 0u; i < 3u; ++i )
                 {
-                    RootLayout rootLayout;
-                    rootLayout.mCompute = true;
-                    job->setupRootLayout( rootLayout );
-                    gp->setRootLayout( gp->getType(), rootLayout );
-                    if( getProperty( kNoTid, "uses_array_bindings" ) )
-                        gp->setAutoReflectArrayBindingsInRootLayout( true );
+                    record->threadsPerGroup[i] = threadsPerGroup[i];
+                    record->numThreadGroups[i] = numThreadGroups[i];
                 }
-
-                if( mComputeShaderTarget )
+                JahFileHash file;
+                file.name = inputs.sourceFilename;
+                OGRE_HASH128_FUNC( inputs.templateText->c_str(), static_cast<int>( inputs.templateText->size() ),
+                                   IdString::Seed, file.hash );
+                record->files.push_back( file );
+                for( const std::pair<String, const String *> &piece : inputs.pieceFiles )
                 {
-                    // D3D-specific
-                    gp->setParameter( "target", *mComputeShaderTarget );
-                    gp->setParameter( "entry_point", "main" );
+                    file.name = piece.first;
+                    OGRE_HASH128_FUNC( piece.second->c_str(), static_cast<int>( piece.second->size() ),
+                                       IdString::Seed, file.hash );
+                    record->files.push_back( file );
                 }
-
-                gp->setSkeletalAnimationIncluded( getProperty( kNoTid, HlmsBaseProp::Skeleton ) != 0 );
-                gp->setMorphAnimationIncluded( false );
-                gp->setPoseAnimationIncluded( getProperty( kNoTid, HlmsBaseProp::Pose ) != 0 );
-                gp->setVertexTextureFetchRequired( false );
-
-                gp->load();
-
-                shader = gp;
-
-                ScopedLock lock( mMutex );
-                mCompiledShaderCache[hashVal] = shader;
+                jahFileRecord( record );
             }
         }
 
@@ -362,12 +518,11 @@ namespace Ogre
         pso.initialize();
         pso.computeShader = shader;
         pso.computeParams = shader->createParameters();
-        pso.mThreadsPerGroup[0] = (uint32)( getProperty( kNoTid, ComputeProperty::ThreadsPerGroupX ) );
-        pso.mThreadsPerGroup[1] = (uint32)( getProperty( kNoTid, ComputeProperty::ThreadsPerGroupY ) );
-        pso.mThreadsPerGroup[2] = (uint32)( getProperty( kNoTid, ComputeProperty::ThreadsPerGroupZ ) );
-        pso.mNumThreadGroups[0] = (uint32)( getProperty( kNoTid, ComputeProperty::NumThreadGroupsX ) );
-        pso.mNumThreadGroups[1] = (uint32)( getProperty( kNoTid, ComputeProperty::NumThreadGroupsY ) );
-        pso.mNumThreadGroups[2] = (uint32)( getProperty( kNoTid, ComputeProperty::NumThreadGroupsZ ) );
+        for( size_t i = 0u; i < 3u; ++i )
+        {
+            pso.mThreadsPerGroup[i] = threadsPerGroup[i];
+            pso.mNumThreadGroups[i] = numThreadGroups[i];
+        }
 
         // Jahshaka fork 1bccc3f93+a98e2b0af (was 0032): a job dispatched INDIRECTLY has no CPU-side group count by
         // definition — the whole point is that only the GPU knows it — so requiring one here
@@ -401,6 +556,7 @@ namespace Ogre
             shaderParams->updateParameters( pso.computeParams, true );
 
         mRenderSystem->_hlmsComputePipelineStateObjectCreated( &pso );
+        ++mJahPsoInFrame;
 
         return pso;
     }
@@ -413,8 +569,19 @@ namespace Ogre
         {
             HlmsComputeJob *job = itor->second.computeJob;
             // ASYNC-SHADERS-1: nothing may build a permutation of a job that is going away.
+            // (Jahshaka) A RUNNING build is waited for, on this (the render) thread: counted and timed (F4).
             if( mHlmsManager )
-                mHlmsManager->getAsyncCompiler()->cancelKey( job );
+            {
+                const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+                if( mHlmsManager->getAsyncCompiler()->cancelKey( job ) )
+                {
+                    ++mJahDestroyWaits;
+                    mJahDestroyWaitUs += static_cast<uint64>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - t0 )
+                            .count() );
+                }
+            }
             for( size_t i = 0u; i < mAsyncComputeEntries.size(); )
             {
                 if( mAsyncComputeEntries[i].job == job )
@@ -470,7 +637,9 @@ namespace Ogre
         if( mHlmsManager && mHlmsManager->getAsyncCompiler() )
             mHlmsManager->getAsyncCompiler()->cancel( this );
         mAsyncComputeEntries.clear();
-        mBuiltPermutations.clear();   // the code cache goes with it
+        // (Jahshaka) the files are read afresh (reloadFrom calls this); the records stay - they are keyed by content,
+        // and a hit needs its program in mCompiledShaderCache, which goes below.
+        mJahFileMemo.clear();
 
         if( mRenderSystem )
             mRenderSystem->_setComputePso( 0 );
@@ -518,6 +687,16 @@ namespace Ogre
         bool            mIndirect;
         bool            mJobSized;  ///< (BUGS-6) the job carries its group counts to the dispatch
         String          mJobName;
+        /// (Jahshaka) the record this build files at its publish: the input key (when a key hook is set), the
+        /// files the parse read with their bytes' hashes, and - from run() - the generated source and its key.
+        bool                      mKeyed;
+        Hash                      mInputKey;
+        String                    mRootLayoutBytes;
+        vector<JahFileHash>::type mFiles;
+        String                    mGenerated;
+        Hash                      mProgramKey;
+        bool                      mExplicitApi;
+        bool                      mArrayBindings;
 
         // ---- results ----
         GpuProgramPtr                        mShader;
@@ -529,7 +708,10 @@ namespace Ogre
             mCompute( compute ),
             mJob( job ),
             mIndirect( false ),
-            mJobSized( false )
+            mJobSized( false ),
+            mKeyed( false ),
+            mExplicitApi( false ),
+            mArrayBindings( false )
         {
             memset( &mRootLayout, 0, sizeof( mRootLayout ) );
             mPso.initialize();
@@ -567,31 +749,6 @@ namespace Ogre
             idx = findAsyncComputeEntry( job, job->mSetProperties );
         }
         return bWaited;
-    }
-    //-----------------------------------------------------------------------------------
-    uint64 HlmsCompute::permutationKey( const HlmsComputeJob *job )
-    {
-        return permutationKey( job, job->mSetProperties );
-    }
-    //-----------------------------------------------------------------------------------
-    uint64 HlmsCompute::permutationKey( const HlmsComputeJob *job, const HlmsPropertyVec &properties )
-    {
-        uint64 h = 1469598103934665603ull;
-        const auto mix = [&h]( uint64 v ) { h = ( h ^ v ) * 1099511628211ull; };
-        for( const char c : job->mSourceFilename )
-            mix( (unsigned char)c );
-        for( const String &piece : job->mIncludedPieceFiles )
-        {
-            mix( 0x1fu );
-            for( const char c : piece )
-                mix( (unsigned char)c );
-        }
-        for( const HlmsProperty &p : properties )
-        {
-            mix( p.keyName.mHash );
-            mix( (uint32)p.value );
-        }
-        return h;
     }
     //-----------------------------------------------------------------------------------
     size_t HlmsCompute::getNumAsyncInFlight() const
@@ -634,34 +791,42 @@ namespace Ogre
         request->mWhat = "compute job '" + job->getNameStr() + "'";
         try
         {
-            ResourceGroupManager &resourceGroupMgr = ResourceGroupManager::getSingleton();
             request->mJobProperties = job->mSetProperties;
             request->mPieces = job->mPieces;
             request->mSourceFilename = job->mSourceFilename;
             request->mJobName = job->getNameStr();
-            request->mSource =
-                resourceGroupMgr.openResource( job->mSourceFilename + mShaderFileExt )->getAsString();
-            for( const String &file : job->mIncludedPieceFiles )
-            {
-                String filename = file;
-                // processPieces' extension rule, verbatim.
-                String::size_type pos = filename.find_last_of( '.' );
-                if( pos == String::npos ||
-                    ( filename.compare( pos + 1, String::npos, mShaderFileExt ) != 0 &&
-                      filename.compare( pos + 1, String::npos, "any" ) != 0 &&
-                      filename.compare( pos + 1, String::npos, "metal" ) != 0 &&
-                      filename.compare( pos + 1, String::npos, "glsl" ) != 0 &&
-                      filename.compare( pos + 1, String::npos, "hlsl" ) != 0 ) )
-                {
-                    filename += mShaderFileExt;
-                }
-                request->mPieceTexts.push_back(
-                    resourceGroupMgr.openResource( filename )->getAsString() );
-            }
+            // (Jahshaka) the texts through the memo, the root layout as compileShader hashes it, and the input key
+            // over the properties the parse starts from (the main thread's slot as scratch: compileShader sets it
+            // afresh).
+            JahParseInputs inputs;
+            jahGatherInputs( job, inputs );
+            request->mSource = *inputs.templateText;
+            for( const std::pair<String, const String *> &piece : inputs.pieceFiles )
+                request->mPieceTexts.push_back( *piece.second );
             request->mRootLayout.mCompute = true;
             job->setupRootLayout( request->mRootLayout );
             request->mIndirect = job->mIndirectDispatchBuffer != 0;
             request->mJobSized = !job->getInformHlmsOfTextureSize();
+            mT[kNoTid].setProperties = job->mSetProperties;
+            jahSetRsProperties( kNoTid );
+            request->mKeyed =
+                jahInputKey( inputs, job->mPieces, mT[kNoTid].setProperties, request->mInputKey );
+            if( request->mKeyed )
+            {
+                request->mRootLayoutBytes = inputs.rootLayout;
+                JahFileHash file;
+                file.name = inputs.sourceFilename;
+                OGRE_HASH128_FUNC( inputs.templateText->c_str(), static_cast<int>( inputs.templateText->size() ),
+                                   IdString::Seed, file.hash );
+                request->mFiles.push_back( file );
+                for( const std::pair<String, const String *> &piece : inputs.pieceFiles )
+                {
+                    file.name = piece.first;
+                    OGRE_HASH128_FUNC( piece.second->c_str(), static_cast<int>( piece.second->size() ),
+                                       IdString::Seed, file.hash );
+                    request->mFiles.push_back( file );
+                }
+            }
         }
         catch( Exception &e )
         {
@@ -704,36 +869,14 @@ namespace Ogre
     {
         // compileShader, step for step, on slot `tid` and from the request's snapshot.
         mT[tid].setProperties = request.mJobProperties;
-        for( const IdString &ext : mRsSpecificExtensions )
-            setProperty( tid, ext, 1 );
+        jahSetRsProperties( tid );
 
         mT[tid].pieces = request.mPieces;
 
-        if( mShaderProfile == "glsl" || mShaderProfile == "glslvk" )
-            setProperty( tid, HlmsBaseProp::GL3Plus, mRenderSystem->getNativeShadingLanguageVersion() );
-        setProperty( tid, HlmsBaseProp::Syntax, static_cast<int32>( mShaderSyntax.getU32Value() ) );
-        setProperty( tid, HlmsBaseProp::Hlsl, static_cast<int32>( HlmsBaseProp::Hlsl.getU32Value() ) );
-        setProperty( tid, HlmsBaseProp::Glsl, static_cast<int32>( HlmsBaseProp::Glsl.getU32Value() ) );
-        setProperty( tid, HlmsBaseProp::Glslvk,
-                     static_cast<int32>( HlmsBaseProp::Glslvk.getU32Value() ) );
-        setProperty( tid, HlmsBaseProp::Hlslvk,
-                     static_cast<int32>( HlmsBaseProp::Hlslvk.getU32Value() ) );
-        setProperty( tid, HlmsBaseProp::Metal, static_cast<int32>( HlmsBaseProp::Metal.getU32Value() ) );
-#if OGRE_PLATFORM == OGRE_PLATFORM_APPLE_IOS
-        setProperty( tid, HlmsBaseProp::iOS, 1 );
-#endif
-#if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
-        setProperty( tid, HlmsBaseProp::macOS, 1 );
-#endif
-        setProperty( tid, HlmsBaseProp::Full32,
-                     static_cast<int32>( HlmsBaseProp::Full32.getU32Value() ) );
-        setProperty( tid, HlmsBaseProp::Midf16,
-                     static_cast<int32>( HlmsBaseProp::Midf16.getU32Value() ) );
-        setProperty( tid, HlmsBaseProp::Relaxed,
-                     static_cast<int32>( HlmsBaseProp::Relaxed.getU32Value() ) );
-        setProperty( tid, HlmsBaseProp::PrecisionMode, getSupportedPrecisionModeHash() );
-        if( mFastShaderBuildHack )
-            setProperty( tid, HlmsBaseProp::FastShaderBuildHack, 1 );
+        // (Jahshaka) a queued request the MAIN thread runs itself (no service thread left: waitFor) is a parse in
+        // the frame.
+        if( !HlmsAsyncCompiler::isServiceThread() )
+            ++mJahParsedInFrame;
 
         processPieceTexts( request.mPieceTexts, tid );
 
@@ -772,14 +915,18 @@ namespace Ogre
         }
 
         Hash hashVal;
-        OGRE_HASH128_FUNC( outString.c_str(), static_cast<int>( outString.size() ), IdString::Seed,
-                           &hashVal );
-        if( mRenderSystem->getCapabilities()->hasCapability( RSC_EXPLICIT_API ) )
+        const bool bExplicitApi = mRenderSystem->getCapabilities()->hasCapability( RSC_EXPLICIT_API );
+        jahProgramKey( outString,
+                       String( reinterpret_cast<const char *>( &request.mRootLayout ),
+                               sizeof( request.mRootLayout ) ),
+                       bExplicitApi, hashVal.hashVal );
+        if( request.mKeyed )
         {
-            Hash hashValTmp[2] = { hashVal, Hash() };
-            OGRE_HASH128_FUNC( &request.mRootLayout, sizeof( request.mRootLayout ), IdString::Seed,
-                               &hashValTmp[1] );
-            OGRE_HASH128_FUNC( hashValTmp, sizeof( hashValTmp ), IdString::Seed, &hashVal );
+            // (Jahshaka) what the publish files as the record
+            request.mGenerated = outString;
+            request.mProgramKey = hashVal;
+            request.mExplicitApi = bExplicitApi;
+            request.mArrayBindings = getProperty( tid, "uses_array_bindings" ) != 0;
         }
 
         {
@@ -894,7 +1041,30 @@ namespace Ogre
         if( profileParams )
             profileParams->updateParameters( request.mPso.computeParams, true );
 
-        mBuiltPermutations.insert( permutationKey( job, request.mJobProperties ) );
+        // (Jahshaka) THE RECORD of what the request built, under the key of what its parse read.
+        if( request.mKeyed )
+        {
+            std::shared_ptr<JahCodeRecord> record = std::make_shared<JahCodeRecord>();
+            record->inputKey[0] = request.mInputKey.hashVal[0];
+            record->inputKey[1] = request.mInputKey.hashVal[1];
+            record->programKey[0] = request.mProgramKey.hashVal[0];
+            record->programKey[1] = request.mProgramKey.hashVal[1];
+            record->name = request.mJobName;
+            record->sourceFilename = request.mSourceFilename + mShaderFileExt;
+            record->source = request.mGenerated;
+            record->rootLayout = request.mRootLayoutBytes;
+            record->explicitApi = request.mExplicitApi;
+            record->arrayBindings = request.mArrayBindings;
+            record->indirect = request.mIndirect;
+            record->jobSized = request.mJobSized;
+            for( size_t i = 0u; i < 3u; ++i )
+            {
+                record->threadsPerGroup[i] = request.mPso.mThreadsPerGroup[i];
+                record->numThreadGroups[i] = request.mPso.mNumThreadGroups[i];
+            }
+            record->files = request.mFiles;
+            jahFileRecord( record );
+        }
         ComputePsoCache psoCache( job, request.mJobProperties );
         psoCache.pso = request.mPso;
         if( shaderParams )
@@ -930,7 +1100,146 @@ namespace Ogre
         }
     }
     //-----------------------------------------------------------------------------------
+    // (Jahshaka fork, THE CODE-ONLY REQUEST: COLD-BOOT-1 stage 3, the lead's ruling P6.) A record a launch read has its
+    // CODE compiled off the frame: no job, no PSO - the generated source and the root layout it was built with, on a
+    // service thread, into a detached program the main thread registers and files into mCompiledShaderCache at the
+    // publish, where the record's hit finds it. The record itself was filed when the request was made.
+    //-----------------------------------------------------------------------------------
+    class HlmsCompute::AsyncCodeJob final : public HlmsAsyncJob
+    {
+    public:
+        HlmsCompute           *mCompute;
+        JahCodeRecordPtr       mRecord;
+        HighLevelGpuProgramPtr mProgram;  ///< created detached on the worker; null if the code was compiled already
+        uint32                 mCounter;
+
+        AsyncCodeJob( HlmsCompute *compute, const JahCodeRecordPtr &record, uint32 counter ) :
+            HlmsAsyncJob( compute, this ),
+            mCompute( compute ),
+            mRecord( record ),
+            mCounter( counter )
+        {
+        }
+
+        void run( size_t tid ) override;
+        void publish() override;
+        void discard() override { mProgram.reset(); }
+    };
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::AsyncCodeJob::run( size_t /*tid*/ )
+    {
+        const JahCodeRecord &r = *mRecord;
+        Hash programKey;
+        programKey.hashVal[0] = r.programKey[0];
+        programKey.hashVal[1] = r.programKey[1];
+        {
+            ScopedLock lock( mCompute->mMutex );
+            if( mCompute->mCompiledShaderCache.find( programKey ) != mCompute->mCompiledShaderCache.end() )
+                return;  // compiled already (a parse, or another record of the same code)
+        }
+        // THE ROOT LAYOUT FROM ITS BYTES: the public fields only; what follows them (the reflected array ranges and
+        // the padding) is zero in every layout a record is made from (memset + setupRootLayout), or it is no record.
+        RootLayout rootLayout;
+        memset( &rootLayout, 0, sizeof( rootLayout ) );
+        const size_t fields = static_cast<size_t>( reinterpret_cast<const char *>( &rootLayout.mDescBindingRanges ) -
+                                                   reinterpret_cast<const char *>( &rootLayout ) ) +
+                              sizeof( rootLayout.mDescBindingRanges );
+        if( r.rootLayout.size() != sizeof( rootLayout ) ||
+            r.rootLayout.find_first_not_of( '\0', fields ) != String::npos )
+        {
+            OGRE_EXCEPT( Exception::ERR_INVALIDPARAMS, r.name + ": its code record holds no root layout",
+                         "HlmsCompute::AsyncCodeJob::run" );
+        }
+        memcpy( &rootLayout, r.rootLayout.data(), fields );
+
+        HighLevelGpuProgramPtr gp = HighLevelGpuProgramManager::getSingleton().createProgramDetached(
+            "AsyncComputeCode" + StringConverter::toString( mCounter ) + r.sourceFilename,
+            ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME, mCompute->mShaderProfile, GPT_COMPUTE_PROGRAM );
+        gp->setSource( r.source, "" );
+        gp->setRootLayout( gp->getType(), rootLayout );
+        if( r.arrayBindings )
+            gp->setAutoReflectArrayBindingsInRootLayout( true );
+        if( mCompute->mComputeShaderTarget )
+        {
+            gp->setParameter( "target", *mCompute->mComputeShaderTarget );
+            gp->setParameter( "entry_point", "main" );
+        }
+        gp->setSkeletalAnimationIncluded( false );
+        gp->setMorphAnimationIncluded( false );
+        gp->setPoseAnimationIncluded( false );
+        gp->setVertexTextureFetchRequired( false );
+        gp->load();
+        mProgram = gp;
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::AsyncCodeJob::publish()
+    {
+        if( mFailed || !mProgram )
+        {
+            mProgram.reset();
+            return;
+        }
+        Hash programKey;
+        programKey.hashVal[0] = mRecord->programKey[0];
+        programKey.hashVal[1] = mRecord->programKey[1];
+        {
+            ScopedLock lock( mCompute->mMutex );
+            if( mCompute->mCompiledShaderCache.find( programKey ) != mCompute->mCompiledShaderCache.end() )
+            {
+                mProgram.reset();  // a parse in the meantime got there first: its program serves
+                return;
+            }
+        }
+        {
+            // Under msGlobalMutex: see Hlms::AsyncPsoJob::registerPrograms.
+            ScopedLock lock( msGlobalMutex );
+            HighLevelGpuProgramManager::getSingleton()._registerDetachedProgram( mProgram );
+        }
+        ScopedLock lock( mCompute->mMutex );
+        mCompute->mCompiledShaderCache[programKey] = mProgram;
+        mProgram.reset();
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::jahPrewarmCode( vector<JahCodeRecord>::type &records )
+    {
+        HlmsAsyncCompiler *compiler = mHlmsManager ? mHlmsManager->getAsyncCompiler() : 0;
+        const bool bExplicit = mRenderSystem->getCapabilities()->hasCapability( RSC_EXPLICIT_API );
+        for( JahCodeRecord &in : records )
+        {
+            Hash key;
+            key.hashVal[0] = in.inputKey[0];
+            key.hashVal[1] = in.inputKey[1];
+            if( mJahRecords.find( key ) != mJahRecords.end() )
+                continue;  // this launch filed it already
+            // THE LEAD's CONDITION 1, AT THE DOOR: a record whose source does not re-hash to its program key is
+            // another compiler's or damaged, and is never filed (nor one of another kind of API): it cannot hit.
+            uint64 programKey[2];
+            jahProgramKey( in.source, in.rootLayout, in.explicitApi, programKey );
+            if( programKey[0] != in.programKey[0] || programKey[1] != in.programKey[1] ||
+                in.explicitApi != bExplicit )
+            {
+                continue;
+            }
+            JahCodeRecordPtr record = std::make_shared<const JahCodeRecord>( std::move( in ) );
+            mJahRecords[key] = record;
+            ++mJahRecordGeneration;
+            if( compiler && compiler->isRunning() )
+            {
+                uint32 counter;
+                {
+                    ScopedLock lock( mMutex );
+                    counter = mAsyncProgramCounter++;
+                }
+                AsyncCodeJob *job = OGRE_NEW AsyncCodeJob( this, record, counter );
+                job->mWhat = "compute code '" + record->name + "'";
+                compiler->submit( job );
+            }
+        }
+        records.clear();
+    }
+    //-----------------------------------------------------------------------------------
     void ( *HlmsCompute::msJahDispatchHook )( const HlmsComputeJob *job ) = 0;
+    void ( *HlmsCompute::msJahComputeKeyHook )( const JahKeyInputs &in, uint64 outKey[2] ) = 0;
     //-----------------------------------------------------------------------------------
     void HlmsCompute::dispatch( HlmsComputeJob *job, SceneManager *sceneManager, Camera *camera )
     {
@@ -971,7 +1280,9 @@ namespace Ogre
                     psoCache.setProperties.swap( job->mSetProperties );
                     // A permutation already built under another job (a clone) needs no shader
                     // compile: it is built in the frame below, from the code cache.
-                    const bool bKnown = mBuiltPermutations.count( permutationKey( job ) ) != 0u;
+                    // (Jahshaka) KNOWN = a code record hits: the content the parse would read was
+                    // built, and its program is compiled.
+                    const bool bKnown = jahCodeKnown( job );
                     const AsyncReadiness readiness = bKnown ? AsyncReady : requestAsync( job );
                     psoCache.setProperties.swap( job->mSetProperties );
                     if( readiness == AsyncPending )
@@ -1003,18 +1314,8 @@ namespace Ogre
                 // a hard copy for starting the compilation.
                 psoCache.setProperties.swap( job->mSetProperties );
 
-                // (ASYNC-SHADERS-1) Named, like Hlms::createShaderCacheEntry's: a compute
-                // permutation built in the frame while the background compiler runs.
-                if( mHlmsManager && mHlmsManager->getAsyncCompiler()->isRunning() )
-                {
-                    // A clone of a built permutation only builds its pipeline (the code is cached);
-                    // a NEW one compiles its shader here, on the frame's thread.
-                    const bool bKnown = mBuiltPermutations.count( permutationKey( job ) ) != 0u;
-                    LogManager::getSingleton().logMessage(
-                        "HlmsCompute: job '" + job->getNameStr() +
-                        ( bKnown ? "' builds a pipeline in the frame (its code is compiled)"
-                                 : "' compiles a permutation in the frame" ) );
-                }
+                // (Jahshaka) A permutation built in the frame is COUNTED: compileShader's getJahParsedInFrame
+                // (its template parsed here, the line it logs names the job) and getJahPsoInFrame (its pipeline).
                 this->mT[kNoTid].setProperties = job->mSetProperties;
 
                 // Uset the HlmsComputePso, as the ptr may be cached by the
@@ -1032,7 +1333,6 @@ namespace Ogre
 
                 // Compile and add the PSO to the cache.
                 psoCache.pso = compileShader( job, (uint32)newCacheEntryIdx );
-                mBuiltPermutations.insert( permutationKey( job ) );
 
                 ShaderParams *shaderParams = job->_getShaderParams( "default" );
                 if( shaderParams )
