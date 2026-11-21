@@ -28,6 +28,8 @@ THE SOFTWARE.
 
 #include "OgreVulkanRenderSystem.h"
 
+#include <chrono>
+
 #include "OgreVulkanAsyncComputeQueue.h"
 
 #include "OgreRenderPassDescriptor.h"
@@ -2053,8 +2055,13 @@ namespace Ogre
 #endif
 
         VkPipeline vulkanPso = 0u;
+        const std::chrono::steady_clock::time_point jahT0 = std::chrono::steady_clock::now();
         VkResult result = vkCreateComputePipelines( mDevice->mDevice, mDevice->mPipelineCache, 1u,
                                                     &computeInfo, 0, &vulkanPso );
+        // (Jahshaka) the driver's time (RenderSystem::getJahCompileCosts)
+        _jahNoteComputePso( static_cast<uint64>( std::chrono::duration_cast<std::chrono::microseconds>(
+                                                     std::chrono::steady_clock::now() - jahT0 )
+                                                     .count() ) );
         checkVkResult( mDevice, result, "vkCreateComputePipelines" );
 
 #if OGRE_DEBUG_MODE >= OGRE_DEBUG_MEDIUM
@@ -4449,10 +4456,18 @@ namespace Ogre
 #endif
 
         VkPipeline vulkanPso = 0;
-        VkResult result = deadlineMissed && !mDevice->mDeviceExtraFeatures.pipelineCreationCacheControl
-                              ? VK_PIPELINE_COMPILE_REQUIRED_EXT
-                              : vkCreateGraphicsPipelines( mDevice->mDevice, mDevice->mPipelineCache, 1u,
-                                                           &pipeline, 0, &vulkanPso );
+        const bool jahCreates = !( deadlineMissed && !mDevice->mDeviceExtraFeatures.pipelineCreationCacheControl );
+        const std::chrono::steady_clock::time_point jahT0 = std::chrono::steady_clock::now();
+        VkResult result = !jahCreates ? VK_PIPELINE_COMPILE_REQUIRED_EXT
+                                      : vkCreateGraphicsPipelines( mDevice->mDevice, mDevice->mPipelineCache, 1u,
+                                                                   &pipeline, 0, &vulkanPso );
+        // (Jahshaka) the driver's time (RenderSystem::getJahCompileCosts), when it was asked
+        if( jahCreates )
+        {
+            _jahNoteGraphicsPso( static_cast<uint64>( std::chrono::duration_cast<std::chrono::microseconds>(
+                                                          std::chrono::steady_clock::now() - jahT0 )
+                                                          .count() ) );
+        }
         if( result == VK_PIPELINE_COMPILE_REQUIRED_EXT )
             return false;
 

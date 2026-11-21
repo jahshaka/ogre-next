@@ -53,6 +53,8 @@ THE SOFTWARE.
 #endif
 #include "glslang/SPIRV/GlslangToSpv.h"
 
+#include <chrono>
+
 namespace Ogre
 {
     struct FreeModuleOnDestructor
@@ -751,6 +753,24 @@ namespace Ogre
     //-----------------------------------------------------------------------
     bool VulkanProgram::compile( const bool checkErrors, const bool bReflectingArrays )
     {
+        // (Jahshaka) THE COMPILE's COST (RenderSystem::getJahCompileCosts): the outer call, its reflection pass
+        // (the inner call) included, on every exit - an error's throw too.
+        struct JahCompileTimer
+        {
+            bool                                  bOn;
+            std::chrono::steady_clock::time_point t0;
+            ~JahCompileTimer()
+            {
+                if( bOn )
+                {
+                    RenderSystem::_jahNoteShaderCompile( static_cast<uint64>(
+                        std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() -
+                                                                               t0 )
+                            .count() ) );
+                }
+            }
+        } jahTimer = { !bReflectingArrays, std::chrono::steady_clock::now() };
+
         mCompiled = false;
         mCompileError = false;
 

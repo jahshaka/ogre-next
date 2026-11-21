@@ -1651,6 +1651,24 @@ namespace Ogre
         */
         virtual void savePipelineCache( DataStreamPtr stream ) const;
 
+        /** (Jahshaka fork, COLD-BOOT-1 stage 3 / SHADER-SYSTEM-1 3F) WHAT THE COMPILERS COST, process-wide running
+            totals on every thread: the shading-language compiles (glslang on Vulkan: source to SPIR-V, the reflection
+            pass of an array-binding program included) and the driver's pipeline creations, each with its count and
+            its microseconds. A render system that compiles feeds them (_jahNote*); a host reads them. */
+        struct JahCompileCosts
+        {
+            uint64 shaderCompiles;
+            uint64 shaderCompileUs;
+            uint64 graphicsPsos;
+            uint64 graphicsPsoUs;
+            uint64 computePsos;
+            uint64 computePsoUs;
+        };
+        static JahCompileCosts getJahCompileCosts();
+        static void            _jahNoteShaderCompile( uint64 us );
+        static void            _jahNoteGraphicsPso( uint64 us );
+        static void            _jahNoteComputePso( uint64 us );
+
         /// When serializing pipeline cache data to the file, we use a header that is filled with
         /// enough information to be able to validate the data, with the pipeline cache data following
         /// immediately afterwards. https://zeux.io/2019/07/17/serializing-pipeline-cache/#fn:1

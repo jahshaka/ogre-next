@@ -54,6 +54,8 @@ THE SOFTWARE.
 #include "Vao/OgreVaoManager.h"
 #include "Vao/OgreVertexArrayObject.h"
 
+#include <atomic>
+
 #if OGRE_NO_RENDERDOC_INTEGRATION == 0
 #    include "renderdoc/renderdoc_app.h"
 #    if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
@@ -1404,6 +1406,40 @@ namespace Ogre
     void RenderSystem::loadPipelineCache( DataStreamPtr stream ) {}
     //---------------------------------------------------------------------
     void RenderSystem::savePipelineCache( DataStreamPtr stream ) const {}
+    //---------------------------------------------------------------------
+    namespace
+    {
+        /// (Jahshaka) getJahCompileCosts' totals: any thread adds, relaxed (counters, never a synchronisation).
+        std::atomic<uint64> sJahShaderCompiles{ 0u }, sJahShaderCompileUs{ 0u };
+        std::atomic<uint64> sJahGraphicsPsos{ 0u }, sJahGraphicsPsoUs{ 0u };
+        std::atomic<uint64> sJahComputePsos{ 0u }, sJahComputePsoUs{ 0u };
+    }  // namespace
+    RenderSystem::JahCompileCosts RenderSystem::getJahCompileCosts()
+    {
+        JahCompileCosts c;
+        c.shaderCompiles = sJahShaderCompiles.load( std::memory_order_relaxed );
+        c.shaderCompileUs = sJahShaderCompileUs.load( std::memory_order_relaxed );
+        c.graphicsPsos = sJahGraphicsPsos.load( std::memory_order_relaxed );
+        c.graphicsPsoUs = sJahGraphicsPsoUs.load( std::memory_order_relaxed );
+        c.computePsos = sJahComputePsos.load( std::memory_order_relaxed );
+        c.computePsoUs = sJahComputePsoUs.load( std::memory_order_relaxed );
+        return c;
+    }
+    void RenderSystem::_jahNoteShaderCompile( uint64 us )
+    {
+        sJahShaderCompiles.fetch_add( 1u, std::memory_order_relaxed );
+        sJahShaderCompileUs.fetch_add( us, std::memory_order_relaxed );
+    }
+    void RenderSystem::_jahNoteGraphicsPso( uint64 us )
+    {
+        sJahGraphicsPsos.fetch_add( 1u, std::memory_order_relaxed );
+        sJahGraphicsPsoUs.fetch_add( us, std::memory_order_relaxed );
+    }
+    void RenderSystem::_jahNoteComputePso( uint64 us )
+    {
+        sJahComputePsos.fetch_add( 1u, std::memory_order_relaxed );
+        sJahComputePsoUs.fetch_add( us, std::memory_order_relaxed );
+    }
     //---------------------------------------------------------------------
     void RenderSystem::_notifyIncompletePsoRequests( uint32 count )
     {
