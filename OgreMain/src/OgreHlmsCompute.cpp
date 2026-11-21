@@ -902,6 +902,11 @@ namespace Ogre
         if( profileParams )
             psoCache.paramsProfileUpdateCounter = profileParams->getUpdateCounter();
 
+        // (Jahshaka) Unset the HlmsComputePso, as dispatch()'s in-frame build does: the ptr may be
+        // cached by the RenderSystem, and the push_back below can reallocate mComputeShaderCache
+        // (a publish inside waitForAsyncPermutation runs between two dispatches).
+        mRenderSystem->_setComputePso( 0 );
+
         if( mFreeShaderCacheEntries.empty() )
             mComputeShaderCache.push_back( psoCache );
         else
