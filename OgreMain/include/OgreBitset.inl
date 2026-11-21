@@ -391,7 +391,10 @@ namespace Ogre
                 if( i + 1u == internalArraySize )
                 {
                     const uint64 localIdx = ( startFrom & 0x3F );
-                    const uint64 mask = 0xFFFFFFFFFFFFFFFF >> ( 64ul - localIdx );
+                    // Jahshaka (OGRE-BUMP-2): startFrom a multiple of 64 (localIdx 0) means the WHOLE word; the
+                    // shift by 64 it took there is undefined in C++ (x86 shifted by 0 and happened to be right).
+                    const uint64 mask =
+                        localIdx ? ( 0xFFFFFFFFFFFFFFFF >> ( 64ul - localIdx ) ) : 0xFFFFFFFFFFFFFFFF;
 
                     const uint64 value = this->mValues[i] & mask;
                     if( value != 0u )
@@ -426,7 +429,10 @@ namespace Ogre
                 if( i + 1u == internalArraySize )
                 {
                     const uint64 localIdx = ( startFrom & 0x3F );
-                    const uint64 mask = 0xFFFFFFFFFFFFFFFF >> ( 64ul - localIdx );
+                    // Jahshaka (OGRE-BUMP-2): startFrom a multiple of 64 (localIdx 0) means the WHOLE word; the
+                    // shift by 64 it took there is undefined in C++ (x86 shifted by 0 and happened to be right).
+                    const uint64 mask =
+                        localIdx ? ( 0xFFFFFFFFFFFFFFFF >> ( 64ul - localIdx ) ) : 0xFFFFFFFFFFFFFFFF;
 
                     const uint64 value = ( this->mValues[i] ^ 0xFFFFFFFFFFFFFFFF ) & mask;
                     if( value != 0u )
