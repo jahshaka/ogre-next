@@ -1109,6 +1109,11 @@ namespace Ogre
                 mPsoCacheHash = std::numeric_limits<size_t>::max();
             }
 
+            // (Jahshaka) A texture this slot held stops being listened to by it, as setTexture's
+            // replacement does: left, the texture would notify (or, past this job, call into) a
+            // job whose slot no longer names it.
+            removeListenerFromTextures( mTexSlots, slotIdx, slotIdx + 1u );
+
             slot.slotType = DescriptorSetTexture2::SlotTypeBuffer;
             DescriptorSetTexture2::BufferSlot &bufferSlot = slot.getBuffer();
             bufferSlot = stampedSlot;  // JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041)
@@ -1136,7 +1141,14 @@ namespace Ogre
         DescriptorSetTexture2::Slot &slot = mTexSlots[slotIdx];
         if( slot.slotType != DescriptorSetTexture2::SlotTypeTexture || slot.getTexture() != newSlot )
         {
-            slot.slotType = DescriptorSetTexture2::SlotTypeTexture;
+            if( slot.slotType != DescriptorSetTexture2::SlotTypeTexture )
+            {
+                // (Jahshaka) The slot is a union (OgreDescriptorSetTexture.h, Slot): a buffer slot's bytes
+                // read as a TextureSlot name its BUFFER as the texture. Start from an empty texture slot,
+                // so nothing below calls the buffer as a TextureGpu.
+                slot.slotType = DescriptorSetTexture2::SlotTypeTexture;
+                slot.getTexture() = DescriptorSetTexture2::TextureSlot::makeEmpty();
+            }
             DescriptorSetTexture2::TextureSlot &texSlot = slot.getTexture();
 
             if( mInformHlmsOfTextureData && texSlot.texture != newSlot.texture &&
@@ -1226,6 +1238,10 @@ namespace Ogre
                 mPsoCacheHash = std::numeric_limits<size_t>::max();
             }
 
+            // (Jahshaka) A texture this slot held stops being listened to by it, as _setUavTexture's
+            // replacement does (see setTexBuffer).
+            removeListenerFromTextures( mUavSlots, slotIdx, slotIdx + 1u );
+
             slot.slotType = DescriptorSetUav::SlotTypeBuffer;
             DescriptorSetUav::BufferSlot &bufferSlot = slot.getBuffer();
 
@@ -1241,7 +1257,12 @@ namespace Ogre
         DescriptorSetUav::Slot &slot = mUavSlots[slotIdx];
         if( slot.slotType != DescriptorSetUav::SlotTypeTexture || slot.getTexture() != newSlot )
         {
-            slot.slotType = DescriptorSetUav::SlotTypeTexture;
+            if( slot.slotType != DescriptorSetUav::SlotTypeTexture )
+            {
+                // (Jahshaka) The slot is a union (OgreDescriptorSetUav.h, Slot): see setTexture.
+                slot.slotType = DescriptorSetUav::SlotTypeTexture;
+                slot.getTexture() = DescriptorSetUav::TextureSlot::makeEmpty();
+            }
             DescriptorSetUav::TextureSlot &texSlot = slot.getTexture();
 
             if( mInformHlmsOfTextureData && texSlot.texture != newSlot.texture &&
