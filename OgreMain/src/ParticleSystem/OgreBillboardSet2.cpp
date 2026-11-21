@@ -38,6 +38,12 @@ Billboard BillboardSet::allocBillboard()
 {
     const uint32 handle = allocParticle();
 
+    // Jahshaka (OGRE-BUMP-2): a full set returns InvalidHandle; setVisible() would write
+    // mTimeToLive[InvalidHandle], far outside the set's CPU data (the segfault the merged fork showed in
+    // particles.document_to_engine). The caller tests the handle it gets back.
+    if( handle == ParticleSystemDef::InvalidHandle )
+        return Billboard( handle, this );
+
     Billboard retVal( handle, this );
     retVal.setVisible( true );
 

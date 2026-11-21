@@ -505,7 +505,14 @@ uint32 ParticleSystemDef::allocParticle()
             {
                 // That failed. We have to search in range [mFirstParticleIdx; quota) but because
                 // we can't do that, we just do a full [0; quota) search.
-                newIdx = mActiveParticles.findLastBitUnset( mFirstParticleIdx + 1u );
+                //
+                // Jahshaka (OGRE-BUMP-2): a FULL search, as the line above says. The tracked range spans
+                // the whole ring here (distance == quota, so mFirstParticleIdx == lastParticleIdxWrapped),
+                // so any free slot is a valid one. findLastBitUnset( mFirstParticleIdx + 1u ) searched only
+                // [0; mFirstParticleIdx], so a ring with free slots above mFirstParticleIdx refused an
+                // allocation (InvalidHandle) - and, before c5d535f3c marked the slot, handed one slot out
+                // again and again.
+                newIdx = mActiveParticles.findLastBitUnset();
 
                 if( newIdx == mActiveParticles.capacity() )
                 {
@@ -553,7 +560,11 @@ void ParticleSystemDef::deallocParticle( uint32 handle )
 
     mParticleQuotaFull = false;
     mActiveParticles.unset( handle );
-    if( handle + 1u == lastParticleIdxWrapped )
+    // Jahshaka (OGRE-BUMP-2): the slot just below mLastParticleIdx is ( mLastParticleIdx - 1 ) % quota.
+    // `handle + 1u == lastParticleIdxWrapped` missed it when mLastParticleIdx == quota (wrapped is 0 there):
+    // freeing a full ring from the top never shrank its tracked range, and the last free (slot 0, the FIFO
+    // branch) left an EMPTY ring tracking [1; quota). mLastParticleIdx >= 1 here (the handle is live).
+    if( handle == ( mLastParticleIdx - 1u ) % quota )
         --mLastParticleIdx;  // Non-FIFO order. Unexpected, but easy case
     else if( handle == mFirstParticleIdx )
     {
