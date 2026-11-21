@@ -1141,7 +1141,14 @@ namespace Ogre
         DescriptorSetTexture2::Slot &slot = mTexSlots[slotIdx];
         if( slot.slotType != DescriptorSetTexture2::SlotTypeTexture || slot.getTexture() != newSlot )
         {
-            slot.slotType = DescriptorSetTexture2::SlotTypeTexture;
+            if( slot.slotType != DescriptorSetTexture2::SlotTypeTexture )
+            {
+                // (Jahshaka) The slot is a union (OgreDescriptorSetTexture.h, Slot): a buffer slot's bytes
+                // read as a TextureSlot name its BUFFER as the texture. Start from an empty texture slot,
+                // so nothing below calls the buffer as a TextureGpu.
+                slot.slotType = DescriptorSetTexture2::SlotTypeTexture;
+                slot.getTexture() = DescriptorSetTexture2::TextureSlot::makeEmpty();
+            }
             DescriptorSetTexture2::TextureSlot &texSlot = slot.getTexture();
 
             if( mInformHlmsOfTextureData && texSlot.texture != newSlot.texture &&
@@ -1250,7 +1257,12 @@ namespace Ogre
         DescriptorSetUav::Slot &slot = mUavSlots[slotIdx];
         if( slot.slotType != DescriptorSetUav::SlotTypeTexture || slot.getTexture() != newSlot )
         {
-            slot.slotType = DescriptorSetUav::SlotTypeTexture;
+            if( slot.slotType != DescriptorSetUav::SlotTypeTexture )
+            {
+                // (Jahshaka) The slot is a union (OgreDescriptorSetUav.h, Slot): see setTexture.
+                slot.slotType = DescriptorSetUav::SlotTypeTexture;
+                slot.getTexture() = DescriptorSetUav::TextureSlot::makeEmpty();
+            }
             DescriptorSetUav::TextureSlot &texSlot = slot.getTexture();
 
             if( mInformHlmsOfTextureData && texSlot.texture != newSlot.texture &&
