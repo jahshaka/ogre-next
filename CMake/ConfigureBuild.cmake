@@ -27,6 +27,12 @@ else ()
   set(OGRE_LIB_TYPE SHARED)
 endif ()
 
+if (OGRE_USE_NEW_PROJECT_NAME)
+  set(OGRE_NAME_IS_OGRE_NEXT TRUE)
+else ()
+  unset(OGRE_NAME_IS_OGRE_NEXT)
+endif ()
+
 # configure threading options
 set(OGRE_THREAD_PROVIDER 0)
 if (OGRE_CONFIG_THREADS)
@@ -43,9 +49,6 @@ if (OGRE_CONFIG_THREADS)
 	if (OGRE_CONFIG_THREAD_PROVIDER STREQUAL "tbb")
 		set(OGRE_THREAD_PROVIDER 3)
 		include_directories(${TBB_INCLUDE_DIRS})
-		if (WIN32 AND MINGW)
-			add_definitions(-D_WIN32_WINNT=0x0501)    
-		endif ()
 
 		set(OGRE_THREAD_LIBRARIES ${TBB_LIBRARIES})
 	endif ()

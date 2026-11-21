@@ -109,6 +109,8 @@ PbsParametersPanel::ColourWidgets PbsParametersPanel::getColourWidgets(
         return { { m_diffuseR, m_diffuseG, m_diffuseB }, m_diffuseRGBA, m_buttonDiffuse };
     case ColourSection::Specular:
         return { { m_specularR, m_specularG, m_specularB }, m_specularRGBA, m_buttonSpecular };
+    case ColourSection::Emissive:
+        return { { m_emissiveR, m_emissiveG, m_emissiveB }, m_emissiveRGBA, m_buttonEmissive };
     case ColourSection::Fresnel:
         return { { m_fresnelR, m_fresnelG, m_fresnelB }, m_fresnelRGBA, m_buttonFresnel };
     }
@@ -178,7 +180,31 @@ void PbsParametersPanel::OnColourButton( wxCommandEvent &event )
 
     EditingScope scope( m_editing );
 
+    wxButton *pickerButton = static_cast<wxButton *>( event.GetEventObject() );
+
+    // Find which colour section owns this button before opening the dialog, so we can seed the
+    // dialog with the current colour instead of letting it default to black.
+    ColourWidgets widgets{};
+    bool bFoundWidgets = false;
+    for( size_t i = 0u; i < ColourSection::NumColourSection; ++i )
+    {
+        widgets = getColourWidgets( ColourSection::ColourSection( i ) );
+        if( widgets.buttonPicker == pickerButton )
+        {
+            bFoundWidgets = true;
+            break;
+        }
+    }
+
+    if( !bFoundWidgets )
+    {
+        event.Skip();
+        return;
+    }
+
     wxColourDialog pickerDlg( this );
+    // The button's background is kept in sync by ColourWidgets, in sRGB space.
+    pickerDlg.GetColourData().SetColour( pickerButton->GetBackgroundColour() );
 
     if( pickerDlg.ShowModal() != wxID_OK )
     {
@@ -186,22 +212,10 @@ void PbsParametersPanel::OnColourButton( wxCommandEvent &event )
         return;
     }
 
-    wxButton *pickerButton = static_cast<wxButton *>( event.GetEventObject() );
-
-    for( size_t i = 0u; i < ColourSection::NumColourSection; ++i )
-    {
-        ColourWidgets widgets = getColourWidgets( ColourSection::ColourSection( i ) );
-        if( widgets.buttonPicker == pickerButton )
-        {
-            const uint32_t rgba = pickerDlg.GetColourData().GetColour().GetRGBA();
-            widgets.fromButton( rgba );
-            m_datablockDirty = DirtyStateDirty;
-            event.Skip( false );
-            return;
-        }
-    }
-
-    event.Skip();
+    const uint32_t rgba = pickerDlg.GetColourData().GetColour().GetRGBA();
+    widgets.fromButton( rgba );
+    m_datablockDirty = DirtyStateDirty;
+    event.Skip( false );
 }
 //-----------------------------------------------------------------------------
 void PbsParametersPanel::OnColourText( wxCommandEvent &event )
@@ -411,6 +425,7 @@ void PbsParametersPanel::syncDatablockFromUI()
     ColourWidgets colourWidgets[ColourSection::NumColourSection] = {
         getColourWidgets( ColourSection::Diffuse ),
         getColourWidgets( ColourSection::Specular ),
+        getColourWidgets( ColourSection::Emissive ),
         getColourWidgets( ColourSection::Fresnel ),
     };
 
@@ -433,6 +448,16 @@ void PbsParametersPanel::syncDatablockFromUI()
                 col[i] = Ogre::Real( val );
         }
         pbsDatablock->setSpecular( col );
+    }
+    {
+        Ogre::Vector3 col( pbsDatablock->getEmissive() );
+        for( size_t i = 0u; i < 3u; ++i )
+        {
+            double val;
+            if( colourWidgets[ColourSection::Emissive].rgbaText[i]->GetValue().ToDouble( &val ) )
+                col[i] = Ogre::Real( val );
+        }
+        pbsDatablock->setEmissive( col );
     }
     {
         Ogre::Vector3 col( pbsDatablock->getFresnel() );
@@ -520,6 +545,7 @@ void PbsParametersPanel::refreshFromDatablock()
     ColourWidgets colourWidgets[ColourSection::NumColourSection] = {
         getColourWidgets( ColourSection::Diffuse ),
         getColourWidgets( ColourSection::Specular ),
+        getColourWidgets( ColourSection::Emissive ),
         getColourWidgets( ColourSection::Fresnel ),
     };
 
@@ -540,6 +566,15 @@ void PbsParametersPanel::refreshFromDatablock()
                 wxString::Format( wxT( "%.05lf" ), specularCol.ptr()[i] ) );
         }
         colourWidgets[ColourSection::Specular].fromRgbaText();
+    }
+    {
+        const Ogre::Vector3 emissiveCol = pbsDatablock->getEmissive();
+        for( size_t i = 0u; i < 3u; ++i )
+        {
+            colourWidgets[ColourSection::Emissive].rgbaText[i]->SetValue(
+                wxString::Format( wxT( "%.05lf" ), emissiveCol.ptr()[i] ) );
+        }
+        colourWidgets[ColourSection::Emissive].fromRgbaText();
     }
     {
         const Ogre::Vector3 fresnelCol = pbsDatablock->getFresnel();
