@@ -1109,6 +1109,11 @@ namespace Ogre
                 mPsoCacheHash = std::numeric_limits<size_t>::max();
             }
 
+            // (Jahshaka) A texture this slot held stops being listened to by it, as setTexture's
+            // replacement does: left, the texture would notify (or, past this job, call into) a
+            // job whose slot no longer names it.
+            removeListenerFromTextures( mTexSlots, slotIdx, slotIdx + 1u );
+
             slot.slotType = DescriptorSetTexture2::SlotTypeBuffer;
             DescriptorSetTexture2::BufferSlot &bufferSlot = slot.getBuffer();
             bufferSlot = stampedSlot;  // JAHSHAKA fork 1bccc3f93+a98e2b0af (was 0041)
@@ -1225,6 +1230,10 @@ namespace Ogre
             {
                 mPsoCacheHash = std::numeric_limits<size_t>::max();
             }
+
+            // (Jahshaka) A texture this slot held stops being listened to by it, as _setUavTexture's
+            // replacement does (see setTexBuffer).
+            removeListenerFromTextures( mUavSlots, slotIdx, slotIdx + 1u );
 
             slot.slotType = DescriptorSetUav::SlotTypeBuffer;
             DescriptorSetUav::BufferSlot &bufferSlot = slot.getBuffer();
