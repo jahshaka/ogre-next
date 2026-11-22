@@ -278,6 +278,7 @@ namespace Ogre
         if( itor != mMicrocodeCache.end() )
         {
             *outMicrocode = &itor->second;
+            mJahUsedMicrocode.insert( hashKey );  // (Jahshaka) F10: used this launch
             return true;
         }
         else
@@ -308,6 +309,7 @@ namespace Ogre
         {
             foundIter->second = microcode;
         }
+        mJahUsedMicrocode.insert( hashKey );  // (Jahshaka) F10: made this launch is used this launch
 
         // if cache is modified, mark it as dirty.
         // We don't check foundIter->second == microcode
@@ -340,6 +342,13 @@ namespace Ogre
     {
         ScopedLock lock( mMicrocodeCacheMutex );
         out = mMicrocodeCache;
+    }
+    //---------------------------------------------------------------------
+    void GpuProgramManager::copyMicrocodeCache( MicrocodeMap &out, HashSet &outUsed ) const
+    {
+        ScopedLock lock( mMicrocodeCacheMutex );
+        out = mMicrocodeCache;
+        outUsed = mJahUsedMicrocode;
     }
     //---------------------------------------------------------------------
     void GpuProgramManager::saveMicrocodeCache( DataStreamPtr stream, const MicrocodeMap &microcodes )
@@ -379,6 +388,7 @@ namespace Ogre
     {
         ScopedLock lock( mMicrocodeCacheMutex );
         mMicrocodeCache.clear();
+        mJahUsedMicrocode.clear();  // (Jahshaka) F10: a loaded map is unused until hit
 
         // write the size of the array
         uint32 sizeOfArray = 0;
@@ -411,6 +421,7 @@ namespace Ogre
     {
         ScopedLock lock( mMicrocodeCacheMutex );
         mMicrocodeCache.clear();
+        mJahUsedMicrocode.clear();
         mCacheDirty = false;
     }
     //---------------------------------------------------------------------

@@ -80,11 +80,15 @@ namespace Ogre
 
         typedef MemoryDataStreamPtr        Microcode;
         typedef map<Hash, Microcode>::type MicrocodeMap;
+        typedef set<Hash>::type            HashSet;
 
     protected:
         SharedParametersMap      mSharedParametersMap;
         MicrocodeMap             mMicrocodeCache;  // GUARDED_BY( mMicrocodeCacheMutex )
         mutable LightweightMutex mMicrocodeCacheMutex;
+        /// (Jahshaka, SHADER-SYSTEM-1 F10) THE ENTRIES USED SINCE THE MAP WAS LOADED: every hit and every add,
+        /// under the mutex the path already holds (copyMicrocodeCache reads them; a load or a clear empties them).
+        mutable HashSet mJahUsedMicrocode;  // GUARDED_BY( mMicrocodeCacheMutex )
         bool                     mSaveMicrocodesToCache;
         bool mCacheDirty;  // When this is true the cache is 'dirty' and should be resaved to disk.
 
@@ -301,6 +305,9 @@ namespace Ogre
         /// pointers (the blobs are immutable once added — a removal drops the map's reference, never the bytes a
         /// copy holds), so a caller serialises it later, elsewhere, without the lock.
         void copyMicrocodeCache( MicrocodeMap &out ) const;
+        /// (Jahshaka, SHADER-SYSTEM-1 F10) ...and, in the same lock, the keys of the entries USED since the map was
+        /// loaded (hit by getMicrocodeFromCache or added): the host stamps them and drops what no launch used for long.
+        void copyMicrocodeCache( MicrocodeMap &out, HashSet &outUsed ) const;
         /** Loads the microcode cache from disk.
         @param stream The source stream
         */
