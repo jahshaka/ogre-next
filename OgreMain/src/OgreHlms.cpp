@@ -291,6 +291,11 @@ namespace Ogre
     // every clearShaderCache, so no two code caches — a destroyed Hlms and one re-registered at its type included —
     // ever share a generation, and HlmsDiskCache::appendFrom can trust the value alone.
     static std::atomic<uint32> sJahCodeCacheGenerations{ 0u };
+    /// (Jahshaka) getJahBuiltInFrame / getJahCompiledInFrame's totals.
+    static std::atomic<uint64> sJahBuiltInFrame{ 0u };
+    static std::atomic<uint64> sJahCompiledInFrame{ 0u };
+    uint64 Hlms::getJahBuiltInFrame() { return sJahBuiltInFrame.load( std::memory_order_relaxed ); }
+    uint64 Hlms::getJahCompiledInFrame() { return sJahCompiledInFrame.load( std::memory_order_relaxed ); }
     static uint32 jahNextCodeCacheGeneration() { return ++sJahCodeCacheGenerations; }
     //-----------------------------------------------------------------------------------
     Hlms::Hlms( HlmsTypes type, const String &typeName, Archive *dataFolder,
@@ -3022,6 +3027,10 @@ namespace Ogre
 
         if( jahLogInFrame )
         {
+            // (Jahshaka) COUNTED, beside the line (getJahBuiltInFrame / getJahCompiledInFrame).
+            sJahBuiltInFrame.fetch_add( 1u, std::memory_order_relaxed );
+            if( !jahFromCachedCode )
+                sJahCompiledInFrame.fetch_add( 1u, std::memory_order_relaxed );
             const SceneManager *sm =
                 queuedRenderable.movableObject ? queuedRenderable.movableObject->_getManager() : 0;
             const Camera *cam = sm ? sm->getCamerasInProgress().renderingCamera : 0;

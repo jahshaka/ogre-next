@@ -44,6 +44,11 @@ THE SOFTWARE.
 #include "OgreTechnique.h"
 #include "Vao/OgreVertexArrayObject.h"
 
+#include "OgreLogManager.h"
+#include "OgreStringConverter.h"
+
+#include <atomic>
+
 namespace Ogre
 {
     const IdString LowLevelProp::PassId = IdString( "pass_id" );
@@ -60,6 +65,13 @@ namespace Ogre
     {
         OGRE_DELETE mAutoParamDataSource;
         mAutoParamDataSource = 0;
+    }
+    //-----------------------------------------------------------------------------------
+    /// (Jahshaka) getJahLowLevelBuiltInFrame's total.
+    static std::atomic<uint64> sJahLowLevelBuiltInFrame{ 0u };
+    uint64 HlmsLowLevel::getJahLowLevelBuiltInFrame()
+    {
+        return sJahLowLevelBuiltInFrame.load( std::memory_order_relaxed );
     }
     //-----------------------------------------------------------------------------------
     const HlmsCache *HlmsLowLevel::createShaderCacheEntry( uint32 renderableHash,
@@ -146,6 +158,12 @@ namespace Ogre
         applyStrongBlockRules( pso, tid );
 
         mRenderSystem->_hlmsPipelineStateObjectCreated( &pso, (uint64)-1 );
+        // (Jahshaka) COUNTED and NAMED: a low-level pipeline is always built in the frame that first draws it.
+        sJahLowLevelBuiltInFrame.fetch_add( 1u, std::memory_order_relaxed );
+        LogManager::getSingleton().logMessage(
+            "HlmsLowLevel: material '" + mat->getName() + "' built its pipeline in the frame (" +
+            StringConverter::toString( sJahLowLevelBuiltInFrame.load( std::memory_order_relaxed ) ) +
+            " this run)" );
 
         if( reservedStubEntry )
         {

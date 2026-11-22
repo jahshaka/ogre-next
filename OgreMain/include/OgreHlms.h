@@ -812,6 +812,12 @@ namespace Ogre
         void setJahTemplateSalt( const uint64 salt[2] );
         /// (Jahshaka) See mJahCodeCacheGeneration.
         uint32 getShaderCodeCacheGeneration() const { return mJahCodeCacheGeneration; }
+        /// (Jahshaka, SHADER-SYSTEM-1 stage 7a) WHAT A FRAME BUILT, GRAPHICS: process-wide running totals of the
+        /// permutations built where createShaderCacheEntry names one "built in the frame" (the main thread or a blocking
+        /// pass's compile worker while the background compiler runs) - every one of them, and of those the ones whose
+        /// shader COMPILED in the frame (the rest a PSO from cached shader code). Any Hlms, any thread, relaxed counters.
+        static uint64 getJahBuiltInFrame();
+        static uint64 getJahCompiledInFrame();
 
         /// Sets the precision mode of Hlms. See PrecisionMode
         /// Note: This call may invalidate the shader cache!

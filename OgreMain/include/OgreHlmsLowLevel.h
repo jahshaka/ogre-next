@@ -82,6 +82,11 @@ namespace Ogre
 
         AutoParamDataSource *_getAutoParamDataSource() const { return mAutoParamDataSource; }
 
+        /// (Jahshaka, SHADER-SYSTEM-1 stage 7a) WHAT A FRAME BUILT, LOW-LEVEL: the process's running total of
+        /// low-level pipelines built (createShaderCacheEntry). A low-level material has no asynchronous path: its
+        /// pipeline is built on the thread that draws it, at its first draw, inside that frame - every one is counted.
+        static uint64 getJahLowLevelBuiltInFrame();
+
         void calculateHashFor( Renderable *renderable, uint32 &outHash, uint32 &outCasterHash ) override;
 
         HlmsCache preparePassHash( const Ogre::CompositorShadowNode *shadowNode, bool casterPass,
