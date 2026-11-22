@@ -3593,8 +3593,17 @@ namespace Ogre
                     }
                     // we'll use this map to resolve autos later
                     // ignore the [0] aliases
-                    if( !StringUtil::endsWith( paramName, "[0]" ) &&
-                        this->getAutoConstantDefinition( paramName ) )
+                    // (Jahshaka) AN AUTO CONSTANT LIVES IN THE FLOAT BUFFER (setNamedAutoConstant writes the
+                    // float logical index use), so only a float constant on both sides can carry one: the map is
+                    // keyed by a FLOAT physical index. Upstream keyed it by a physical index of ANY type (an int
+                    // sampler at index N matched a float auto at N) and then filtered by
+                    // getAutoConstantDefinition( paramName ), which looks the PARAMETER's name up in the auto TYPE
+                    // dictionary ("viewport_size", "worldviewproj_matrix"): every auto bound to a name of the
+                    // shader's own ("viewportSize", "worldViewProj") was dropped - by a program reload's
+                    // recreateParameters, a high-level program's reloaded defaults, and any twin program made
+                    // from another's parameters (SHADER-SYSTEM-1 7a, R3).
+                    if( !StringUtil::endsWith( paramName, "[0]" ) && olddef.isFloat() &&
+                        newdef->isFloat() )
                         srcToDestNamedMap[olddef.physicalIndex] = paramName;
                 }
             }
