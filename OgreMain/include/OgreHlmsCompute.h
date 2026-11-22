@@ -93,6 +93,10 @@ namespace Ogre
             uint32          paramsProfileUpdateCounter;
             /// (Jahshaka) the parameters were checked to fit the program (dispatch()'s first dispatch)
             bool            jahParamsFit = false;
+            /// (Jahshaka) the job's parameters are OWED to this program: an asynchronously published
+            /// PSO gets them whole at its own first dispatch (asyncComputePublished), as the in-frame
+            /// build gets them at the dispatch that builds it (compileShader)
+            bool            jahParamsOwed = false;
 
             ComputePsoCache() : job( 0 ), paramsUpdateCounter( ~0u ), paramsProfileUpdateCounter( ~0u )
             {

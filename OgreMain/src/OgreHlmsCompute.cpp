@@ -1056,18 +1056,23 @@ namespace Ogre
             mAsyncComputeEntries.pop_back();
         }
 
-        // dispatch()'s filing of a freshly compiled PSO, with the job's shader params applied
-        // now (the job may have changed them since the request).
+        // dispatch()'s filing of a freshly compiled PSO.
         // (Jahshaka) ITS PARAMETERS ARE MADE HERE, ON THE MAIN THREAD (compileAsync's note): the only
         // thread that builds a program's definitions.
         request.mPso.computeParams = request.mShader->createParameters();
         HlmsComputeJob *job = request.mJob;
+        // (Jahshaka) THE JOB's VALUES ARE OWED, NOT APPLIED HERE: the job's parameters now are its
+        // CURRENT permutation's, and a shared job may have moved to another since the request (the
+        // voxel clear's ClearUav interleaves float and uint targets: a uint program published while the
+        // job holds fClearValue threw ITEM_NOT_FOUND twice on every first launch). Applying them here
+        // would also CONSUME them: updateParameters clears isDirty on every parameter it visits, one
+        // the program lacks included (OgreShaderParams.cpp), and dispatch() applies only dirty ones on a
+        // counter change - a value the current permutation still owed its own program would be lost.
+        // So the program gets the job's values whole at ITS OWN first dispatch (dispatch(),
+        // jahParamsOwed), when the job is in this permutation: what the in-frame build does at the
+        // dispatch that builds it (compileShader's forced update).
         ShaderParams *shaderParams = job->_getShaderParams( "default" );
-        if( shaderParams )
-            shaderParams->updateParameters( request.mPso.computeParams, true );
         ShaderParams *profileParams = job->_getShaderParams( mShaderProfile );
-        if( profileParams )
-            profileParams->updateParameters( request.mPso.computeParams, true );
 
         // (Jahshaka) THE RECORD of what the request built, under the key of what its parse read.
         if( request.mKeyed )
@@ -1099,6 +1104,7 @@ namespace Ogre
             psoCache.paramsUpdateCounter = shaderParams->getUpdateCounter();
         if( profileParams )
             psoCache.paramsProfileUpdateCounter = profileParams->getUpdateCounter();
+        psoCache.jahParamsOwed = true;
 
         // (Jahshaka) Unset the HlmsComputePso, as dispatch()'s in-frame build does: the ptr may be
         // cached by the RenderSystem, and the push_back below can reallocate mComputeShaderCache
@@ -1433,17 +1439,23 @@ namespace Ogre
 
         {
             // Update dirty parameters, if necessary
+            // (Jahshaka) ...or ALL of them, forced, at an asynchronously published PSO's first dispatch
+            // (jahParamsOwed: asyncComputePublished's note).
+            const bool bOwed = psoCache.jahParamsOwed;
+            psoCache.jahParamsOwed = false;
             ShaderParams *shaderParams = job->_getShaderParams( "default" );
-            if( shaderParams && psoCache.paramsUpdateCounter != shaderParams->getUpdateCounter() )
+            if( shaderParams &&
+                ( bOwed || psoCache.paramsUpdateCounter != shaderParams->getUpdateCounter() ) )
             {
-                shaderParams->updateParameters( psoCache.pso.computeParams, false );
+                shaderParams->updateParameters( psoCache.pso.computeParams, bOwed );
                 psoCache.paramsUpdateCounter = shaderParams->getUpdateCounter();
             }
 
             shaderParams = job->_getShaderParams( mShaderProfile );
-            if( shaderParams && psoCache.paramsProfileUpdateCounter != shaderParams->getUpdateCounter() )
+            if( shaderParams &&
+                ( bOwed || psoCache.paramsProfileUpdateCounter != shaderParams->getUpdateCounter() ) )
             {
-                shaderParams->updateParameters( psoCache.pso.computeParams, false );
+                shaderParams->updateParameters( psoCache.pso.computeParams, bOwed );
                 psoCache.paramsProfileUpdateCounter = shaderParams->getUpdateCounter();
             }
         }
