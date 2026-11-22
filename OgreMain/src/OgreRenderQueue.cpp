@@ -648,7 +648,8 @@ namespace Ogre
             lastHlmsCache, passCache, queuedRenderable, casterPass, allowPlaceholder, outPlaceholder );
         if( outPlaceholder )
             ++mNumPlaceholderDraws;
-        else if( retVal->flags != HLMS_CACHE_FLAGS_NONE )
+        else if( retVal->flags != HLMS_CACHE_FLAGS_NONE &&
+                 retVal->flags != HLMS_CACHE_FLAGS_ASYNC_FAILED )  // (Jahshaka) a failed one is final
             ++mNumPendingSkips;
         return retVal;
     }
@@ -1574,7 +1575,8 @@ namespace Ogre
             bAsync ? hlms->getMaterialAsync( &c_dummyCache, passCache, queuedRenderable, casterPass,
                                              false, placeholder )
                    : hlms->getMaterial( &c_dummyCache, passCache, queuedRenderable, casterPass, nullptr );
-        if( bAsync && hlmsCache->flags != HLMS_CACHE_FLAGS_NONE )
+        if( bAsync && hlmsCache->flags != HLMS_CACHE_FLAGS_NONE &&
+            hlmsCache->flags != HLMS_CACHE_FLAGS_ASYNC_FAILED )  // (Jahshaka) a failed one is final
             ++mNumPendingSkips;
         rs->_setPipelineStateObject( &hlmsCache->pso );
 

@@ -4460,6 +4460,18 @@ namespace Ogre
                                   const QueuedRenderable &queuedRenderable, HlmsCache *stub,
                                   const bool urgent )
     {
+        // (Jahshaka) THE TEST DOOR _jahFailRequests (HlmsAsyncCompiler.h): an object's own permutation fails
+        // here, as a request that cannot be made (below)
+        if( !urgent && mHlmsManager->getAsyncCompiler()->_jahFailRequestsOn() )
+        {
+            LogManager::getSingleton().logMessage(
+                "[async] the permutation " + StringConverter::toString( finalHash ) +
+                    " cannot be requested: forced (the test door _jahFailRequests)",
+                LML_CRITICAL );
+            mHlmsManager->getAsyncCompiler()->_jahCountRequestFailed();
+            stub->flags = HLMS_CACHE_FLAGS_ASYNC_FAILED;
+            return;
+        }
         stub->flags = HLMS_CACHE_FLAGS_ASYNC_PENDING;
         AsyncPsoJob *job = 0;
         try
@@ -4475,6 +4487,7 @@ namespace Ogre
         }
         if( !job )
         {
+            mHlmsManager->getAsyncCompiler()->_jahCountRequestFailed();  // (Jahshaka) loud: getNumFailed
             stub->flags = HLMS_CACHE_FLAGS_ASYNC_FAILED;
             return;
         }
@@ -4688,7 +4701,10 @@ namespace Ogre
         if( entry->flags == HLMS_CACHE_FLAGS_NONE || placeholder->flags != HLMS_CACHE_FLAGS_NONE )
             return entry;  // ready: draw it; else not even the placeholder: no draw (a stub)
 
-        outPlaceholder = true;
+        // (Jahshaka) A FAILED PERMUTATION IS FINAL (COLD-BOOT-1 item 3): it is never requested again, so its
+        // placeholder is its answer, not a wait - not counted as a placeholder draw (a wait the host's "the frame
+        // is complete" reads). Its failure stays loud: the critical log line and getNumFailed.
+        outPlaceholder = entry->flags != HLMS_CACHE_FLAGS_ASYNC_FAILED;
         return placeholder;
     }
     //-----------------------------------------------------------------------------------

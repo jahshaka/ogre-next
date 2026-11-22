@@ -125,6 +125,7 @@ namespace Ogre
         std::atomic<uint64> mNumFailed;
         int                 mThreadNice;
         bool                mPlaceholdersOnly;  ///< main thread only
+        bool                mJahFailRequests = false;  ///< (Jahshaka) the test door _jahFailRequests
 
         void threadMain( uint32 threadIdx );
         void stopThreads();
@@ -183,6 +184,18 @@ namespace Ogre
         */
         void setPlaceholdersOnly( bool only ) { mPlaceholdersOnly = only; }
         bool getPlaceholdersOnly() const { return mPlaceholdersOnly; }
+
+        /** (Jahshaka) A TEST DOOR, main thread, default off (COLD-BOOT-1 item 3: the engine's kArms row
+            shaders.asyncFail drives it, gi.card_build_late's failure case): while on, every NON-URGENT request
+            - an object's own permutation; a placeholder's request is urgent and is never failed - FAILS at its
+            request (Hlms::requestAsyncEntry), the outcome of a request that cannot be made. It forces the one
+            state a test cannot otherwise reach: a permutation that fails, which is FINAL (it draws its
+            placeholder as its answer, never counted as pending: Hlms::getMaterialAsync, RenderQueue).
+        */
+        void _jahFailRequests( bool on ) { mJahFailRequests = on; }
+        bool _jahFailRequestsOn() const { return mJahFailRequests; }
+        /// (Jahshaka) A request that failed before it became a job counts as a failure too (getNumFailed).
+        void _jahCountRequestFailed() { mNumFailed.fetch_add( 1u, std::memory_order_relaxed ); }
 
         /// Jobs submitted and not yet published or discarded.
         uint32 getNumOutstanding() const { return mNumOutstanding.load( std::memory_order_relaxed ); }
