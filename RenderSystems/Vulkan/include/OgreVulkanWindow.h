@@ -148,7 +148,17 @@ namespace Ogre
 
         void parseSharedParams( const NameValuePairList *miscParams );
 
-        PixelFormatGpu chooseSurfaceFormat( bool hwGamma );
+        /// THE ONE CHOICE OF A SURFACE's FORMAT (Jahshaka, SHADER-SYSTEM-1 stage 7a): what createSwapchain
+        /// gives the window's texture, and what a host asks of a window before its swapchain exists
+        /// (VulkanXcbWindow::querySurfaceShape). One implementation, so the two cannot disagree.
+        static PixelFormatGpu chooseSurfaceFormat( VulkanDevice *device, VkSurfaceKHR surface,
+                                                   bool hwGamma );
+        /// THE ONE VALIDATION OF A WINDOW's SAMPLE COUNT (the same reason): the render system's
+        /// validateSampleDescription with the window's own flags (NotTexture | RenderWindowSpecific:
+        /// the depth and stencil sample masks apply to a window's colour too).
+        static SampleDescription chooseSampleDescription( VulkanDevice *device,
+                                                          const SampleDescription &requested,
+                                                          PixelFormatGpu format );
         virtual void createSurface() = 0;
         virtual void destroySurface();
         virtual void createSwapchain();

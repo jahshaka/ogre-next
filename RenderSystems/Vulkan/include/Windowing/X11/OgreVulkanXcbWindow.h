@@ -76,6 +76,16 @@ namespace Ogre
 
         static const char *getRequiredExtensionName();
 
+        /// A WINDOW's TARGET SHAPE BEFORE IT HAS A SWAPCHAIN (Jahshaka, SHADER-SYSTEM-1 stage 7a): a
+        /// TEMPORARY VkSurfaceKHR on the host's window through the host's OWN connection (`xlibDisplay` is
+        /// its Display*, read with XGetXCBConnection: no second connection), the swapchain's own two choices
+        /// applied to it (chooseSurfaceFormat, chooseSampleDescription), the surface destroyed before the
+        /// call returns - a throw included. A host draws a target of this shape to build what the window's
+        /// final passes will build (the format and the samples are in their pipelines' keys).
+        static void querySurfaceShape( VulkanDevice *device, void *xlibDisplay, unsigned long xWindow,
+                                       bool hwGamma, const SampleDescription &requested,
+                                       PixelFormatGpu &outFormat, SampleDescription &outSamples );
+
         void destroy() override;
         void _initialize( TextureGpuManager *textureGpuManager,
                           const NameValuePairList *miscParams ) override;

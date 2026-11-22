@@ -153,9 +153,8 @@ namespace Ogre
                 mStencilBuffer = mDepthBuffer;
         }
 
-        mSampleDescription = mDevice->mRenderSystem->validateSampleDescription(
-            mRequestedSampleDescription, mTexture->getPixelFormat(),
-            TextureFlags::NotTexture | TextureFlags::RenderWindowSpecific );
+        mSampleDescription = VulkanWindowSwapChainBased::chooseSampleDescription(
+            mDevice, mRequestedSampleDescription, mTexture->getPixelFormat() );
         mTexture->_setSampleDescription( mRequestedSampleDescription, mSampleDescription );
         if( mDepthBuffer )
             mDepthBuffer->_setSampleDescription( mRequestedSampleDescription, mSampleDescription );
@@ -250,12 +249,13 @@ namespace Ogre
             mEnablePreTransform = StringConverter::parseBool( opt->second );
     }
     //-------------------------------------------------------------------------
-    PixelFormatGpu VulkanWindowSwapChainBased::chooseSurfaceFormat( bool hwGamma )
+    PixelFormatGpu VulkanWindowSwapChainBased::chooseSurfaceFormat( VulkanDevice *device,
+                                                                    VkSurfaceKHR surface, bool hwGamma )
     {
         uint32 numFormats = 0u;
-        VkResult result = vkGetPhysicalDeviceSurfaceFormatsKHR( mDevice->mPhysicalDevice, mSurfaceKHR,
-                                                                &numFormats, 0 );
-        checkVkResult( mDevice, result, "vkGetPhysicalDeviceSurfaceFormatsKHR" );
+        VkResult result =
+            vkGetPhysicalDeviceSurfaceFormatsKHR( device->mPhysicalDevice, surface, &numFormats, 0 );
+        checkVkResult( device, result, "vkGetPhysicalDeviceSurfaceFormatsKHR" );
         if( numFormats == 0 )
         {
             OGRE_EXCEPT( Exception::ERR_RENDERINGAPI_ERROR,
@@ -265,9 +265,9 @@ namespace Ogre
 
         FastArray<VkSurfaceFormatKHR> formats;
         formats.resize( numFormats );
-        result = vkGetPhysicalDeviceSurfaceFormatsKHR( mDevice->mPhysicalDevice, mSurfaceKHR,
-                                                       &numFormats, formats.begin() );
-        checkVkResult( mDevice, result, "vkGetPhysicalDeviceSurfaceFormatsKHR" );
+        result = vkGetPhysicalDeviceSurfaceFormatsKHR( device->mPhysicalDevice, surface, &numFormats,
+                                                       formats.begin() );
+        checkVkResult( device, result, "vkGetPhysicalDeviceSurfaceFormatsKHR" );
 
         PixelFormatGpu pixelFormat = PFG_UNKNOWN;
         for( size_t i = 0; i < numFormats && pixelFormat == PFG_UNKNOWN; ++i )
@@ -304,6 +304,13 @@ namespace Ogre
         return pixelFormat;
     }
     //-------------------------------------------------------------------------
+    SampleDescription VulkanWindowSwapChainBased::chooseSampleDescription(
+        VulkanDevice *device, const SampleDescription &requested, PixelFormatGpu format )
+    {
+        return device->mRenderSystem->validateSampleDescription(
+            requested, format, TextureFlags::NotTexture | TextureFlags::RenderWindowSpecific );
+    }
+    //-------------------------------------------------------------------------
     void VulkanWindowSwapChainBased::createSwapchain()
     {
         if( mDevice->isDeviceLost() )  // notifyDeviceRestored() will call us again
@@ -313,7 +320,7 @@ namespace Ogre
         mSuboptimal = false;
 
         // Update pixelFormat, sample description, depth buffer defaults
-        mTexture->setPixelFormat( chooseSurfaceFormat( mHwGamma ) );
+        mTexture->setPixelFormat( chooseSurfaceFormat( mDevice, mSurfaceKHR, mHwGamma ) );
         if( mDepthBuffer )
         {
             mDepthBuffer->setPixelFormat( DepthBuffer::DefaultDepthBufferFormat );
@@ -321,9 +328,8 @@ namespace Ogre
                 mStencilBuffer = mDepthBuffer;
         }
 
-        mSampleDescription = mDevice->mRenderSystem->validateSampleDescription(
-            mRequestedSampleDescription, mTexture->getPixelFormat(),
-            TextureFlags::NotTexture | TextureFlags::RenderWindowSpecific );
+        mSampleDescription = VulkanWindowSwapChainBased::chooseSampleDescription(
+            mDevice, mRequestedSampleDescription, mTexture->getPixelFormat() );
         mTexture->_setSampleDescription( mRequestedSampleDescription, mSampleDescription );
         if( mDepthBuffer )
             mDepthBuffer->_setSampleDescription( mRequestedSampleDescription, mSampleDescription );

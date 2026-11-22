@@ -208,6 +208,37 @@ namespace Ogre
         createSwapchain();
     }
     //-------------------------------------------------------------------------
+    void VulkanXcbWindow::querySurfaceShape( VulkanDevice *device, void *xlibDisplay,
+                                             unsigned long xWindow, bool hwGamma,
+                                             const SampleDescription &requested,
+                                             PixelFormatGpu &outFormat, SampleDescription &outSamples )
+    {
+        PFN_vkCreateXcbSurfaceKHR create_xcb_surface = (PFN_vkCreateXcbSurfaceKHR)vkGetInstanceProcAddr(
+            device->mInstance->mVkInstance, "vkCreateXcbSurfaceKHR" );
+
+        VkXcbSurfaceCreateInfoKHR xcbSurfCreateInfo;
+        memset( &xcbSurfCreateInfo, 0, sizeof( xcbSurfCreateInfo ) );
+        xcbSurfCreateInfo.sType = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR;
+        xcbSurfCreateInfo.connection = XGetXCBConnection( static_cast<Display *>( xlibDisplay ) );
+        xcbSurfCreateInfo.window = (xcb_window_t)xWindow;
+        VkSurfaceKHR surface = 0;
+        VkResult result =
+            create_xcb_surface( device->mInstance->mVkInstance, &xcbSurfCreateInfo, 0, &surface );
+        checkVkResult( device, result, "vkCreateXcbSurfaceKHR" );
+
+        try
+        {
+            outFormat = chooseSurfaceFormat( device, surface, hwGamma );
+            outSamples = chooseSampleDescription( device, requested, outFormat );
+        }
+        catch( ... )
+        {
+            vkDestroySurfaceKHR( device->mInstance->mVkInstance, surface, 0 );
+            throw;
+        }
+        vkDestroySurfaceKHR( device->mInstance->mVkInstance, surface, 0 );
+    }
+    //-------------------------------------------------------------------------
     void VulkanXcbWindow::createSurface()
     {
         if( mDevice->isDeviceLost() )  // notifyDeviceRestored() will call us again
