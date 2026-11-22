@@ -217,8 +217,6 @@ namespace Ogre
                                      bool join );
         /// Files a record (main thread); the generation moves only when the map changes.
         void jahFileRecord( const JahCodeRecordPtr &record );
-        /// dispatch()'s question for a permutation not built under this job: is its code compiled (a record hits)?
-        bool jahCodeKnown( HlmsComputeJob *job );
 
     public:
         /// mCompiledShaderCache's key of a generated source: its hash, and on an explicit API that hash paired with

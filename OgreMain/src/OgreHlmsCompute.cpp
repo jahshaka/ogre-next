@@ -303,21 +303,6 @@ namespace Ogre
         ++mJahRecordGeneration;
     }
     //-----------------------------------------------------------------------------------
-    bool HlmsCompute::jahCodeKnown( HlmsComputeJob *job )
-    {
-        if( !msJahComputeKeyHook )
-            return false;
-        // compileShader's first steps, on the main thread's slot (compileShader sets it afresh).
-        mT[kNoTid].setProperties = job->mSetProperties;
-        jahSetRsProperties( kNoTid );
-        JahParseInputs in;
-        jahGatherInputs( job, in );
-        Hash key;
-        jahInputKey( in, job->mPieces, mT[kNoTid].setProperties, key );
-        GpuProgramPtr program;
-        return jahHit( key, in.rootLayout, program, false ) != 0;
-    }
-    //-----------------------------------------------------------------------------------
     void HlmsCompute::getJahUsedRecordKeys( vector<std::pair<uint64, uint64> >::type &out ) const
     {
         out.clear();
@@ -1340,12 +1325,12 @@ namespace Ogre
                 if( bDefer && mHlmsManager && mHlmsManager->getAsyncCompiler()->isRunning() )
                 {
                     psoCache.setProperties.swap( job->mSetProperties );
-                    // A permutation already built under another job (a clone) needs no shader
-                    // compile: it is built in the frame below, from the code cache.
-                    // (Jahshaka) KNOWN = a code record hits: the content the parse would read was
-                    // built, and its program is compiled.
-                    const bool bKnown = jahCodeKnown( job );
-                    const AsyncReadiness readiness = bKnown ? AsyncReady : requestAsync( job );
+                    // (Jahshaka, SHADER-SYSTEM-1 7a) A KNOWN CODE TOO: a permutation whose code a record
+                    // already holds (a clone, a warm launch) still needs its PIPELINE, a driver call of its
+                    // own - requested on the background compiler like any other (compileAsync builds the PSO
+                    // there), its dispatch deferred until it publishes. It used to be built here, in the
+                    // frame (a warm launch's arm: 46-50 pipelines in frames, gi.async_arm_warm).
+                    const AsyncReadiness readiness = requestAsync( job );
                     psoCache.setProperties.swap( job->mSetProperties );
                     if( readiness == AsyncPending )
                     {
