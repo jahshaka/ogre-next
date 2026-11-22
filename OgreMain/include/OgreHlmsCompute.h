@@ -30,6 +30,7 @@ THE SOFTWARE.
 
 #include "OgreHlms.h"
 #include <memory>
+#include <set>
 
 #include "OgreHeaderPrefix.h"
 
@@ -165,6 +166,9 @@ namespace Ogre
         /// Main thread only (every build site files there; the host snapshots there).
         JahRecordMap mJahRecords;
         uint64       mJahRecordGeneration = 0u;  ///< bumps on every record filed or changed
+        /// (Jahshaka, SHADER-SYSTEM-1 F10) the input keys of the records USED this launch: a hit, or a build's filing
+        /// (main thread: every caller of jahHit and jahFileRecord is; a prewarm files without using).
+        std::set<Hash> mJahUsedRecords;
         /// The bytes of every file a parse or a key read, by file name (main thread): read once from the resource
         /// system. Cleared by clearShaderCache (reloadFrom calls it).
         std::map<String, String> mJahFileMemo;
@@ -215,6 +219,8 @@ namespace Ogre
         uint64 getJahRecordGeneration() const { return mJahRecordGeneration; }
         /// Every record, in the map's (stable) order. Main thread.
         void getJahRecords( vector<JahCodeRecordPtr>::type &out ) const;
+        /// (Jahshaka, F10) The input keys of the records used this launch (hit or built), for the host's prune.
+        void getJahUsedRecordKeys( vector<std::pair<uint64, uint64> >::type &out ) const;
         /** The records a launch read: FILED (the hit sees them at once), and each one's code compiled on the
             HlmsAsyncCompiler - code only: no job, no PSO (its program lands in mCompiledShaderCache at the publish).
             A record already filed under its key is skipped; with no service running the records are filed and their

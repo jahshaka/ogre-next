@@ -265,6 +265,7 @@ namespace Ogre
         if( program == mCompiledShaderCache.end() )
             return 0;  // its code is not compiled (yet): the parse builds it
         outProgram = program->second;
+        mJahUsedRecords.insert( inputKey );  // (Jahshaka) F10: a hit is a use
         return &r;
     }
     //-----------------------------------------------------------------------------------
@@ -273,6 +274,7 @@ namespace Ogre
         Hash key;
         key.hashVal[0] = record->inputKey[0];
         key.hashVal[1] = record->inputKey[1];
+        mJahUsedRecords.insert( key );  // (Jahshaka) F10: built this launch is used this launch
         JahCodeRecordPtr &slot = mJahRecords[key];
         if( slot && slot->programKey[0] == record->programKey[0] &&
             slot->programKey[1] == record->programKey[1] && slot->rootLayout == record->rootLayout )
@@ -296,6 +298,14 @@ namespace Ogre
         jahInputKey( in, job->mPieces, mT[kNoTid].setProperties, key );
         GpuProgramPtr program;
         return jahHit( key, in.rootLayout, program ) != 0;
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsCompute::getJahUsedRecordKeys( vector<std::pair<uint64, uint64> >::type &out ) const
+    {
+        out.clear();
+        out.reserve( mJahUsedRecords.size() );
+        for( const Hash &k : mJahUsedRecords )
+            out.push_back( { k.hashVal[0], k.hashVal[1] } );
     }
     //-----------------------------------------------------------------------------------
     void HlmsCompute::getJahRecords( vector<JahCodeRecordPtr>::type &out ) const
