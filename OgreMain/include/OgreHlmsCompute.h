@@ -189,6 +189,11 @@ namespace Ogre
         /// and the time they waited: a stall of the render thread at a clone's teardown (the start preflight's F4).
         uint64 mJahDestroyWaits = 0u;
         uint64 mJahDestroyWaitUs = 0u;
+        /// (Jahshaka) dispatch() calls that JOINED an in-flight background build of their permutation
+        /// (waitForAsyncPermutation waited) instead of building it, and the time they waited: a frame that owed its
+        /// picture took the service's result on the render thread (SHADER-SYSTEM-1 7a R2; stage 7 brings them to 0).
+        uint64 mJahJoins = 0u;
+        uint64 mJahJoinUs = 0u;
 
         class AsyncCodeJob;
         friend class AsyncCodeJob;
@@ -238,6 +243,8 @@ namespace Ogre
         uint64 getJahPsoInFrame() const { return mJahPsoInFrame; }
         uint64 getJahDestroyWaits() const { return mJahDestroyWaits; }
         uint64 getJahDestroyWaitUs() const { return mJahDestroyWaitUs; }
+        uint64 getJahJoins() const { return mJahJoins; }
+        uint64 getJahJoinUs() const { return mJahJoinUs; }
 
     private:
 

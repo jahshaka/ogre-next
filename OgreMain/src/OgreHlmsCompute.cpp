@@ -1345,10 +1345,16 @@ namespace Ogre
                 // ASYNC-SHADERS-1: the asynchronous compiler may be building exactly this
                 // permutation; take its result instead of building it a second time.
                 psoCache.setProperties.swap( job->mSetProperties );
+                const std::chrono::steady_clock::time_point joinT0 = std::chrono::steady_clock::now();
                 const bool bWaited = waitForAsyncPermutation( job );
                 psoCache.setProperties.swap( job->mSetProperties );
                 if( bWaited )
                 {
+                    // (Jahshaka) A JOIN, counted and timed (getJahJoins).
+                    ++mJahJoins;
+                    mJahJoinUs += static_cast<uint64>( std::chrono::duration_cast<std::chrono::microseconds>(
+                                                           std::chrono::steady_clock::now() - joinT0 )
+                                                           .count() );
                     itor = std::find( mComputeShaderCache.begin(), mComputeShaderCache.end(),
                                       psoCache );
                 }
