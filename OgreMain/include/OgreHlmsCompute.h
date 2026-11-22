@@ -276,6 +276,8 @@ namespace Ogre
         typedef vector<AsyncComputeEntry>::type AsyncComputeEntryVec;
         AsyncComputeEntryVec mAsyncComputeEntries;
         static bool msInAsyncWorkspace;
+        /// (Jahshaka) _jahSetFrameOwesPicture: the frame being recorded owes its whole picture.
+        static bool msJahFrameOwesPicture;
         bool   mDeferredDispatch;      ///< setDeferredDispatch
         uint64 mNumDeferredDispatches;
         /// (Jahshaka) dispatches refused because a PSO's parameters did not fit its program
@@ -365,7 +367,8 @@ namespace Ogre
 
         enum AsyncReadiness
         {
-            AsyncReady,    ///< the permutation is built: dispatch() will not compile
+            AsyncReady,    ///< the permutation is built: dispatch() will not compile (or, on a frame that owes
+                           ///< its picture, it is in flight and dispatch() joins it: _jahSetFrameOwesPicture)
             AsyncPending,  ///< the HlmsAsyncCompiler is building it
             AsyncFailed    ///< it could not be built (the log says why); dispatch() would throw
         };
@@ -396,6 +399,16 @@ namespace Ogre
         /// a GPU cull) defers like the workspace's passes do.
         static void _setInAsyncWorkspace( bool on ) { msInAsyncWorkspace = on; }
         static bool _getInAsyncWorkspace() { return msInAsyncWorkspace; }
+        /** (Jahshaka, SHADER-SYSTEM-1 7a R2 (c)) THE ONE PLACE A COMPUTE PERMUTATION's LATENESS MEETS THE FRAME's PACE.
+            The host says, at each frame's head, whether the frame OWES ITS WHOLE PICTURE (a screenshot, a thumbnail, a
+            suite's frame, the editor outside a load). While it does, nothing is put off: requestAsync still hands a
+            permutation that is not built to the background compiler (once), but answers AsyncReady, so every caller
+            dispatches - and dispatch(), deferred or not, JOINS the in-flight request (waitForAsyncPermutation, counted:
+            getJahJoins) instead of building it a second time. A frame that may land a compile later (false) defers as
+            before. Default true: a host that never says so is upstream's blocking dispatch. Main thread. */
+        static void _jahSetFrameOwesPicture( bool on ) { msJahFrameOwesPicture = on; }
+        /// May a dispatch be put off this frame? The question every caller asks (never the pace itself).
+        static bool jahMayDefer() { return !msJahFrameOwesPicture; }
         bool getDeferredDispatch() const { return mDeferredDispatch; }
         uint64 getNumDeferredDispatches() const { return mNumDeferredDispatches; }
         /// (Jahshaka) dispatches refused, their PSO's parameters not fitting its program (dispatch()):

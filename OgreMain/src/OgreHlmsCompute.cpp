@@ -79,6 +79,7 @@ namespace Ogre
     const String BestD3DComputeShaderTargets[3] = { "cs_5_0", "cs_4_1", "cs_4_0" };
 
     bool HlmsCompute::msInAsyncWorkspace = false;
+    bool HlmsCompute::msJahFrameOwesPicture = true;
     //-----------------------------------------------------------------------------------
     HlmsCompute::HlmsCompute( AutoParamDataSource *autoParamDataSource ) :
         Hlms( HLMS_COMPUTE, "compute", 0, 0 ),
@@ -807,9 +808,12 @@ namespace Ogre
         if( !compiler || !compiler->isRunning() )
             return AsyncReady;  // no service: dispatch() compiles in the frame, as upstream
 
+        // (Jahshaka) in flight: put off on a frame that may land it later, JOINED by dispatch() on one that owes its
+        // picture (_jahSetFrameOwesPicture).
+        const AsyncReadiness inFlight = msJahFrameOwesPicture ? AsyncReady : AsyncPending;
         const size_t idx = findAsyncComputeEntry( job, job->mSetProperties );
         if( idx < mAsyncComputeEntries.size() )
-            return mAsyncComputeEntries[idx].inFlight ? AsyncPending : AsyncFailed;
+            return mAsyncComputeEntries[idx].inFlight ? inFlight : AsyncFailed;
 
         // ---- the snapshot (main thread) ----
         AsyncComputeJob *request = OGRE_NEW AsyncComputeJob( this, job );
@@ -868,7 +872,7 @@ namespace Ogre
         AsyncComputeEntry entry = { job, job->mSetProperties, request };
         mAsyncComputeEntries.push_back( entry );
         compiler->submit( request );
-        return AsyncPending;
+        return inFlight;
     }
     //-----------------------------------------------------------------------------------
     void HlmsCompute::processPieceTexts( const StringVector &pieceTexts, const size_t tid )
