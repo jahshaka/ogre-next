@@ -76,6 +76,10 @@ namespace Ogre
 
         void setupRootLayout( RootLayout &rootLayout, size_t tid ) override;
 
+        /// calculateHashFor's terms (LowLevelProp): the pass's programs, and the renderable's vertex input.
+        void setJahProgramKey( const Pass *pass );
+        void setJahVertexKey( Renderable *renderable, bool casterPass );
+
     public:
         HlmsLowLevel();
         ~HlmsLowLevel() override;
@@ -107,9 +111,15 @@ namespace Ogre
                              bool casterPass );
     };
 
+    /// (Jahshaka, SHADER-SYSTEM-1 stage 7a) The low-level renderable key: each program stage's identity and load
+    /// generation (vertex, geometry, hull, domain, pixel) and the vertex input (layout and topology) - with the blocks,
+    /// the pipeline's content (calculateHashFor).
     struct _OgreExport LowLevelProp
     {
-        static const IdString PassId;
+        static const size_t   NumStages = 5u;
+        static const IdString Program[NumStages];
+        static const IdString ProgramLoad[NumStages];
+        static const IdString VertexInput;
     };
 
     /** @} */

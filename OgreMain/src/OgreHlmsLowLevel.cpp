@@ -51,7 +51,14 @@ THE SOFTWARE.
 
 namespace Ogre
 {
-    const IdString LowLevelProp::PassId = IdString( "pass_id" );
+    const IdString LowLevelProp::Program[LowLevelProp::NumStages] = {
+        IdString( "ll_vs" ), IdString( "ll_gs" ), IdString( "ll_hs" ), IdString( "ll_ds" ), IdString( "ll_ps" )
+    };
+    const IdString LowLevelProp::ProgramLoad[LowLevelProp::NumStages] = {
+        IdString( "ll_vs_load" ), IdString( "ll_gs_load" ), IdString( "ll_hs_load" ), IdString( "ll_ds_load" ),
+        IdString( "ll_ps_load" )
+    };
+    const IdString LowLevelProp::VertexInput = IdString( "ll_vertex_input" );
 
     HlmsLowLevel::HlmsLowLevel() :
         Hlms( HLMS_LOW_LEVEL, "", 0, 0 ),
@@ -181,6 +188,76 @@ namespace Ogre
         return retVal;
     }
     //-----------------------------------------------------------------------------------
+    void HlmsLowLevel::setJahProgramKey( const Pass *pass )
+    {
+        const GpuProgramPtr programs[LowLevelProp::NumStages] = {
+            pass->hasVertexProgram() ? pass->getVertexProgram() : GpuProgramPtr(),
+            pass->hasGeometryProgram() ? pass->getGeometryProgram() : GpuProgramPtr(),
+            pass->hasTessellationHullProgram() ? pass->getTessellationHullProgram() : GpuProgramPtr(),
+            pass->hasTessellationDomainProgram() ? pass->getTessellationDomainProgram() : GpuProgramPtr(),
+            pass->hasFragmentProgram() ? pass->getFragmentProgram() : GpuProgramPtr()
+        };
+        for( size_t i = 0u; i < LowLevelProp::NumStages; ++i )
+        {
+            if( !programs[i] )
+                continue;
+            // The handle is unique per program for the process (ResourceManager's counter): truncated to the
+            // property's 32 bits it repeats only after 2^32 resources.
+            setProperty( kNoTid, LowLevelProp::Program[i], static_cast<int32>( programs[i]->getHandle() ) );
+            setProperty( kNoTid, LowLevelProp::ProgramLoad[i],
+                         static_cast<int32>( programs[i]->getStateCount() ) );
+        }
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsLowLevel::setJahVertexKey( Renderable *renderable, bool casterPass )
+    {
+        // The vertex input the pipeline is built with (createShaderCacheEntry reads the same): with the pass id gone,
+        // two renderables that share a program pair share a pipeline only when their vertex layouts and topology
+        // agree.
+        uint32 h = 0x811C9DC5u;
+        const auto mix = [&h]( uint32 v )
+        {
+            h ^= v;
+            h *= 0x01000193u;
+        };
+        const VertexArrayObjectArray &vaos = renderable->getVaos( static_cast<VertexPass>( casterPass ) );
+        if( !vaos.empty() )
+        {
+            mix( static_cast<uint32>( vaos.front()->getOperationType() ) );
+            for( const VertexElement2Vec &buffer : vaos.front()->getVertexDeclaration() )
+            {
+                mix( 0xFFFFFFFFu );   // a buffer's boundary
+                for( const VertexElement2 &e : buffer )
+                {
+                    mix( static_cast<uint32>( e.mType ) );
+                    mix( static_cast<uint32>( e.mSemantic ) );
+                    mix( e.mInstancingStepRate );
+                }
+            }
+        }
+        else
+        {
+            v1::RenderOperation renderOp;
+            renderable->getRenderOperation( renderOp, casterPass );
+            mix( static_cast<uint32>( renderOp.operationType ) );
+            if( renderOp.vertexData && renderOp.vertexData->vertexDeclaration )
+            {
+                for( const VertexElement2Vec &buffer :
+                     renderOp.vertexData->vertexDeclaration->convertToV2() )
+                {
+                    mix( 0xFFFFFFFFu );
+                    for( const VertexElement2 &e : buffer )
+                    {
+                        mix( static_cast<uint32>( e.mType ) );
+                        mix( static_cast<uint32>( e.mSemantic ) );
+                        mix( e.mInstancingStepRate );
+                    }
+                }
+            }
+        }
+        setProperty( kNoTid, LowLevelProp::VertexInput, static_cast<int32>( h ) );
+    }
+    //-----------------------------------------------------------------------------------
     void HlmsLowLevel::calculateHashFor( Renderable *renderable, uint32 &outHash, uint32 &outCasterHash )
     {
         mT[kNoTid].setProperties.clear();
@@ -216,8 +293,15 @@ namespace Ogre
         Technique *technique = mat->getBestTechnique( renderable->getCurrentMaterialLod(), renderable );
         Pass *pass = technique->getPass( 0 );
 
-        setProperty( kNoTid, LowLevelProp::PassId, static_cast<Ogre::int32>( pass->getId() ) );
+        // (Jahshaka, SHADER-SYSTEM-1 stage 7a) THE KEY IS THE PIPELINE's CONTENT: the programs (each stage's identity
+        // AND its load generation - Resource::getStateCount moves on every load, so a reloaded program is a new key and
+        // never keeps the pipeline of its old code), the blocks (above) and the vertex input (below). It was the PASS ID:
+        // a material clone (a per-scene sky, the same programs and blocks) built a pipeline of its own, and a reloaded
+        // program kept its old one (an SMAA preset change never reached the picture). Everything else the pipeline holds
+        // is the pass's (its hash is the final hash's other half), and per-material data binds at draw (executeCommand).
+        setJahProgramKey( pass );
 
+        setJahVertexKey( renderable, false );
         outHash = this->addRenderableCache( mT[kNoTid].setProperties, (const PiecesMap *)0 );
 
         setProperty( kNoTid, HlmsBaseProp::ShadowCaster, true );
@@ -225,6 +309,7 @@ namespace Ogre
                      renderable->getDatablock()->getMacroblock( true )->mLifetimeId );
         setProperty( kNoTid, HlmsPsoProp::Blendblock,
                      renderable->getDatablock()->getBlendblock( true )->mLifetimeId );
+        setJahVertexKey( renderable, true );
 
         outCasterHash = this->addRenderableCache( mT[kNoTid].setProperties, (const PiecesMap *)0 );
     }
