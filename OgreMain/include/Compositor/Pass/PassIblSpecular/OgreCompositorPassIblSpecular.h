@@ -87,6 +87,11 @@ namespace Ogre
 
         void resetNumPassesLeft() override;
 
+        /// (Jahshaka) The pass's compute jobs, one clone of IblSpecular/Integrate per output mip (empty on the
+        /// fallback path): a host that compiles in the background requests their pipelines as a set when the pass is
+        /// made, before its first dispatch (SHADER-SYSTEM-1 7a R2).
+        const vector<HlmsComputeJob *>::type &getComputeJobs() const { return mJobs; }
+
     private:
         CompositorPassIblSpecularDef const *mDefinition;
     };
