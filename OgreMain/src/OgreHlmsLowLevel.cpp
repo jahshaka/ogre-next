@@ -327,6 +327,22 @@ namespace Ogre
 
         HlmsCache retVal = Hlms::preparePassHash( shadowNode, casterPass, dualParaboloid, sceneManager );
 
+        // (Jahshaka) THE LOW-LEVEL PASS KEY IS WHAT ITS PIPELINE READS: the pass's PSO (targets, depth, samples,
+        // stencil, views) and whether it is a caster pass (createShaderCacheEntry's one read of the pass's
+        // properties: the caster macroblock and blendblock). The base keys the pass on every property a LIT Hlms
+        // derives from the scene - its lights per type, the shadow node's splits and maps - which no material
+        // script's program reads, so one quad drawn in a scene with another light set (the editor's first,
+        // not yet lit frame against the startup gate's) built a second pipeline for the same PSO.
+        const int32 caster = getProperty( retVal.setProperties, HlmsBaseProp::ShadowCaster );
+        PassCache keyed;
+        keyed.passPso = retVal.pso.pass;
+        if( caster )
+            keyed.properties.push_back( HlmsProperty( HlmsBaseProp::ShadowCaster, caster ) );
+        size_t passIdx = 0u;
+        findOrAddPassCache( keyed, true, passIdx );
+        retVal.hash = static_cast<uint32>( passIdx ) << HlmsBits::PassShift;
+        retVal.setProperties = keyed.properties;
+
         // Never produce a HlmsCache.hash of 0. Only affects LowLevel because HLMS_LOW_LEVEL = 0
         retVal.hash += 1;
 
