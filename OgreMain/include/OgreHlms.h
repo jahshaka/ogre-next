@@ -334,6 +334,8 @@ namespace Ogre
         /// again after its reload. The datablock custom pieces are not hashed by it (their own checksums are).
         mutable bool   mJahTemplateChecksumValid = false;
         mutable uint64 mJahTemplateChecksum[2] = { 0u, 0u };
+        /// (Jahshaka) setJahTemplateSalt: the checksum's seed.
+        uint64 mJahTemplateSalt[2] = { 0u, 0u };
         uint8              mParticleSystemConstSlot;
         uint8              mParticleSystemSlot;
         uint16             mNumLightsLimit;
@@ -795,6 +797,11 @@ namespace Ogre
         /// (Jahshaka) Cached per generation of the code cache (mJahTemplateChecksumValid): the first ask hashes the
         /// template and piece files, every later one copies the value until a reload invalidates it.
         void getTemplateChecksum( uint64 outHash[2] ) const;
+        /// (Jahshaka, SHADER-SYSTEM-1 stage 5) THE PRODUCER SALT: the host's content hash of the PREPROCESSOR's own code
+        /// (this file and the disk cache's), seeding the template checksum - so a changed preprocessor makes
+        /// HlmsDiskCache re-parse the saved recipes ("the templates have changed") instead of compiling the processed
+        /// source an older preprocessor wrote. Zero (the default) is upstream's checksum exactly.
+        void setJahTemplateSalt( const uint64 salt[2] );
         /// (Jahshaka) See mJahCodeCacheGeneration.
         uint32 getShaderCodeCacheGeneration() const { return mJahCodeCacheGeneration; }
 

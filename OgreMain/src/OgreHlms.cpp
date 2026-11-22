@@ -432,6 +432,7 @@ namespace Ogre
         }
         FastArray<uint8> fileContents;
         fileContents.resize( sizeof( uint64 ) * 2u, 0 );
+        memcpy( fileContents.begin(), mJahTemplateSalt, sizeof( uint64 ) * 2u );  // (Jahshaka) the producer salt
 
         for( size_t i = 0; i < NumShaderTypes; ++i )
         {
@@ -461,6 +462,13 @@ namespace Ogre
         mJahTemplateChecksum[0] = outHash[0];
         mJahTemplateChecksum[1] = outHash[1];
         mJahTemplateChecksumValid = true;
+    }
+    //-----------------------------------------------------------------------------------
+    void Hlms::setJahTemplateSalt( const uint64 salt[2] )
+    {
+        mJahTemplateSalt[0] = salt[0];
+        mJahTemplateSalt[1] = salt[1];
+        mJahTemplateChecksumValid = false;
     }
     //-----------------------------------------------------------------------------------
     void Hlms::enumeratePieceFiles()
