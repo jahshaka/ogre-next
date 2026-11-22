@@ -31,6 +31,9 @@ THE SOFTWARE.
 #include "OgreHlms.h"
 #include "OgreHlmsDatablock.h"
 
+#include <functional>
+#include <limits>
+
 #include "OgreHeaderPrefix.h"
 
 namespace Ogre
@@ -138,6 +141,10 @@ namespace Ogre
         {
             Hlms::RenderableCache mergedCache;
             String                sourceFile[NumShaderTypes];
+            /// (Jahshaka, SHADER-SYSTEM-1 F10) the live recipe it was copied from (appendFrom refreshes `jahUsed` from it
+            /// when caught up); npos for an entry the copy kept aside (applyTo's deferred ones: unused)
+            size_t                jahLive = std::numeric_limits<size_t>::max();
+            bool                  jahUsed = false;
 
             SourceCode();
             SourceCode( const Hlms::ShaderCodeCache &shaderCodeCache );
@@ -221,6 +228,16 @@ namespace Ogre
         void applyTo( Hlms *hlms, size_t numThreads );
 
         void saveTo( DataStreamPtr &dataStream );
+        /** (Jahshaka, SHADER-SYSTEM-1 F10) saveTo writing only the recipes `keep` answers true for, given each
+            recipe's content key (jahEntryKey) and whether a draw used it this launch: the host drops a recipe no
+            launch used for long. Ogre's format is unchanged (the count written is the kept count); the copy itself is
+            not modified. Any thread, like saveTo. */
+        void saveTo( DataStreamPtr &dataStream, const std::function<bool( const uint64 key[2], bool used )> &keep );
+        /// (Jahshaka, F10) Every copied recipe's content key and use flag, in order (the host stamps the used ones
+        /// whether or not it writes the layer). Any thread, like saveTo.
+        void jahEntries( const std::function<void( const uint64 key[2], bool used )> &visit ) const;
+        /// (Jahshaka, F10) A recipe's content key: its merged properties and pieces (what operator== compares).
+        static void jahEntryKey( const Hlms::RenderableCache &recipe, uint64 outKey[2] );
         void loadFrom( DataStreamPtr &dataStream );
 
         static void _compileShadersThread( CompilerJobParams &threadHandle, size_t threadIdx );

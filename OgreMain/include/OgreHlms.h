@@ -241,6 +241,10 @@ namespace Ogre
             /// Contains merged properties (pass and renderable's)
             RenderableCache mergedCache;
             GpuProgramPtr   shaders[NumShaderTypes];
+            /// (Jahshaka, SHADER-SYSTEM-1 F10) USED THIS LAUNCH: a draw's request found or built this recipe (set
+            /// under mMutex, the lock the hit already holds; a recipe applyTo restored is unused until one does).
+            /// HlmsDiskCache carries it to the host's prune. Not part of the recipe's identity (operator==).
+            mutable bool jahUsed = false;
 
             ShaderCodeCache( const PiecesMap *_pieces ) : mergedCache( HlmsPropertyVec(), _pieces ) {}
 
@@ -602,6 +606,10 @@ namespace Ogre
 
         const ShaderCodeCacheVec &getShaderCodeCache() const { return mShaderCodeCache; }
 
+        /** (Jahshaka, SHADER-SYSTEM-1 F10) A TEST DOOR, the recipes' use law's stand-in for a draw: finds the recipe
+            of exactly these properties (no pieces) - or adds it, its one vertex shader's source `vertexSource`, as
+            applyTo would - and, when `use` is set, marks it used as a draw's request does. Returns its index. */
+        size_t _jahTestRecipe( const HlmsPropertyVec &properties, const String &vertexSource, bool use );
     protected:
         /** Creates a shader based on input parameters. Caller is responsible for ensuring
             this shader hasn't already been created.

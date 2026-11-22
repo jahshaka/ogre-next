@@ -30,6 +30,8 @@ THE SOFTWARE.
 
 #include "OgreHlmsDiskCache.h"
 
+#include "Hash/MurmurHash3.h"
+
 #include "OgreHlmsManager.h"
 #include "OgreLogManager.h"
 #include "OgreProfiler.h"
@@ -165,6 +167,7 @@ namespace Ogre
                 if( bCacheable )
                 {
                     SourceCode sourceCode( *itor );
+                    sourceCode.jahLive = static_cast<size_t>( itor - hlms->mShaderCodeCache.begin() );
                     mCache.sourceCode.push_back( sourceCode );
                 }
             }
@@ -175,6 +178,14 @@ namespace Ogre
             remaining = total - endIdx;
             if( !remaining )
             {
+                // (Jahshaka, F10) THE USE FLAGS, refreshed when caught up: a recipe copied by an earlier save may have
+                // been drawn since (one bool a copied entry, under the lock this copy holds).
+                for( size_t i = 0u; i < mJahLiveCopied; ++i )
+                {
+                    SourceCode &copy = mCache.sourceCode[i];
+                    if( copy.jahLive < total )
+                        copy.jahUsed = hlms->mShaderCodeCache[copy.jahLive].jahUsed;
+                }
                 // (Jahshaka) THE ENTRIES applyTo KEPT ASIDE (Hlms::mDiskCacheDeferred), written back while their
                 // piece is still unknown to this session: a piece this session registered was recompiled live from
                 // its current content, so its old entries — and its old checksum — are not saved beside the new.
@@ -769,7 +780,49 @@ namespace Ogre
         }
     }
     //-----------------------------------------------------------------------------------
+    void HlmsDiskCache::jahEntryKey( const Hlms::RenderableCache &recipe, uint64 outKey[2] )
+    {
+        // A tagged byte stream of the properties (sorted by key, as the set holds them) and of every stage's pieces
+        // (a map: sorted), hashed once.
+        String bytes;
+        const auto u32 = [&bytes]( uint32 v ) { bytes.append( reinterpret_cast<const char *>( &v ), sizeof( v ) ); };
+        u32( static_cast<uint32>( recipe.setProperties.size() ) );
+        for( const HlmsProperty &p : recipe.setProperties )
+        {
+            u32( p.keyName.getU32Value() );
+            u32( static_cast<uint32>( p.value ) );
+        }
+        for( size_t i = 0; i < NumShaderTypes; ++i )
+        {
+            u32( static_cast<uint32>( recipe.pieces[i].size() ) );
+            for( const PiecesMap::value_type &piece : recipe.pieces[i] )
+            {
+                u32( piece.first.getU32Value() );
+                u32( static_cast<uint32>( piece.second.size() ) );
+                bytes.append( piece.second );
+            }
+        }
+        outKey[0] = outKey[1] = 0u;
+        MurmurHash3_x64_128( bytes.data(), static_cast<int>( bytes.size() ), IdString::Seed, outKey );
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsDiskCache::jahEntries( const std::function<void( const uint64 key[2], bool used )> &visit ) const
+    {
+        for( const SourceCode &entry : mCache.sourceCode )
+        {
+            uint64 key[2];
+            jahEntryKey( entry.mergedCache, key );
+            visit( key, entry.jahUsed );
+        }
+    }
+    //-----------------------------------------------------------------------------------
     void HlmsDiskCache::saveTo( DataStreamPtr &dataStream )
+    {
+        saveTo( dataStream, std::function<bool( const uint64 *, bool )>() );
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsDiskCache::saveTo( DataStreamPtr &dataStream,
+                                const std::function<bool( const uint64 key[2], bool used )> &keep )
     {
         LogManager::getSingleton().logMessage( "Saving HlmsDiskCache to " + dataStream->getName() );
 
@@ -798,13 +851,31 @@ namespace Ogre
 
         {
             // Save shaders
-            write<uint32>( dataStream, static_cast<uint32>( mCache.sourceCode.size() ) );
+            // (Jahshaka, F10) only those `keep` answers for, when given one: decided first, so the count leads.
+            std::vector<bool> kept( mCache.sourceCode.size(), true );
+            uint32 numKept = static_cast<uint32>( mCache.sourceCode.size() );
+            if( keep )
+            {
+                for( size_t i = 0u; i < mCache.sourceCode.size(); ++i )
+                {
+                    uint64 key[2];
+                    jahEntryKey( mCache.sourceCode[i].mergedCache, key );
+                    kept[i] = keep( key, mCache.sourceCode[i].jahUsed );
+                    numKept -= kept[i] ? 0u : 1u;
+                }
+            }
+            write<uint32>( dataStream, numKept );
 
             SourceCodeVec::const_iterator itor = mCache.sourceCode.begin();
             SourceCodeVec::const_iterator endt = mCache.sourceCode.end();
 
             while( itor != endt )
             {
+                if( !kept[static_cast<size_t>( itor - mCache.sourceCode.begin() )] )
+                {
+                    ++itor;
+                    continue;
+                }
                 save( dataStream, itor->mergedCache );
                 for( size_t i = 0; i < NumShaderTypes; ++i )
                     save( dataStream, itor->sourceFile[i] );

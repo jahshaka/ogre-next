@@ -464,6 +464,27 @@ namespace Ogre
         mJahTemplateChecksumValid = true;
     }
     //-----------------------------------------------------------------------------------
+    size_t Hlms::_jahTestRecipe( const HlmsPropertyVec &properties, const String &vertexSource, bool use )
+    {
+        ShaderCodeCache probe( 0 );
+        probe.mergedCache.setProperties = properties;
+        {
+            ScopedLock lock( mMutex );
+            ShaderCodeCacheVec::iterator itor = std::find( mShaderCodeCache.begin(), mShaderCodeCache.end(), probe );
+            if( itor != mShaderCodeCache.end() )
+            {
+                itor->jahUsed |= use;
+                return static_cast<size_t>( itor - mShaderCodeCache.begin() );
+            }
+        }
+        String sources[NumShaderTypes];
+        sources[VertexShader] = vertexSource;
+        _compileShaderFromPreprocessedSource( probe.mergedCache, sources, mShadersGenerated++, kNoTid );
+        ScopedLock lock( mMutex );
+        mShaderCodeCache.back().jahUsed = use;
+        return mShaderCodeCache.size() - 1u;
+    }
+    //-----------------------------------------------------------------------------------
     void Hlms::setJahTemplateSalt( const uint64 salt[2] )
     {
         mJahTemplateSalt[0] = salt[0];
@@ -2967,6 +2988,7 @@ namespace Ogre
         unsetProperty( tid, HlmsPsoProp::Blendblock );
         unsetProperty( tid, HlmsPsoProp::InputLayoutId );
         codeCache.mergedCache.setProperties.swap( mT[tid].setProperties );
+        codeCache.jahUsed = true;  // (Jahshaka) F10: a draw's recipe is used this launch (built: the copy carries it)
         {
             bool bIsInCache;
 
@@ -2979,6 +3001,7 @@ namespace Ogre
 
                 if( bIsInCache )
                 {
+                    itCodeCache->jahUsed = true;  // (Jahshaka) F10: found is used
                     // This requires the mutex as itCodeCache could be invalidated
                     for( size_t i = 0; i < NumShaderTypes; ++i )
                         codeCache.shaders[i] = itCodeCache->shaders[i];
@@ -4399,6 +4422,7 @@ namespace Ogre
             unsetProperty( tid, HlmsPsoProp::Blendblock );
             unsetProperty( tid, HlmsPsoProp::InputLayoutId );
             job->mCodeCache.mergedCache.setProperties = mT[tid].setProperties;
+            job->mCodeCache.jahUsed = true;  // (Jahshaka) F10: as createShaderCacheEntry's
 
             {
                 ScopedLock lock( mMutex );
@@ -4406,6 +4430,7 @@ namespace Ogre
                     std::find( mShaderCodeCache.begin(), mShaderCodeCache.end(), job->mCodeCache );
                 if( itCodeCache != mShaderCodeCache.end() )
                 {
+                    itCodeCache->jahUsed = true;  // (Jahshaka) F10: found is used
                     for( size_t i = 0; i < NumShaderTypes; ++i )
                         job->mCodeCache.shaders[i] = itCodeCache->shaders[i];
                 }
