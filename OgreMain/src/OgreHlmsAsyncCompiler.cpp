@@ -160,6 +160,8 @@ namespace Ogre
                 LML_CRITICAL );
         }
         OGRE_DELETE job;
+        // (Jahshaka) resolved BEFORE it leaves the outstanding count: a reader of both never sees it in neither
+        mJahNumResolved.fetch_add( 1u, std::memory_order_relaxed );
         mNumOutstanding.fetch_sub( 1u, std::memory_order_relaxed );
     }
     //-----------------------------------------------------------------------------------

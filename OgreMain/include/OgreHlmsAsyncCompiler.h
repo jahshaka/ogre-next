@@ -123,6 +123,7 @@ namespace Ogre
         std::atomic<uint32> mNumOutstanding;  ///< queued + running + finished-unpublished
         std::atomic<uint64> mNumCompleted;    ///< jobs that ran to the end (success or failure)
         std::atomic<uint64> mNumFailed;
+        std::atomic<uint64> mJahNumResolved{ 0u };  ///< (Jahshaka) published or discarded (getJahNumResolved)
         int                 mThreadNice;
         bool                mPlaceholdersOnly;  ///< main thread only
         bool                mJahFailRequests = false;  ///< (Jahshaka) the test door _jahFailRequests
@@ -208,6 +209,12 @@ namespace Ogre
         uint32 getNumOutstanding() const { return mNumOutstanding.load( std::memory_order_relaxed ); }
         uint64 getNumCompleted() const { return mNumCompleted.load( std::memory_order_relaxed ); }
         uint64 getNumFailed() const { return mNumFailed.load( std::memory_order_relaxed ); }
+        /// (Jahshaka) Jobs RESOLVED - published or discarded (a cancelled one included): each has left
+        /// getNumOutstanding for good. getNumCompleted counts a job when it finishes RUNNING (a failure
+        /// included), before the main thread publishes it, and never a job cancelled unrun - so
+        /// completed + outstanding counts a run-but-unpublished job twice. Submitted = resolved +
+        /// outstanding, exactly (the engine's "n of m": SHADER-SYSTEM-1 stage 7).
+        uint64 getJahNumResolved() const { return mJahNumResolved.load( std::memory_order_relaxed ); }
 
         /// True on a service thread only. A job the main thread runs itself (waitFor) is a
         /// compile the main thread waited for, and says so by answering false.
