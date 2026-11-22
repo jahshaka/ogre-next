@@ -244,7 +244,7 @@ namespace Ogre
     }
     //-----------------------------------------------------------------------------------
     const HlmsCompute::JahCodeRecord *HlmsCompute::jahHit( const Hash &inputKey, const String &rootLayout,
-                                                          GpuProgramPtr &outProgram )
+                                                          GpuProgramPtr &outProgram, const bool join )
     {
         JahRecordMap::iterator itor = mJahRecords.find( inputKey );
         if( itor == mJahRecords.end() )
@@ -260,6 +260,24 @@ namespace Ogre
         Hash programKey;
         programKey.hashVal[0] = r.programKey[0];
         programKey.hashVal[1] = r.programKey[1];
+        // THE JOIN (SHADER-SYSTEM-1, the final read's item 3a): a record's program enters mCompiledShaderCache only at
+        // its code job's publish, on this thread - so a synchronous build that comes first (the atmosphere's LUT
+        // dispatches on a warm boot) found it "not compiled yet" and parsed its template. Its job in flight is waited
+        // for instead: HlmsAsyncCompiler::waitFor moves it to the front if queued, waits for the worker, publishes it
+        // here. Never under mMutex (the publish takes it) - this thread holds neither it nor msGlobalMutex here.
+        std::map<Hash, const void *>::const_iterator codeJob = mJahCodeJobs.find( inputKey );
+        if( join && codeJob != mJahCodeJobs.end() && mHlmsManager && mHlmsManager->getAsyncCompiler() )
+        {
+            const void *jobKey = codeJob->second;  // the publish erases the entry
+            const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+            const bool bJoined =
+                mHlmsManager->getAsyncCompiler()->waitFor( jobKey, "a compute hit (HlmsCompute::jahHit)" );
+            const Real ms =
+                Real( std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - t0 ).count() );
+            LogManager::getSingleton().logMessage(
+                "HlmsCompute: '" + r.name + ( bJoined ? "' joined its code job" : "' found no code job to join" ) +
+                " in " + StringConverter::toString( ms, 4 ) + " ms on the main thread (no template parse)" );
+        }
         ScopedLock lock( mMutex );
         CompiledShaderMap::const_iterator program = mCompiledShaderCache.find( programKey );
         if( program == mCompiledShaderCache.end() )
@@ -297,7 +315,7 @@ namespace Ogre
         Hash key;
         jahInputKey( in, job->mPieces, mT[kNoTid].setProperties, key );
         GpuProgramPtr program;
-        return jahHit( key, in.rootLayout, program ) != 0;
+        return jahHit( key, in.rootLayout, program, false ) != 0;
     }
     //-----------------------------------------------------------------------------------
     void HlmsCompute::getJahUsedRecordKeys( vector<std::pair<uint64, uint64> >::type &out ) const
@@ -340,7 +358,7 @@ namespace Ogre
         // code is compiled, gives the program and the parse's outputs; the template is not parsed.
         Hash inputKey;
         const bool bKeyed = jahInputKey( inputs, job->mPieces, mT[kNoTid].setProperties, inputKey );
-        const JahCodeRecord *hit = bKeyed ? jahHit( inputKey, inputs.rootLayout, shader ) : 0;
+        const JahCodeRecord *hit = bKeyed ? jahHit( inputKey, inputs.rootLayout, shader, true ) : 0;
 
         uint32 threadsPerGroup[3];
         uint32 numThreadGroups[3];
@@ -1133,7 +1151,21 @@ namespace Ogre
 
         void run( size_t tid ) override;
         void publish() override;
-        void discard() override { mProgram.reset(); }
+        void discard() override
+        {
+            forget();
+            mProgram.reset();
+        }
+        /// Main thread (publish, discard): the record's job is no longer in flight (jahHit joins only one that is).
+        void forget()
+        {
+            Hash key;
+            key.hashVal[0] = mRecord->inputKey[0];
+            key.hashVal[1] = mRecord->inputKey[1];
+            std::map<Hash, const void *>::iterator it = mCompute->mJahCodeJobs.find( key );
+            if( it != mCompute->mJahCodeJobs.end() && it->second == mKey )
+                mCompute->mJahCodeJobs.erase( it );
+        }
     };
     //-----------------------------------------------------------------------------------
     void HlmsCompute::AsyncCodeJob::run( size_t /*tid*/ )
@@ -1184,6 +1216,7 @@ namespace Ogre
     //-----------------------------------------------------------------------------------
     void HlmsCompute::AsyncCodeJob::publish()
     {
+        forget();
         if( mFailed || !mProgram )
         {
             mProgram.reset();
@@ -1242,6 +1275,7 @@ namespace Ogre
                 }
                 AsyncCodeJob *job = OGRE_NEW AsyncCodeJob( this, record, counter );
                 job->mWhat = "compute code '" + record->name + "'";
+                mJahCodeJobs[key] = job->mKey;  // in flight until its publish or discard (jahHit joins it)
                 compiler->submit( job );
             }
         }

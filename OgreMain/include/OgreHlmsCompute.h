@@ -169,6 +169,10 @@ namespace Ogre
         /// (Jahshaka, SHADER-SYSTEM-1 F10) the input keys of the records USED this launch: a hit, or a build's filing
         /// (main thread: every caller of jahHit and jahFileRecord is; a prewarm files without using).
         std::set<Hash> mJahUsedRecords;
+        /// (Jahshaka, SHADER-SYSTEM-1) THE CODE JOBS IN FLIGHT, by their record's input key -> the job's key in the
+        /// HlmsAsyncCompiler (main thread: filled at jahPrewarmCode's submit, erased at the job's publish or discard).
+        /// A hit on such a record JOINS its job (jahHit) instead of parsing past it.
+        std::map<Hash, const void *> mJahCodeJobs;
         /// The bytes of every file a parse or a key read, by file name (main thread): read once from the resource
         /// system. Cleared by clearShaderCache (reloadFrom calls it).
         std::map<String, String> mJahFileMemo;
@@ -203,8 +207,10 @@ namespace Ogre
         bool jahInputKey( const JahParseInputs &in, const PiecesMap &cppPieces, const HlmsPropertyVec &properties,
                           Hash &outKey ) const;
         /// THE HIT: the record filed under `inputKey`, built with this root layout on this kind of API, whose program
-        /// is compiled; null = a miss.
-        const JahCodeRecord *jahHit( const Hash &inputKey, const String &rootLayout, GpuProgramPtr &outProgram );
+        /// is compiled; null = a miss. `join`: a record whose code job is in flight waits for that job (the frame's
+        /// synchronous build: compileShader) instead of missing; a deferred dispatch's question never waits.
+        const JahCodeRecord *jahHit( const Hash &inputKey, const String &rootLayout, GpuProgramPtr &outProgram,
+                                     bool join );
         /// Files a record (main thread); the generation moves only when the map changes.
         void jahFileRecord( const JahCodeRecordPtr &record );
         /// dispatch()'s question for a permutation not built under this job: is its code compiled (a record hits)?
