@@ -405,7 +405,8 @@ namespace Ogre
             permutation that is not built to the background compiler (once), but answers AsyncReady, so every caller
             dispatches - and dispatch(), deferred or not, JOINS the in-flight request (waitForAsyncPermutation, counted:
             getJahJoins) instead of building it a second time. A frame that may land a compile later (false) defers as
-            before. Default true: a host that never says so is upstream's blocking dispatch. Main thread. */
+            before. Default false: a host that never says so keeps the fork's earlier answers (an in-flight
+            request is AsyncPending). Main thread. */
         static void _jahSetFrameOwesPicture( bool on ) { msJahFrameOwesPicture = on; }
         /// May a dispatch be put off this frame? The question every caller asks (never the pace itself).
         static bool jahMayDefer() { return !msJahFrameOwesPicture; }

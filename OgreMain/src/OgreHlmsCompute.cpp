@@ -79,7 +79,7 @@ namespace Ogre
     const String BestD3DComputeShaderTargets[3] = { "cs_5_0", "cs_4_1", "cs_4_0" };
 
     bool HlmsCompute::msInAsyncWorkspace = false;
-    bool HlmsCompute::msJahFrameOwesPicture = true;
+    bool HlmsCompute::msJahFrameOwesPicture = false;
     //-----------------------------------------------------------------------------------
     HlmsCompute::HlmsCompute( AutoParamDataSource *autoParamDataSource ) :
         Hlms( HLMS_COMPUTE, "compute", 0, 0 ),
