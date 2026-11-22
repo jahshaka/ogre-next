@@ -583,8 +583,20 @@ namespace Ogre
         if( shaderParams )
             shaderParams->updateParameters( pso.computeParams, true );
 
+        const auto psoStart = std::chrono::steady_clock::now();
         mRenderSystem->_hlmsComputePipelineStateObjectCreated( &pso );
         ++mJahPsoInFrame;
+        // (Jahshaka) THE COUNTER's LINE, the parse line's twin: a compute pipeline built on the frame's thread while the
+        // background compiler runs is named, with the driver's time for it.
+        if( mHlmsManager && mHlmsManager->getAsyncCompiler()->isRunning() )
+        {
+            const double ms = std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - psoStart )
+                                  .count();
+            LogManager::getSingleton().logMessage(
+                "HlmsCompute: job '" + job->getNameStr() + "' built its PSO in the frame (" +
+                StringConverter::toString( mJahPsoInFrame ) + " this run, " + StringConverter::toString( Real( ms ) ) +
+                " ms)" );
+        }
 
         return pso;
     }
