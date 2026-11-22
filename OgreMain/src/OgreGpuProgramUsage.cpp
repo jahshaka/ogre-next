@@ -31,6 +31,8 @@ THE SOFTWARE.
 
 #include "OgreException.h"
 #include "OgreGpuProgramManager.h"
+#include "OgreHlmsLowLevelDatablock.h"
+#include "OgrePass.h"
 
 namespace Ogre
 {
@@ -216,9 +218,20 @@ namespace Ogre
     //---------------------------------------------------------------------
     void GpuProgramUsage::loadingComplete( Resource *prog )
     {
+        // (Jahshaka, SHADER-SYSTEM-1 stage 7a) A RELOAD (an unload, then this load) is a new program for every
+        // renderable drawn with this pass: their low-level keys hold the program's load generation
+        // (HlmsLowLevel::calculateHashFor), taken when the material was set - re-keyed here, so none keeps the
+        // pipeline of the old code.
+        const bool reloaded = mRecreateParams;
         // Need to re-create parameters
         if( mRecreateParams )
             recreateParameters();
+        if( reloaded && mParent )
+        {
+            // A Pass's datablock is always its low-level proxy (Pass's constructors).
+            if( HlmsDatablock *datablock = mParent->_getDatablock() )
+                static_cast<HlmsLowLevelDatablock *>( datablock )->_notifyProgramReloaded();
+        }
     }
     //---------------------------------------------------------------------
     void GpuProgramUsage::recreateParameters()

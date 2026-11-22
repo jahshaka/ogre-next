@@ -53,6 +53,11 @@ namespace Ogre
         HlmsLowLevelDatablock( IdString name, Hlms *creator, const HlmsMacroblock *macroblock,
                                const HlmsBlendblock *blendblock, const HlmsParamVec &params );
         virtual ~HlmsLowLevelDatablock();
+
+        /// (Jahshaka, SHADER-SYSTEM-1 stage 7a) A program of this pass was RELOADED: every renderable drawn with it is
+        /// re-keyed (its key holds the program's load generation: HlmsLowLevel::calculateHashFor), so none keeps the
+        /// pipeline of the old code. Called by the pass's GpuProgramUsage when its program loads again.
+        void _notifyProgramReloaded() { flushRenderables(); }
     };
 
     /** @} */
