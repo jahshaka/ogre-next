@@ -712,7 +712,11 @@ namespace Ogre
             }
         }
 
-        hlms->_tagShaderCodeCacheUpToDate();
+        // (Jahshaka, SHADER-SYSTEM-1 stage 7a) CLEAN ONLY WHEN IN DATE: a re-parse through changed templates left the
+        // Hlms dirty (every recipe it re-made, Hlms::compileShaderCode's push), so the next save rewrites the cache
+        // with today's checksum; tagged clean here, it was never written back and EVERY later boot re-parsed again.
+        if( !mTemplatesOutOfDate )
+            hlms->_tagShaderCodeCacheUpToDate();
     }
     //-----------------------------------------------------------------------------------
     template <typename T>
