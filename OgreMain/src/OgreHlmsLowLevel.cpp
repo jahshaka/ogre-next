@@ -201,11 +201,17 @@ namespace Ogre
         {
             if( !programs[i] )
                 continue;
+            // THE PROGRAM THE PIPELINE BINDS: a unified program forwards its load, reload and listeners to its
+            // delegate and never moves its own state count (UnifiedHighLevelGpuProgram), so the key is the binding
+            // delegate's - the program the render system builds the pipeline from (VulkanRenderSystem reads
+            // _getBindingDelegate). Not loaded yet (no delegate): the program itself.
+            const GpuProgram *bound = programs[i]->_getBindingDelegate();
+            if( !bound )
+                bound = programs[i].get();
             // The handle is unique per program for the process (ResourceManager's counter): truncated to the
             // property's 32 bits it repeats only after 2^32 resources.
-            setProperty( kNoTid, LowLevelProp::Program[i], static_cast<int32>( programs[i]->getHandle() ) );
-            setProperty( kNoTid, LowLevelProp::ProgramLoad[i],
-                         static_cast<int32>( programs[i]->getStateCount() ) );
+            setProperty( kNoTid, LowLevelProp::Program[i], static_cast<int32>( bound->getHandle() ) );
+            setProperty( kNoTid, LowLevelProp::ProgramLoad[i], static_cast<int32>( bound->getStateCount() ) );
         }
     }
     //-----------------------------------------------------------------------------------
