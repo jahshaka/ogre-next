@@ -126,6 +126,7 @@ namespace Ogre
         int                 mThreadNice;
         bool                mPlaceholdersOnly;  ///< main thread only
         bool                mJahFailRequests = false;  ///< (Jahshaka) the test door _jahFailRequests
+        std::atomic<uint32> mJahServiceDelayMs{ 0u };  ///< (Jahshaka) the test door _jahServiceDelayMs
 
         void threadMain( uint32 threadIdx );
         void stopThreads();
@@ -195,6 +196,11 @@ namespace Ogre
         */
         void _jahFailRequests( bool on ) { mJahFailRequests = on; }
         bool _jahFailRequestsOn() const { return mJahFailRequests; }
+        /** (Jahshaka) A TEST DOOR (the arm shaders.serviceSlow): while above 0, every job a service thread takes is
+            held that many milliseconds before it runs - a slow service (a loaded box, a cold driver) made on demand,
+            so a frame's dependence on WHEN a background build lands can be shown (SHADER-SYSTEM-1 7a R2). Any thread.
+        */
+        void _jahServiceDelayMs( uint32 ms ) { mJahServiceDelayMs.store( ms, std::memory_order_relaxed ); }
         /// (Jahshaka) A request that failed before it became a job counts as a failure too (getNumFailed).
         void _jahCountRequestFailed() { mNumFailed.fetch_add( 1u, std::memory_order_relaxed ); }
 

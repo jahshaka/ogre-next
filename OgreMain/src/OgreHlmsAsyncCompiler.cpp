@@ -37,6 +37,7 @@ THE SOFTWARE.
 #include "OgreStringConverter.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 
 #if OGRE_PLATFORM == OGRE_PLATFORM_LINUX
@@ -126,6 +127,10 @@ namespace Ogre
             mQueue.pop_front();
             mRunning[threadIdx] = job;
             lock.unlock();
+
+            // (Jahshaka) the test door _jahServiceDelayMs: the job is RUNNING (a join waits for it) and late.
+            if( const uint32 delayMs = mJahServiceDelayMs.load( std::memory_order_relaxed ) )
+                std::this_thread::sleep_for( std::chrono::milliseconds( delayMs ) );
 
             runJob( job, tid );
 
