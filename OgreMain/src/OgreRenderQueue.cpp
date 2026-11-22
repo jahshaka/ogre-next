@@ -107,7 +107,12 @@ namespace Ogre
         mAsyncShaderCompile( false ),
         mRenderingAsync( false ),
         mNumPlaceholderDraws( 0u ),
-        mNumPendingSkips( 0u )
+        mNumPendingSkips( 0u ),
+        mAheadListener( 0 ),
+        mAheadPass( false ),
+        mNumAheadPasses( 0u ),
+        mAheadRequested( 0u ),
+        mAheadNotReady( 0u )
     {
         mCommandBuffer = new CommandBuffer();
 
@@ -356,6 +361,31 @@ namespace Ogre
             mSceneManager->getNumWorkerThreads() > 1u &&
             mSceneManager->getNumWorkerThreads() <= Hlms::kAsyncTidBase;
 
+        // (Jahshaka, P3) THE AHEAD PASS FIRST (AheadListener): a colour pass of an asynchronous render
+        // whose listener names a pending event prepares the pass as it will be after it - then the real
+        // pass LAST, so the real pass binds and pass buffer are the ones the draws read.
+        mAheadPass = false;
+        mAheadRequested = mAheadNotReady = 0u;
+        if( !casterPass && mAheadListener && mAsyncShaderCompile &&
+            mHlmsManager->getAsyncCompiler()->isRunning() &&
+            mAheadListener->aheadPassBegin( mSceneManager ) )
+        {
+            for( size_t i = 0; i < HLMS_MAX; ++i )
+            {
+                Hlms *hlms = mHlmsManager->getHlms( static_cast<HlmsTypes>( i ) );
+                if( hlms )
+                {
+                    if( bUseMultithreadedShaderCompliation )
+                        hlms->_setNumThreads( numWorkerThreads );
+                    mAheadPassCache[i] = hlms->preparePassHash( mSceneManager->getCurrentShadowNode(),
+                                                                casterPass, dualParaboloid, mSceneManager );
+                }
+            }
+            mAheadListener->aheadPassEnd( mSceneManager );
+            mAheadPass = true;
+            ++mNumAheadPasses;
+        }
+
         for( size_t i = 0; i < HLMS_MAX; ++i )
         {
             Hlms *hlms = mHlmsManager->getHlms( static_cast<HlmsTypes>( i ) );
@@ -532,7 +562,16 @@ namespace Ogre
                     renderGL3( rs, casterPass, dualParaboloid, mPassCache, mRenderQueues[i],
                                parallelCompileQueue, indirectBuffer, indirectDraw, startIndirectDraw );
             }
+
+            // (Jahshaka, P3) the group's AHEAD requests, after its real draws asked for theirs (the
+            // real pass's own requests go to the service first)
+            if( mAheadPass && mRenderingAsync && !casterPass )
+                requestAhead( mRenderQueues[i], casterPass );
         }
+
+        if( mAheadPass && mAheadListener && mRenderingAsync )
+            mAheadListener->aheadPassRendered( mSceneManager, mAheadRequested, mAheadNotReady );
+        mAheadPass = false;
 
         if( supportsIndirectBuffers && indirectBuffer )
             indirectBuffer->unmap( UO_KEEP_PERSISTENT );
@@ -652,6 +691,41 @@ namespace Ogre
                  retVal->flags != HLMS_CACHE_FLAGS_ASYNC_FAILED )  // (Jahshaka) a failed one is final
             ++mNumPendingSkips;
         return retVal;
+    }
+    //-----------------------------------------------------------------------
+    RenderQueue::AheadListener::~AheadListener() {}
+    //-----------------------------------------------------------------------
+    void RenderQueue::requestAhead( const RenderQueueGroup &renderQueueGroup, const bool casterPass )
+    {
+        // V1_LEGACY draws through the blocking getMaterial: no request path (nothing asked ahead).
+        if( renderQueueGroup.mMode == V1_LEGACY )
+            return;
+        // The placeholder policy of the group's real loop (renderGL3: placeholders; V1 and particles: none).
+        const bool allowPlaceholder = renderQueueGroup.mMode == FAST;
+        const uint8 passIdx = casterPass ? 1u : 0u;
+        for( const QueuedRenderable &queuedRenderable : renderQueueGroup.mQueuedRenderables )
+        {
+            const HlmsDatablock *datablock = queuedRenderable.renderable->getDatablock();
+            Hlms *hlms = mHlmsManager->getHlms( static_cast<HlmsTypes>( datablock->mType ) );
+            // Low level and GLSL proper have no asynchronous path (getMaterialAsync would build them
+            // here, blocking): nothing asked ahead for them.
+            if( !hlms || hlms->getType() == HLMS_LOW_LEVEL || hlms->getShaderProfile() == "glsl" )
+                continue;
+            // THE REAL PATH STAYS BYTE-IDENTICAL: getMaterialAsync records the pass whose placeholder
+            // it pre-built for a ready object; the ahead call's record is taken back, so the real
+            // pass's next call reads what it wrote.
+            Renderable *renderable = queuedRenderable.renderable;
+            const uint32 prewarmed = renderable->_mHlmsPlaceholderPrewarmed[passIdx];
+            bool placeholder = false;
+            const HlmsCache *entry =
+                hlms->getMaterialAsync( &c_dummyCache, mAheadPassCache[datablock->mType], queuedRenderable,
+                                        casterPass, allowPlaceholder, placeholder );
+            renderable->_mHlmsPlaceholderPrewarmed[passIdx] = prewarmed;
+            ++mAheadRequested;
+            if( placeholder || ( entry->flags != HLMS_CACHE_FLAGS_NONE &&
+                                 entry->flags != HLMS_CACHE_FLAGS_ASYNC_FAILED ) )
+                ++mAheadNotReady;
+        }
     }
     //-----------------------------------------------------------------------
     void RenderQueue::renderES2( RenderSystem *rs, bool casterPass, bool dualParaboloid,

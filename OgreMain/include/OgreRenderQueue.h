@@ -295,6 +295,46 @@ namespace Ogre
         uint64 mNumPlaceholderDraws;
         uint64 mNumPendingSkips;
 
+    public:
+        /** (Jahshaka fork, SHADER-SYSTEM-1 stage 7, P3) THE AHEAD PASS. A host whose pass will CHANGE
+            permutation at an event it can name (a ray route landing: its pass gains properties) sets
+            this listener while the event is pending. For each colour pass of an asynchronous render
+            the queue then prepares a SECOND pass cache with the listener's state in place (the pass as
+            it will be after the event), BEFORE the real one (the real state wins: its pass binds and
+            pass buffer are the last written), and in render() asks the background compiler for every
+            queued renderable's permutation of that ahead pass AND its placeholder (getMaterialAsync,
+            the answer discarded; nothing drawn). So the event's first frame finds every permutation
+            and placeholder built: no object skipped, nothing compiled in that frame. With no listener,
+            or a listener that answers false, the queue does what it did before (0 ahead passes).
+        */
+        class _OgreExport AheadListener
+        {
+        public:
+            virtual ~AheadListener();
+            /// renderPassPrepare of a colour pass: true = prepare the ahead pass now; the listener put
+            /// the state the pass will hold after its event in place, and aheadPassEnd takes it away.
+            virtual bool aheadPassBegin( SceneManager *sceneManager ) = 0;
+            virtual void aheadPassEnd( SceneManager *sceneManager ) = 0;
+            /// The end of that pass's render(): `requested` queued renderables were asked for their
+            /// ahead permutation, `notReady` of them are not built yet (no permutation and no
+            /// placeholder to stand in, or only the placeholder). A FAILED permutation is final: built.
+            virtual void aheadPassRendered( SceneManager *sceneManager, size_t requested,
+                                            size_t notReady ) = 0;
+        };
+
+    private:
+        /// (P3) See AheadListener. Null: no ahead pass.
+        AheadListener *mAheadListener;
+        /// The ahead pass's caches, valid while mAheadPass (renderPassPrepare to render's end).
+        HlmsCache mAheadPassCache[HLMS_MAX];
+        bool      mAheadPass;
+        /// Ahead passes prepared since the queue was made (zero cost at rest: a host reads it).
+        uint64 mNumAheadPasses;
+        /// The ahead requests of one queue group (render()); counts into the two below.
+        void requestAhead( const RenderQueueGroup &renderQueueGroup, bool casterPass );
+        size_t mAheadRequested;
+        size_t mAheadNotReady;
+
         /// getMaterial or, inside an asynchronous render(), Hlms::getMaterialAsync.
         const HlmsCache *getMaterialFor( Hlms *hlms, const HlmsCache *lastHlmsCache,
                                          const HlmsCache &passCache,
@@ -363,6 +403,12 @@ namespace Ogre
         /// (ASYNC-SHADERS-1) Draws this queue skipped (nothing built yet, not even the
         /// placeholder), ever.
         uint64 getNumPendingSkips() const { return mNumPendingSkips; }
+
+        /// (P3) See AheadListener: set while the host's event is pending, null otherwise.
+        void           setAheadListener( AheadListener *listener ) { mAheadListener = listener; }
+        AheadListener *getAheadListener() const { return mAheadListener; }
+        /// (P3) Ahead passes this queue prepared, ever.
+        uint64 getNumAheadPasses() const { return mNumAheadPasses; }
 
         /** The RenderQueue keeps track of API state to avoid redundant state change passes
             Calling this function forces the RenderQueue to re-set the Macro- & Blendblocks,
