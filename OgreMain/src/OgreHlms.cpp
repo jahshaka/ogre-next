@@ -4731,8 +4731,19 @@ namespace Ogre
         // ...and READ AGAIN: the request may have built it on the spot (the warm fast path —
         // a PSO the pipeline cache already holds is created at once), and a built object is
         // drawn, never its placeholder (measured: a warm launch drew 3-7 placeholders without).
-        if( entry->flags == HLMS_CACHE_FLAGS_NONE || placeholder->flags != HLMS_CACHE_FLAGS_NONE )
-            return entry;  // ready: draw it; else not even the placeholder: no draw (a stub)
+        if( entry->flags == HLMS_CACHE_FLAGS_NONE )
+            return entry;  // ready: draw it
+        if( placeholder->flags != HLMS_CACHE_FLAGS_NONE )
+        {
+            // not even the placeholder: no draw (a stub). (Jahshaka, COLD-BOOT-1's leftover L1) A FAILED object's final
+            // answer IS its placeholder: while that is still compiling the object WAITS for it, so the placeholder's stub
+            // is returned and the queue counts a PENDING SKIP - the frame is incomplete until the answer it will draw lands
+            // (returning the FAILED entry counted nothing: the frame read complete with the object missing). THE WAIT IS
+            // BOUNDED: a placeholder's request is URGENT and the test door _jahFailRequests never fails one; its stub is
+            // pending only while its job lives - published (built, or FAILED: final, counted as nothing, loud) or discarded
+            // (COMPILATION_REQUIRED, re-requested above the next frame; a request that cannot be made is FAILED).
+            return entry->flags == HLMS_CACHE_FLAGS_ASYNC_FAILED ? placeholder : entry;
+        }
 
         // (Jahshaka) A FAILED PERMUTATION IS FINAL (COLD-BOOT-1 item 3): it is never requested again, so its
         // placeholder is its answer, not a wait - not counted as a placeholder draw (a wait the host's "the frame
