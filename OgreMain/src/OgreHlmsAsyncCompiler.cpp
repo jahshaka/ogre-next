@@ -136,6 +136,9 @@ namespace Ogre
                 mJahAheadQueue.pop_front();
                 mJahAheadQueued.store( static_cast<uint32>( mJahAheadQueue.size() ), std::memory_order_relaxed );
                 mJahAheadRun.fetch_add( 1u, std::memory_order_relaxed );
+                // (the order's count, under the lock: an ahead job taken past a job of the frame's own)
+                if( !mQueue.empty() )
+                    mJahAheadOverOwn.fetch_add( 1u, std::memory_order_relaxed );
             }
             mRunning[threadIdx] = job;
             lock.unlock();
@@ -236,6 +239,8 @@ namespace Ogre
                          "HlmsAsyncCompiler::submit" );
         }
         mNumOutstanding.fetch_add( 1u, std::memory_order_relaxed );
+        if( job->mOwner && job->mOwner->getType() != HLMS_COMPUTE )
+            mJahSubmittedGraphics.fetch_add( 1u, std::memory_order_relaxed );
         {
             std::lock_guard<std::mutex> lock( mMutex );
             std::deque<HlmsAsyncJob *> &q = mJahAheadClass ? mJahAheadQueue : mQueue;

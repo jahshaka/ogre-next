@@ -136,6 +136,8 @@ namespace Ogre
         std::atomic<uint64> mJahAheadRun{ 0u };       ///< (Jahshaka) ahead-class jobs a service thread took
         std::atomic<uint32> mJahAheadQueued{ 0u };    ///< (Jahshaka) mJahAheadQueue's size, read without the lock
         std::atomic<uint64> mJahPromoted{ 0u };       ///< (Jahshaka) ahead jobs a real request promoted
+        std::atomic<uint64> mJahSubmittedGraphics{ 0u };  ///< (Jahshaka) jobs submitted for a graphics Hlms
+        std::atomic<uint64> mJahAheadOverOwn{ 0u };   ///< (Jahshaka) ahead jobs taken with the own queue non-empty
         /// (Jahshaka) Under mMutex: the queued job with this key taken out of either class's queue, or null.
         HlmsAsyncJob *jahTakeQueued( const void *key );
 
@@ -231,6 +233,13 @@ namespace Ogre
         uint64 getJahPromoted() const { return mJahPromoted.load( std::memory_order_relaxed ); }
         /// (Jahshaka) Ahead-class jobs a service thread has taken (any thread).
         uint64 getJahAheadRun() const { return mJahAheadRun.load( std::memory_order_relaxed ); }
+        /** (Jahshaka) THE ORDER's COUNT: ahead-class jobs a service thread took while the frame's own queue still held a
+            job - counted in the take, under mMutex, so it is exact. The ahead class's law is that it reads 0 (the own
+            queue first); a take order that serves the ahead class first reads it above 0 (gi.route_landing.order).
+        */
+        uint64 getJahAheadOverOwn() const { return mJahAheadOverOwn.load( std::memory_order_relaxed ); }
+        /// (Jahshaka) Jobs ever submitted whose owner is a GRAPHICS Hlms (not HlmsCompute): the permutations passes asked for.
+        uint64 getJahSubmittedGraphics() const { return mJahSubmittedGraphics.load( std::memory_order_relaxed ); }
         /// (Jahshaka) A request that failed before it became a job counts as a failure too (getNumFailed).
         void _jahCountRequestFailed() { mNumFailed.fetch_add( 1u, std::memory_order_relaxed ); }
 
