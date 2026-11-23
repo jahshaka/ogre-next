@@ -119,12 +119,24 @@ namespace Ogre
         std::unique_lock<std::mutex> lock( mMutex );
         while( true )
         {
-            mWorkCv.wait( lock, [this] { return mStop || !mQueue.empty(); } );
+            mWorkCv.wait( lock, [this] { return mStop || !mQueue.empty() || !mJahAheadQueue.empty(); } );
             if( mStop )
                 break;
 
-            HlmsAsyncJob *job = mQueue.front();
-            mQueue.pop_front();
+            // (Jahshaka) THE FRAME's OWN QUEUE FIRST; the ahead class only when it is empty
+            HlmsAsyncJob *job;
+            if( !mQueue.empty() )
+            {
+                job = mQueue.front();
+                mQueue.pop_front();
+            }
+            else
+            {
+                job = mJahAheadQueue.front();
+                mJahAheadQueue.pop_front();
+                mJahAheadQueued.store( static_cast<uint32>( mJahAheadQueue.size() ), std::memory_order_relaxed );
+                mJahAheadRun.fetch_add( 1u, std::memory_order_relaxed );
+            }
             mRunning[threadIdx] = job;
             lock.unlock();
 
@@ -181,8 +193,11 @@ namespace Ogre
         {
             std::lock_guard<std::mutex> lock( mMutex );
             dropped.insert( dropped.end(), mQueue.begin(), mQueue.end() );
+            dropped.insert( dropped.end(), mJahAheadQueue.begin(), mJahAheadQueue.end() );
             dropped.insert( dropped.end(), mFinished.begin(), mFinished.end() );
             mQueue.clear();
+            mJahAheadQueue.clear();
+            mJahAheadQueued.store( 0u, std::memory_order_relaxed );
             mFinished.clear();
             mRunning.clear();
             mStop = false;
@@ -223,10 +238,56 @@ namespace Ogre
         mNumOutstanding.fetch_add( 1u, std::memory_order_relaxed );
         {
             std::lock_guard<std::mutex> lock( mMutex );
+            std::deque<HlmsAsyncJob *> &q = mJahAheadClass ? mJahAheadQueue : mQueue;
             if( urgent )
-                mQueue.push_front( job );
+                q.push_front( job );
             else
-                mQueue.push_back( job );
+                q.push_back( job );
+            mJahAheadQueued.store( static_cast<uint32>( mJahAheadQueue.size() ), std::memory_order_relaxed );
+        }
+        mWorkCv.notify_one();
+    }
+    //-----------------------------------------------------------------------------------
+    HlmsAsyncJob *HlmsAsyncCompiler::jahTakeQueued( const void *key )
+    {
+        for( std::deque<HlmsAsyncJob *> *q : { &mQueue, &mJahAheadQueue } )
+        {
+            for( std::deque<HlmsAsyncJob *>::iterator it = q->begin(); it != q->end(); ++it )
+            {
+                if( ( *it )->mKey == key )
+                {
+                    HlmsAsyncJob *job = *it;
+                    q->erase( it );
+                    mJahAheadQueued.store( static_cast<uint32>( mJahAheadQueue.size() ), std::memory_order_relaxed );
+                    return job;
+                }
+            }
+        }
+        return 0;
+    }
+    //-----------------------------------------------------------------------------------
+    void HlmsAsyncCompiler::_jahPromote( const Hlms *owner, const uint32 finalHash )
+    {
+        if( !owner || owner->getType() == HLMS_COMPUTE ||
+            mJahAheadQueued.load( std::memory_order_relaxed ) == 0u )
+            return;
+        {
+            std::lock_guard<std::mutex> lock( mMutex );
+            for( std::deque<HlmsAsyncJob *>::iterator it = mJahAheadQueue.begin(); it != mJahAheadQueue.end();
+                 ++it )
+            {
+                // a graphics job's key IS its stub entry (Hlms::requestAsyncEntry): its hash is the permutation's
+                if( ( *it )->mOwner == owner &&
+                    static_cast<const HlmsCache *>( ( *it )->mKey )->hash == finalHash )
+                {
+                    mQueue.push_back( *it );
+                    mJahAheadQueue.erase( it );
+                    mJahAheadQueued.store( static_cast<uint32>( mJahAheadQueue.size() ),
+                                           std::memory_order_relaxed );
+                    mJahPromoted.fetch_add( 1u, std::memory_order_relaxed );
+                    break;
+                }
+            }
         }
         mWorkCv.notify_one();
     }
@@ -255,12 +316,10 @@ namespace Ogre
         // under load). It goes to the FRONT of the queue and the caller waits for a service
         // thread like any running job. Only with no service thread left (stopped under the
         // caller) does the main thread build it, on its own slot.
-        for( std::deque<HlmsAsyncJob *>::iterator it = mQueue.begin(); it != mQueue.end(); ++it )
+        // (Jahshaka) in either class's queue: a waited ahead job moves to the front of the frame's own queue
+        if( HlmsAsyncJob *job = jahTakeQueued( key ) )
         {
-            if( ( *it )->mKey == key )
             {
-                HlmsAsyncJob *job = *it;
-                mQueue.erase( it );
                 if( mThreads.empty() )
                 {
                     lock.unlock();
@@ -292,7 +351,6 @@ namespace Ogre
                     }
                     return true;
                 } );
-                break;
             }
         }
 
@@ -345,16 +403,20 @@ namespace Ogre
         std::vector<HlmsAsyncJob *> dropped;
         {
             std::unique_lock<std::mutex> lock( mMutex );
-            for( std::deque<HlmsAsyncJob *>::iterator it = mQueue.begin(); it != mQueue.end(); )
+            for( std::deque<HlmsAsyncJob *> *q : { &mQueue, &mJahAheadQueue } )
             {
-                if( ( *it )->mOwner == owner )
+                for( std::deque<HlmsAsyncJob *>::iterator it = q->begin(); it != q->end(); )
                 {
-                    dropped.push_back( *it );
-                    it = mQueue.erase( it );
+                    if( ( *it )->mOwner == owner )
+                    {
+                        dropped.push_back( *it );
+                        it = q->erase( it );
+                    }
+                    else
+                        ++it;
                 }
-                else
-                    ++it;
             }
+            mJahAheadQueued.store( static_cast<uint32>( mJahAheadQueue.size() ), std::memory_order_relaxed );
 
             mDoneCv.wait( lock, [this, owner] {
                 for( HlmsAsyncJob *job : mRunning )
@@ -386,16 +448,8 @@ namespace Ogre
         bool waited = false;
         {
             std::unique_lock<std::mutex> lock( mMutex );
-            for( std::deque<HlmsAsyncJob *>::iterator it = mQueue.begin(); it != mQueue.end(); )
-            {
-                if( ( *it )->mKey == key )
-                {
-                    dropped.push_back( *it );
-                    it = mQueue.erase( it );
-                }
-                else
-                    ++it;
-            }
+            while( HlmsAsyncJob *job = jahTakeQueued( key ) )
+                dropped.push_back( job );
             for( HlmsAsyncJob *job : mRunning )
                 waited |= job && job->mKey == key;
             mDoneCv.wait( lock, [this, key] {
@@ -428,7 +482,10 @@ namespace Ogre
         {
             std::unique_lock<std::mutex> lock( mMutex );
             dropped.insert( dropped.end(), mQueue.begin(), mQueue.end() );
+            dropped.insert( dropped.end(), mJahAheadQueue.begin(), mJahAheadQueue.end() );
             mQueue.clear();
+            mJahAheadQueue.clear();
+            mJahAheadQueued.store( 0u, std::memory_order_relaxed );
             mDoneCv.wait( lock, [this] {
                 for( HlmsAsyncJob *job : mRunning )
                 {

@@ -685,11 +685,26 @@ namespace Ogre
         }
         const HlmsCache *retVal = hlms->getMaterialAsync(
             lastHlmsCache, passCache, queuedRenderable, casterPass, allowPlaceholder, outPlaceholder );
+        const bool skipped = !outPlaceholder && retVal->flags != HLMS_CACHE_FLAGS_NONE &&
+                             retVal->flags != HLMS_CACHE_FLAGS_ASYNC_FAILED;  // (Jahshaka) a failed one is final
         if( outPlaceholder )
             ++mNumPlaceholderDraws;
-        else if( retVal->flags != HLMS_CACHE_FLAGS_NONE &&
-                 retVal->flags != HLMS_CACHE_FLAGS_ASYNC_FAILED )  // (Jahshaka) a failed one is final
+        else if( skipped )
             ++mNumPendingSkips;
+        // (Jahshaka, SHADER-SYSTEM-1 stage 7) THE PROMOTION: an object this pass draws NOW whose permutation (or,
+        // skipped, its placeholder) was asked ahead for another pass is a request of this frame: out of the ahead
+        // class (HlmsAsyncCompiler::_jahPromote; free while the ahead class is empty)
+        HlmsAsyncCompiler *compiler = mHlmsManager->getAsyncCompiler();
+        if( ( outPlaceholder || skipped ) && !compiler->_jahAheadClassOn() )
+        {
+            const Renderable *renderable = queuedRenderable.renderable;
+            const uint8 passIdx = casterPass ? 1u : 0u;
+            compiler->_jahPromote( hlms, ( casterPass ? renderable->getHlmsCasterHash()
+                                                      : renderable->getHlmsHash() ) |
+                                             passCache.hash );
+            if( skipped )
+                compiler->_jahPromote( hlms, renderable->_mHlmsPlaceholderHash[passIdx] | passCache.hash );
+        }
         return retVal;
     }
     //-----------------------------------------------------------------------
@@ -703,6 +718,11 @@ namespace Ogre
         // The placeholder policy of the group's real loop (renderGL3: placeholders; V1 and particles: none).
         const bool allowPlaceholder = renderQueueGroup.mMode == FAST;
         const uint8 passIdx = casterPass ? 1u : 0u;
+        // THE AHEAD CLASS (SHADER-SYSTEM-1 stage 7): these requests are served only when the frame's own queue is
+        // empty - an ahead request never delays an object a frame draws (HlmsAsyncCompiler::_jahSetAheadClass)
+        HlmsAsyncCompiler *compiler = mHlmsManager->getAsyncCompiler();
+        const bool wasAhead = compiler->_jahAheadClassOn();
+        compiler->_jahSetAheadClass( true );
         for( const QueuedRenderable &queuedRenderable : renderQueueGroup.mQueuedRenderables )
         {
             const HlmsDatablock *datablock = queuedRenderable.renderable->getDatablock();
@@ -726,6 +746,7 @@ namespace Ogre
                                  entry->flags != HLMS_CACHE_FLAGS_ASYNC_FAILED ) )
                 ++mAheadNotReady;
         }
+        compiler->_jahSetAheadClass( wasAhead );
     }
     //-----------------------------------------------------------------------
     void RenderQueue::renderES2( RenderSystem *rs, bool casterPass, bool dualParaboloid,

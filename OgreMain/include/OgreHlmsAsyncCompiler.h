@@ -115,6 +115,10 @@ namespace Ogre
         std::condition_variable mDoneCv;  ///< the main thread waits for a job to finish
 
         std::deque<HlmsAsyncJob *>  mQueue;     // GUARDED_BY( mMutex )
+        /// (Jahshaka, SHADER-SYSTEM-1 stage 7) THE AHEAD CLASS: jobs submitted while _jahSetAheadClass is on
+        /// (a pass as it WILL be: RenderQueue::AheadListener, the engine's request-only passes). A service thread
+        /// takes one only when mQueue is empty: the frame's own requests are always served first.
+        std::deque<HlmsAsyncJob *>  mJahAheadQueue;  // GUARDED_BY( mMutex )
         std::vector<HlmsAsyncJob *> mRunning;   // GUARDED_BY( mMutex ), one per thread (or null)
         std::vector<HlmsAsyncJob *> mFinished;  // GUARDED_BY( mMutex )
         std::vector<std::thread>    mThreads;
@@ -128,6 +132,12 @@ namespace Ogre
         bool                mPlaceholdersOnly;  ///< main thread only
         bool                mJahFailRequests = false;  ///< (Jahshaka) the test door _jahFailRequests
         std::atomic<uint32> mJahServiceDelayMs{ 0u };  ///< (Jahshaka) the test door _jahServiceDelayMs
+        bool                mJahAheadClass = false;   ///< (Jahshaka) main thread: submit() into the ahead class
+        std::atomic<uint64> mJahAheadRun{ 0u };       ///< (Jahshaka) ahead-class jobs a service thread took
+        std::atomic<uint32> mJahAheadQueued{ 0u };    ///< (Jahshaka) mJahAheadQueue's size, read without the lock
+        std::atomic<uint64> mJahPromoted{ 0u };       ///< (Jahshaka) ahead jobs a real request promoted
+        /// (Jahshaka) Under mMutex: the queued job with this key taken out of either class's queue, or null.
+        HlmsAsyncJob *jahTakeQueued( const void *key );
 
         void threadMain( uint32 threadIdx );
         void stopThreads();
@@ -202,6 +212,25 @@ namespace Ogre
             so a frame's dependence on WHEN a background build lands can be shown (SHADER-SYSTEM-1 7a R2). Any thread.
         */
         void _jahServiceDelayMs( uint32 ms ) { mJahServiceDelayMs.store( ms, std::memory_order_relaxed ); }
+        /** (Jahshaka, SHADER-SYSTEM-1 stage 7) THE AHEAD CLASS, main thread: while on, submit() queues into the
+            ahead class - jobs for a pass as it WILL be after a named event (RenderQueue::AheadListener's ahead
+            pass; the engine's request-only passes), which a service thread takes only when the frame's own queue
+            is empty. The frame's own requests are always served first (the owner, 2026-11-23: faster loading over
+            correctness while shaders stream in): an ahead request never delays an object the frame draws. An
+            urgent ahead job goes to the front of the ahead class only. A waitFor of an ahead job moves it to the
+            front of the frame's own queue (a pass waits for it now).
+        */
+        void _jahSetAheadClass( bool on ) { mJahAheadClass = on; }
+        bool _jahAheadClassOn() const { return mJahAheadClass; }
+        /** (Jahshaka) THE PROMOTION, main thread: a REAL request (a pass drawing now) whose permutation `finalHash` of
+            `owner` (a graphics Hlms) is still queued in the ahead class - asked ahead for another view's pass as it
+            will be, the same permutation this pass needs now - moves to the back of the frame's own queue: it is a
+            request of this frame now. Free while the ahead class is empty (one atomic read).
+        */
+        void _jahPromote( const Hlms *owner, uint32 finalHash );
+        uint64 getJahPromoted() const { return mJahPromoted.load( std::memory_order_relaxed ); }
+        /// (Jahshaka) Ahead-class jobs a service thread has taken (any thread).
+        uint64 getJahAheadRun() const { return mJahAheadRun.load( std::memory_order_relaxed ); }
         /// (Jahshaka) A request that failed before it became a job counts as a failure too (getNumFailed).
         void _jahCountRequestFailed() { mNumFailed.fetch_add( 1u, std::memory_order_relaxed ); }
 
